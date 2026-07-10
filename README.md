@@ -21,17 +21,37 @@ Sync pulls raw material — Slack messages, emails, issues — into `context/str
 
 Every derived item cites its source (Slack permalink, email id, commit). Pins win over derived data on conflict — but derivation flags pins that reality has drifted away from.
 
-## Quickstart
+## Installation
+
+Requires Node >= 20.12. Lore runs *inside* the repo that should hold the context — usually your project's own repo (agents working on the code then get the memory for free), or a dedicated context repo if repo access is broader than the Slack channels' audience.
+
+### 1. Scaffold
 
 ```sh
-npx @nerdburn/lore init     # scaffold lore.json + context/ + AGENTS.md pointer
-# edit lore.json, set env keys (SLACK_TOKEN, …)
-npx @nerdburn/lore check    # validate config + env refs
-npx @nerdburn/lore sync     # pull new docs
-npx @nerdburn/lore remember "client wants launch before Black Friday" -c decisions
+cd ~/code/your-project
+npx @nerdburn/lore init
 ```
 
-### Slack app setup
+This creates:
+
+- `lore.json` — config (edit next)
+- `context/` — where everything lives (`facts.yaml`, `streams/`, `derived/`)
+- an `AGENTS.md` section pointing agents at `context/` (appended if the file already exists)
+- `.gitignore` entries for `.env` and `.lore/`
+
+Edit `lore.json`: set your project name and the Slack channels to sync. Optionally set a backfill window for the first sync:
+
+```json
+{
+  "project": "acme",
+  "sources": {
+    "slack": { "channels": ["#acme", "#acme-dev"], "token": "env:SLACK_TOKEN" }
+  },
+  "backfill": { "months": 1 }
+}
+```
+
+### 2. Create the Slack app
 
 A ready-made app manifest is bundled — no clicking through scope config:
 
@@ -39,7 +59,60 @@ A ready-made app manifest is bundled — no clicking through scope config:
 npx @nerdburn/lore manifest slack | pbcopy
 ```
 
-Then at [api.slack.com/apps](https://api.slack.com/apps): **Create New App → From a manifest** → pick your workspace → paste → create. Install the app, copy the Bot User OAuth Token into `SLACK_TOKEN`, and `/invite @lore` in each channel you whitelisted in `lore.json`. The bot can only read channels it's been invited to — that's the privacy model.
+Then at [api.slack.com/apps](https://api.slack.com/apps): **Create New App → From a manifest** → pick your workspace → paste → **Create**. (Some workspaces require admin approval for new apps.)
+
+The app is read-only by design: no `chat:write`, no event subscriptions, no socket mode. The bot never posts or responds to anything.
+
+### 3. Install the app and get the bot token
+
+On the app's page: **Install App** (under *Settings*) → **Install to Workspace** → allow. Copy the **Bot User OAuth Token** (starts with `xoxb-`).
+
+### 4. Invite the bot to your channels — required
+
+In Slack, in **each channel** listed in `lore.json`:
+
+```
+/invite @lore
+```
+
+The bot can only read channels it has been invited to. This is the privacy model, not a limitation: `lore.json` says what lore *wants* to sync, invitations control what it *can* sync, and the bot sitting visibly in the member list means a synced channel is never a secret. A whitelisted channel the bot isn't in is skipped with a warning.
+
+### 5. Add the token to `.env` — before first sync
+
+In the repo root (already gitignored by `init`):
+
+```sh
+echo 'SLACK_TOKEN=xoxb-your-token-here' > .env
+```
+
+Lore loads `.env` from the working directory automatically; real environment variables take precedence (which is how CI/cron provides the token instead). Then validate:
+
+```sh
+npx @nerdburn/lore check    # ✓ config valid, ✓ env refs resolve
+```
+
+### 6. First sync
+
+```sh
+npx @nerdburn/lore sync
+git add -A && git commit -m "lore: first sync"
+```
+
+The first sync seeds each source's cursor from the `backfill` window and can be slow — Slack throttles `conversations.history` hard for new non-Marketplace apps (as low as ~1 request/minute), and lore waits and resumes automatically on rate limits. Every sync after the first only fetches what's new.
+
+Now open your agent in the repo and ask it something only the Slack history knows.
+
+### Running it on a schedule
+
+A GitHub Actions cron that checks out the repo, runs `sync`, and commits is the intended deployment (no server; the repo is the database). Put `SLACK_TOKEN` in the repo's Actions secrets. If the repo auto-deploys on push (Vercel etc.), use `[skip ci]` in sync commit messages or a path-based ignore so context syncs don't trigger builds.
+
+## Everyday commands
+
+```sh
+npx @nerdburn/lore sync       # pull new docs from all sources
+npx @nerdburn/lore remember "client wants launch before Black Friday" -c decisions
+npx @nerdburn/lore check      # validate config + env refs
+```
 
 Config lives in `lore.json`; secrets are `env:` references, never values:
 
