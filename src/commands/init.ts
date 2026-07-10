@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONFIG_FILE } from '../config.js'
 
@@ -11,7 +11,7 @@ const TEMPLATE_CONFIG = {
   extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
 }
 
-const AGENTS_POINTER = `# Project context
+const AGENTS_POINTER = `## Project context (lore)
 
 Structured project memory lives in \`context/\` (managed by [lore](https://github.com/nerdburn/lore)):
 
@@ -35,8 +35,25 @@ export function init(root: string): void {
   }
   writeFileSync(join(root, 'context/facts.yaml'), '# Pinned facts. Written only via `lore remember`.\n[]\n')
 
+  // Point agents at context/ — append to an existing AGENTS.md (common when
+  // lore lives inside the project's own repo) rather than skipping it.
+  // .env holds tokens and .lore/ is the derived local cache — neither
+  // belongs in the project's git history.
+  const gitignorePath = join(root, '.gitignore')
+  const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : ''
+  const missing = ['.env', '.lore/'].filter(
+    (entry) => !existing.split('\n').some((line) => line.trim() === entry),
+  )
+  if (missing.length > 0) {
+    appendFileSync(gitignorePath, (existing && !existing.endsWith('\n') ? '\n' : '') + missing.join('\n') + '\n')
+  }
+
   const agentsPath = join(root, 'AGENTS.md')
-  if (!existsSync(agentsPath)) writeFileSync(agentsPath, AGENTS_POINTER)
+  if (!existsSync(agentsPath)) {
+    writeFileSync(agentsPath, AGENTS_POINTER)
+  } else if (!readFileSync(agentsPath, 'utf8').includes('## Project context (lore)')) {
+    appendFileSync(agentsPath, '\n' + AGENTS_POINTER)
+  }
 
   console.log(`Scaffolded ${CONFIG_FILE}, context/, and AGENTS.md.`)
   console.log('Next:')

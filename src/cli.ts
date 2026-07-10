@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { Command } from 'commander'
 import { check } from './commands/check.js'
 import { extract } from './commands/extract.js'
@@ -9,6 +11,10 @@ import { sync } from './commands/sync.js'
 
 const program = new Command()
 const root = process.cwd()
+
+// Load .env from the context repo so tokens don't need exporting per-session.
+// Real env vars win over .env values (Node's loadEnvFile semantics).
+if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'))
 
 program
   .name('lore')
