@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.lore/
+.env
+.DS_Store

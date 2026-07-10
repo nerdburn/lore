@@ -1,0 +1,32 @@
+{
+  "name": "@nerdburn/lore",
+  "version": "0.1.0",
+  "description": "Git-native project memory for agents. Everything derived from sources of truth, except what you explicitly ask it to remember.",
+  "type": "module",
+  "bin": {
+    "lore": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": "github:nerdburn/lore",
+  "dependencies": {
+    "commander": "^13.1.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
