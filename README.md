@@ -31,6 +31,16 @@ npx @nerdburn/lore sync     # pull new docs
 npx @nerdburn/lore remember "client wants launch before Black Friday" -c decisions
 ```
 
+### Slack app setup
+
+A ready-made app manifest is bundled — no clicking through scope config:
+
+```sh
+npx @nerdburn/lore manifest slack | pbcopy
+```
+
+Then at [api.slack.com/apps](https://api.slack.com/apps): **Create New App → From a manifest** → pick your workspace → paste → create. Install the app, copy the Bot User OAuth Token into `SLACK_TOKEN`, and `/invite @lore` in each channel you whitelisted in `lore.json`. The bot can only read channels it's been invited to — that's the privacy model.
+
 Config lives in `lore.json`; secrets are `env:` references, never values:
 
 ```json

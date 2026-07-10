@@ -39,5 +39,8 @@ export function init(root: string): void {
   if (!existsSync(agentsPath)) writeFileSync(agentsPath, AGENTS_POINTER)
 
   console.log(`Scaffolded ${CONFIG_FILE}, context/, and AGENTS.md.`)
-  console.log('Next: edit lore.json (project name, channels), set env keys, then `lore check`.')
+  console.log('Next:')
+  console.log('  1. edit lore.json (project name, channels, backfill)')
+  console.log('  2. `lore manifest slack` — create the Slack app from the printed manifest')
+  console.log('  3. export SLACK_TOKEN=…, then `lore check` and `lore sync`')
 }

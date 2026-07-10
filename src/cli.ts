@@ -3,6 +3,7 @@ import { Command } from 'commander'
 import { check } from './commands/check.js'
 import { extract } from './commands/extract.js'
 import { init } from './commands/init.js'
+import { manifest } from './commands/manifest.js'
 import { remember } from './commands/remember.js'
 import { sync } from './commands/sync.js'
 
@@ -36,6 +37,12 @@ program
   .command('extract')
   .description('LLM fold: streams → derived artifacts (roadmap, decisions, requests, report)')
   .action(() => extract(root))
+
+program
+  .command('manifest')
+  .description('print a bundled app manifest for a source (e.g. `lore manifest slack | pbcopy`)')
+  .argument('<source>', 'source to print the manifest for')
+  .action((source) => manifest(source))
 
 program
   .command('remember')
