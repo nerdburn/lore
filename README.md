@@ -2,11 +2,12 @@
 
 **Git-native project memory for agents.** Everything is derived from sources of truth (Slack, email, Linear, GitHub, meetings) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
 
-No server, no database service. Text in git is the source of truth; a GitHub Actions cron keeps it fresh; the repo is the deployment.
+No server, no database service. Text in git is the source of truth; a GitHub Actions cron keeps it fresh; the CLI is the interface — the repo is just the database.
 
 ## How it works
 
 ```
+lore setup     # wizard: create a context repo, sync it, link this repo
 lore sync      # connectors → context/streams/   (deterministic, no LLM)
 lore extract   # streams → derived artifacts      (LLM fold, no external APIs)
 
@@ -18,83 +19,91 @@ lore mcp       # the same verbs as MCP tools over stdio, for agents
 
 Storage and interface are separate layers:
 
-- **Storage** is a *context repo* — a plain git repo (usually one per client or
-  project, private, separate from the code) holding synced history and pinned
-  facts. A scheduled GitHub Action keeps it fresh.
-- **Interface** is this CLI. It resolves which context repo applies, keeps a
-  clone in `~/.lore/cache/`, pulls before reads, pushes writes. Neither agents
-  nor humans need to know where the files live.
+- **Storage** is a *context repo* — a plain private git repo, usually one per
+  client, separate from the code. Slack history has a different audience than
+  code, and a standalone repo has no CI or branch protection for the sync to
+  fight. A daily GitHub Action keeps it fresh.
+- **Interface** is this CLI. Project repos carry a one-line pointer; the CLI
+  resolves it, keeps a clone in `~/.lore/cache/`, pulls before reads, pushes
+  writes. Neither agents nor humans need to know where the files live.
 
-Sync pulls raw material — Slack messages, emails, issues — into `context/streams/` as permalinked markdown. Extract folds new material into structured artifacts:
+Sync pulls raw material into `context/streams/` as permalinked markdown.
+Extract folds it into structured artifacts — `derived/requests.yaml`,
+`decisions.yaml`, `roadmap.yaml`, weekly reports — every item citing its
+source. `facts.yaml` is the pinned layer: written only via `lore remember`,
+and it wins over derived data on conflict.
 
-- **`derived/requests.yaml`** — things people asked for, with status, so they stop getting lost
-- **`derived/decisions.yaml`** — what the client and team have declared, each linked to its source
-- **`derived/roadmap.yaml`** — prioritized, traceable, pushable to Linear/GitHub as tickets
-- **`derived/reports/`** — weekly summary: done, blockers, next, bugs, decisions, requests
-- **`facts.yaml`** — the pinned layer: written only via `lore remember`, audited for contradictions against fresh derived data
+## Setup
 
-Every derived item cites its source (Slack permalink, email id, commit). Pins win over derived data on conflict — but derivation flags pins that reality has drifted away from.
+### 0. Install the CLI
 
-## Installing the CLI
-
-Requires Node >= 20.12 and git. Not yet published to npm — install from GitHub:
+Requires Node >= 20.12, git, and the [`gh` CLI](https://cli.github.com) (authenticated). Not on npm yet:
 
 ```sh
 npm install -g github:nerdburn/lore
-lore --version
 ```
 
-(Everything below uses the global `lore`. One-off invocations work too:
-`npx --yes github:nerdburn/lore <command>` — that's also how the scheduled
-workflow runs it in CI.)
+### 1. Create the Slack app — once per workspace
 
-## Setting up a project
+```sh
+lore manifest slack | pbcopy
+```
 
-Context lives in a **dedicated context repo**. Keeping it separate from the
-code repo is deliberate: Slack history usually has a different audience than
-the code (contractors, client collaborators), and a standalone repo has no CI,
-deploys, or branch protection for the sync to fight. Code repos get a one-line
-pointer instead (step 7).
+At [api.slack.com/apps](https://api.slack.com/apps): **Create New App → From a
+manifest** → pick the workspace → paste → **Create**, then **Install App** and
+copy the **Bot User OAuth Token** (`xoxb-…`). The app is read-only by design —
+no `chat:write`, no events; the bot never posts. One app serves every project
+in the workspace: reuse its token for each new context repo.
 
-### Quick start: `lore setup`
+```sh
+export SLACK_TOKEN=xoxb-…   # or put it in .env — never in git
+```
 
-The scriptable half of the steps below is one command. Run it **inside the
-project repo** and it derives the context repo name from the git remote,
-creates and scaffolds it, pushes, sets the `SLACK_TOKEN` secret (from your
-env/`.env`), verifies the sync workflow registered, dispatches the first sync,
-and links the repo you're standing in:
+### 2. Run the wizard
+
+From inside the project repo:
 
 ```sh
 cd ~/code/acme
 lore setup --channels "#acme,#acme-dev"
 ```
 
-It's an interactive wizard — every value is a prompt with a derived default —
-and the first run asks which GitHub org context repos belong in (yours, never
-the client's) and saves it to `~/.lore/config.json`. Agents and scripts pass
-flags plus `--yes` to skip the prompts.
+Every value is a prompt with a derived default — the context repo name comes
+from the git remote (`lore-acme`), backfill defaults to 3 months, and the
+first run asks which GitHub org context repos belong in (**yours, never the
+client's**) and saves it to `~/.lore/config.json`. Setup then creates the
+private context repo, scaffolds and pushes it, sets the `SLACK_TOKEN` Actions
+secret, verifies the daily sync workflow registered, dispatches the first
+sync, and links the repo you're standing in. Agents and scripts pass flags
+plus `--yes` to skip prompts.
 
-Two steps stay human, and setup tells you so at the end: creating the Slack
-app in a new workspace (step 2) and `/invite @lore` in each channel (step 4).
-The numbered steps below are the same process by hand, and the reference for
-what setup did.
+### 3. Invite the bot — the one step that stays human
 
-### 1. Create the context repo and scaffold it
+In Slack, `/invite @lore` in each channel, then re-run the sync from the
+context repo's Actions tab. The bot can only read channels it's been invited
+to — that's the consent model, not a limitation: `lore.json` says what lore
+*wants*, invitations control what it *can*, and the bot in the member list
+means a synced channel is never a secret.
+
+The first sync backfills and can be slow (Slack rate-limits new apps hard;
+lore waits and resumes automatically). After that, syncs are incremental.
+
+### 4. Link any other project repos
 
 ```sh
-gh repo create your-org/lore-acme --private --clone && cd lore-acme
-lore init
+cd ~/code/acme-mobile
+lore link your-org/lore-acme
 ```
 
-This creates:
+Writes the one-line `lore.json` pointer and an `AGENTS.md` section — commit
+both. That's the entire footprint in a code repo: no context files, no
+workflow, no secrets. Any number of repos can point at one context repo.
 
-- `lore.json` — config (edit next)
-- `context/` — where everything lives (`facts.yaml`, `streams/`, `derived/`)
-- `AGENTS.md` — tells agents what this repo is and how to query it
-- `.gitignore` entries for `.env` and `.lore/`
-- `.github/workflows/lore-sync.yml` — the daily scheduled sync
+<details>
+<summary>Manual setup (what the wizard does, by hand)</summary>
 
-Edit `lore.json`: project name, channels, and a backfill window for the first sync:
+`lore init` in a fresh repo scaffolds `lore.json`, `context/`, `AGENTS.md`,
+and `.github/workflows/lore-sync.yml`. Edit the config, then sync and push:
 
 ```json
 {
@@ -107,124 +116,47 @@ Edit `lore.json`: project name, channels, and a backfill window for the first sy
 }
 ```
 
-Channel names must match Slack exactly (watch for missing hyphens — `#acme-corp`
-vs `#acmecorp`). Secrets are always `env:` references, never values.
-
-### 2. Create the Slack app — once per workspace
-
-A ready-made app manifest is bundled — no clicking through scope config:
-
 ```sh
-lore manifest slack | pbcopy
-```
-
-Then at [api.slack.com/apps](https://api.slack.com/apps): **Create New App → From a manifest** → pick your workspace → paste → **Create**. (Some workspaces require admin approval for new apps.)
-
-The app is read-only by design: no `chat:write`, no event subscriptions, no socket mode. The bot never posts or responds to anything. One app per workspace serves every project whose channels live there — you reuse its token for each new context repo.
-
-### 3. Install the app and get the bot token
-
-On the app's page: **Install App** (under *Settings*) → **Install to Workspace** → allow. Copy the **Bot User OAuth Token** (starts with `xoxb-`).
-
-### 4. Invite the bot to your channels — required
-
-In Slack, in **each channel** listed in `lore.json`:
-
-```
-/invite @lore
-```
-
-The bot can only read channels it has been invited to. This is the privacy model, not a limitation: `lore.json` says what lore *wants* to sync, invitations control what it *can* sync, and the bot sitting visibly in the member list means a synced channel is never a secret. A whitelisted channel the bot isn't in is skipped with a warning.
-
-### 5. First sync, locally
-
-```sh
-echo 'SLACK_TOKEN=xoxb-your-token-here' > .env   # gitignored by init
-lore check                                        # ✓ config valid, ✓ env refs resolve
-lore sync
+lore check && lore sync
 git add -A && git commit -m "lore: first sync" && git push
-```
-
-Lore loads `.env` from the working directory automatically; real environment
-variables take precedence (which is how CI provides the token instead). The
-first sync seeds each source's cursor from the `backfill` window and can be
-slow — Slack throttles `conversations.history` hard for new non-Marketplace
-apps (as low as ~1 request/minute), and lore waits and resumes automatically
-on rate limits. Every sync after the first only fetches what's new.
-
-### 6. Turn on the daily sync
-
-Add the token to the context repo's Actions secrets — or as an org-level
-secret shared across repos, since one workspace token serves every context repo:
-
-```sh
 gh secret set SLACK_TOKEN --repo your-org/lore-acme
 ```
 
-The scaffolded workflow runs daily (and on demand via **Actions → lore sync →
-Run workflow**), committing new history straight to `main` — a context repo
-has nothing to protect with PRs. Verify the first scheduled run actually
-registered: if **Actions** shows no "lore sync" workflow, push any commit
-touching the workflow file (GitHub sometimes misses workflows that arrive in
-the repo-creating push).
+Channel names must match Slack exactly (hyphens!). Secrets are always `env:`
+references; lore loads `.env` from the working directory, real env vars win.
+`backfill` seeds the first sync N months back (per-source overrides
+supported); everything after is forward-incremental.
 
-### 7. Link your project repos
-
-In each code repo that belongs to this project:
-
-```sh
-lore link your-org/lore-acme
-```
-
-This writes a one-line `lore.json` pointer (`{"context": "your-org/lore-acme"}`)
-and an `AGENTS.md` section telling agents to query via the CLI. Commit both.
-That's the whole install — no context files, no workflow, no secrets in the
-code repo. Any number of project repos can point at the same context repo.
+</details>
 
 ## Using it
 
-### From a linked repo
+From a linked repo:
 
 ```sh
 lore grep "black friday"                  # search everything
 lore grep -i --channel acme-dev "deploy"  # case-insensitive, one channel
-lore grep "refund" --json                 # machine-readable, for scripts
-lore recall                               # pinned facts + derived artifacts
-lore recall decisions                     # one category
+lore recall decisions                     # pinned facts + derived, one category
 lore remember "client wants launch before Black Friday" -c decisions
-lore remember "staging db resets nightly" -c deployment --source https://acme.slack.com/archives/...
 ```
 
-Reads pull the cache clone first (add `--no-pull` when offline or in a hot
-loop). `remember` writes `facts.yaml`, commits, and pushes immediately — a fact
-that only exists in a local cache isn't remembered, it's misplaced. Pushing
-requires write access to the context repo; the clone uses your normal git
-credentials (SSH first, then https).
-
-### From anywhere
+From anywhere — `~/.lore/registry.json` learns project names as you use them:
 
 ```sh
-lore grep -p acme "launch date"     # no repo needed: resolve by project name
+lore grep -p acme "launch date"
 lore --context your-org/lore-acme recall
 ```
 
-`~/.lore/registry.json` maps project names to context repos and learns as a
-side effect of use — after the first resolution on a machine, `-p acme` works
-from any directory. Explicit `--context owner/repo` works cold.
-
-Resolution order, for reference: `--context` flag → nearest `lore.json` walking
-up from the current directory (pointer or full config) → `-p`/`--project` via
-the registry. The cache lives in `~/.lore/cache/` and is disposable — delete it
-any time; the next command re-clones.
+Reads pull the cache first (`--no-pull` to skip). `remember` commits and
+pushes the pin immediately — a fact that only exists in a local cache isn't
+remembered, it's misplaced. Resolution order: `--context` flag → nearest
+`lore.json` walking up from cwd → `-p/--project` via the registry. The cache
+is disposable; delete `~/.lore/cache/` any time.
 
 ### For agents (MCP)
 
-`lore mcp` serves the query surface as MCP tools over stdio: `lore_grep`,
-`lore_read` (fetch a file `lore_grep` pointed at), `lore_recall`, and
-`lore_remember` (instructed to only pin on explicit user request). Reads
-re-pull at most once a minute.
-
-Claude Code, in a linked repo:
+`lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
+`lore_recall`, `lore_remember`. In a linked repo with Claude Code:
 
 ```sh
 claude mcp add lore -- lore mcp
@@ -236,63 +168,45 @@ Any MCP client, pinned to a project:
 { "mcpServers": { "lore": { "command": "lore", "args": ["mcp", "-p", "acme"] } } }
 ```
 
-Agents without the global install can use `"command": "npx", "args": ["--yes", "github:nerdburn/lore", "mcp", "-p", "acme"]`.
+And [`skills/lore-onboard/SKILL.md`](skills/lore-onboard/SKILL.md) teaches an
+agent the whole onboarding (Claude Code: copy to `~/.claude/skills/lore-onboard/`):
+run `lore setup --yes` with flags, relay the human steps, re-sync after
+invites, verify with a real `lore grep` before declaring success — plus the
+rules an agent must not relax (context repos in *your* org, one Slack app per
+workspace, tokens never in git).
 
-### Command reference
+## Command reference
 
 | Command | What it does |
 |---|---|
 | `lore setup [owner/repo] [--channels s] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
-| `lore init` | scaffold a context repo (config, `context/`, AGENTS.md, sync workflow) |
 | `lore link <owner/repo>` | point a project repo at its context repo |
-| `lore check` | validate config, connectors, env refs |
-| `lore sync [--backfill]` | pull new docs into `context/streams/` (run in the context repo) |
-| `lore extract` | LLM fold: streams → derived artifacts *(not built yet)* |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore mcp` | MCP server over stdio |
+| `lore sync [--backfill]` | pull new docs into `context/streams/` (run in the context repo) |
+| `lore extract` | LLM fold: streams → derived artifacts *(not built yet)* |
+| `lore init` | scaffold a context repo by hand |
+| `lore check` | validate config, connectors, env refs |
 | `lore manifest slack` | print the bundled Slack app manifest |
 
 `grep`, `recall`, `remember`, and `mcp` all take `--context <owner/repo>`,
 `-p/--project <name>`, and `--no-pull`.
 
-## Running a fleet
-
-The shape that scales to many clients: one Slack app per workspace, one
-private context repo per client, one org-level `SLACK_TOKEN` secret. Onboarding
-client N is:
-
-1. `cd <client-repo> && lore setup --channels "#client,#client-team"`
-2. `/invite @lore` in each channel, then re-run the sync from Actions
-3. `lore link your-org/lore-<client>` in the client's *other* code repos, if any
-
-### For agents
-
-[`skills/lore-onboard/SKILL.md`](skills/lore-onboard/SKILL.md) is a drop-in
-skill (Claude Code: copy to `~/.claude/skills/lore-onboard/`) that teaches an
-agent the whole onboarding: run `lore setup --yes` with flags, relay the two
-human steps, re-sync after invites, and verify with a real `lore grep` before
-declaring success. It also encodes the rules an agent must not relax — context
-repos go in *your* org, one Slack app per workspace, tokens never in git.
-
-Offboarding is archiving one repo. Access control follows the data: grant
-people (or agents) the context repos they should see, independently of code
-access.
-
 ## Troubleshooting
 
-- **`not_in_channel` during sync** — the bot isn't in a listed channel yet; `/invite @lore` there and re-run.
-- **`channel #x not found or bot not a member — skipping`** — usually a name mismatch; check the exact channel name in Slack (hyphens!).
-- **Added a channel to an existing `lore.json` and got 0 docs** — known issue: a new channel's cursor seeds at "now", and `--backfill` currently refuses to run once any cursor exists. Workaround: edit `state.json` and set the new channel's cursor to an epoch timestamp at your desired backfill start, then `lore sync`.
-- **First scheduled run never appears in Actions** — push any commit touching `.github/workflows/lore-sync.yml`; GitHub sometimes doesn't register workflows from a repo-creating push.
-- **Scheduled syncs stopped after ~2 months of quiet** — GitHub disables cron workflows on inactive repos; re-enable from the Actions tab.
-- **`could not pull … using cached copy`** — offline or no read access to the context repo; queries serve the cache. Delete `~/.lore/cache/<owner>__<repo>` to force a fresh clone.
+- **`not_in_channel` during sync** — the bot isn't in a listed channel; `/invite @lore` and re-run.
+- **`channel #x not found … skipping`** — usually a name mismatch; check the exact name in Slack (hyphens!).
+- **Added a channel to an existing config, got 0 docs** — known issue: a new channel's cursor seeds at "now" and `--backfill` refuses once any cursor exists. Workaround: set that channel's cursor in `state.json` to an epoch timestamp at the desired start, then sync.
+- **No "lore sync" workflow in the Actions tab** — GitHub sometimes misses workflows pushed in the repo-creating commit; `setup` nudges automatically, otherwise push any commit touching the file.
+- **Scheduled syncs stopped after ~2 months of quiet** — GitHub disables cron on inactive repos; re-enable from the Actions tab.
+- **`could not pull … using cached copy`** — offline or no read access; queries serve the cache. Delete `~/.lore/cache/<owner>__<repo>` to force a fresh clone.
 - **`remember` failed to push** — the pin is committed in the cache clone; fix access and `git -C ~/.lore/cache/<owner>__<repo> push`.
 
 ## Status
 
-Early. Working: `init`, `check`, `sync` with the Slack connector, and the full query surface — `link`, `grep`, `recall`, `remember` (with pointer resolution + `~/.lore/cache`), and `mcp`. Next: the `requests` extractor (M2), weekly report (M3), fixing per-channel backfill. See [docs/SPEC.md](docs/SPEC.md) for the full design — data model, connector interface, extraction contract, security model, milestones.
+Early. Working: `setup`, `link`, `init`, `check`, `sync` (Slack connector), and the query surface — `grep`, `recall`, `remember`, `mcp`, with pointer resolution + `~/.lore/cache`. Next: the `requests` extractor (M2), weekly report (M3), fixing per-channel backfill. See [docs/SPEC.md](docs/SPEC.md) for the full design.
 
 ## Principles
 
