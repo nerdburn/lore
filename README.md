@@ -9,7 +9,18 @@ No server, no database service. Text in git is the source of truth; a GitHub Act
 ```
 lore sync      # connectors → context/streams/   (deterministic, no LLM)
 lore extract   # streams → derived artifacts      (LLM fold, no external APIs)
+
+lore grep      # search project memory — from any linked repo, or anywhere with -p
+lore recall    # pinned facts + derived artifacts
+lore remember  # pin a fact (the only explicit write)
+lore mcp       # the same verbs as MCP tools over stdio, for agents
 ```
+
+Storage and interface are separate layers: context lives in a **context repo**
+(usually one per client/project, separate from the code), and the CLI is the
+interface — it resolves which context repo applies, keeps a clone in
+`~/.lore/cache/`, pulls before reads, pushes writes. Neither agents nor humans
+need to know where the files are.
 
 Sync pulls raw material — Slack messages, emails, issues — into `context/streams/` as permalinked markdown. Extract folds new material into structured artifacts:
 
@@ -23,12 +34,17 @@ Every derived item cites its source (Slack permalink, email id, commit). Pins wi
 
 ## Installation
 
-Requires Node >= 20.12. Lore runs *inside* the repo that should hold the context — usually your project's own repo (agents working on the code then get the memory for free), or a dedicated context repo if repo access is broader than the Slack channels' audience.
+Requires Node >= 20.12. Context lives in a **dedicated context repo** — create
+one (e.g. `your-org/lore-acme`, private) and run `init` inside it. Keeping it
+separate from the code repo is deliberate: Slack history usually has a
+different audience than the code (contractors, clients), and a standalone repo
+has no CI, deploys, or branch protection for the sync to fight. Code repos get
+a one-line pointer via [`lore link`](#link-your-project-repos) instead.
 
 ### 1. Scaffold
 
 ```sh
-cd ~/code/your-project
+gh repo create your-org/lore-acme --private --clone && cd lore-acme
 npx @nerdburn/lore init
 ```
 
@@ -105,25 +121,61 @@ Now open your agent in the repo and ask it something only the Slack history know
 
 ### Running it on a schedule
 
-A GitHub Actions cron is the intended deployment (no server; the repo is the database). `init` scaffolds it at `.github/workflows/lore-sync.yml`. To turn it on, add `SLACK_TOKEN` to the repo's Actions secrets — or as an org-level secret shared across repos, since one workspace token serves every install.
+A GitHub Actions cron in the context repo is the intended deployment (no
+server; the repo is the database). `init` scaffolds it at
+`.github/workflows/lore-sync.yml`: daily checkout → `sync` → commit straight
+to the default branch. To turn it on, add `SLACK_TOKEN` to the repo's Actions
+secrets — or as an org-level secret, since one workspace token serves every
+context repo.
 
-Sync commits don't land on the default branch directly. The workflow:
+Two caveats: GitHub sometimes doesn't register a workflow that arrives in the
+repo-creating push — a follow-up commit touching the file fixes it. And GitHub
+disables scheduled workflows on repos with ~60 days of no activity, so check
+dormant projects occasionally (the sync's own commits count as activity while
+there's anything to sync).
 
-1. checks out the branch named in `lore.json` (`"branch": "lore"`), creating it from the default branch if needed
-2. runs `sync` and commits to that branch
-3. opens (or reuses) a PR into the default branch and squash-merges it — auto-merge if the repo allows it, direct merge otherwise, and leaves the PR open with a warning if branch protection blocks both
+### Link your project repos
 
-So the default branch gets one tidy `chore(lore): context sync [skip ci]` commit per merge instead of per-sync noise, and `git blame` on your code never meets the bot. **The squash-merge means the sync branch and the default branch stop sharing history** — the workflow handles this by resetting the sync branch onto the default branch on the run after a merge. Don't commit your own work to the sync branch; it gets force-pushed.
+In each code repo that belongs to this project:
 
-Deploy safety: pushes and merges made with the built-in `GITHUB_TOKEN` don't trigger other Actions workflows, and the `[skip ci]` in the squash commit title covers external Git integrations (Vercel etc.). Set `"branch": "main"` in `lore.json` and delete the PR steps if you'd rather commit straight to the default branch.
+```sh
+npx @nerdburn/lore link your-org/lore-acme
+```
 
-Two caveats: GitHub disables scheduled workflows on repos with ~60 days of no activity — check dormant projects occasionally. And while this repo is private, installs need a `LORE_INSTALL_TOKEN` Actions secret (a read-only PAT for this repo) so `npx` can fetch it; the workflow picks it up automatically and it becomes unnecessary once the package is published to npm.
+This writes a one-line `lore.json` pointer (`{"context": "your-org/lore-acme"}`)
+and an `AGENTS.md` section telling agents to use the CLI. That's the whole
+install — no context files, no workflow, no secrets in the code repo. Any
+number of project repos can point at the same context repo.
+
+### Query it — from anywhere
+
+```sh
+npx @nerdburn/lore grep "black friday"        # from any linked repo
+npx @nerdburn/lore grep -p acme "launch date" # from anywhere, via ~/.lore/registry.json
+npx @nerdburn/lore recall                     # pinned facts + derived artifacts
+npx @nerdburn/lore remember "client wants launch before Black Friday" -c decisions
+```
+
+Reads pull the cache clone first (`--no-pull` to skip); `remember` commits and
+pushes the pin immediately. The registry learns project names as a side effect
+of use, so `-p <project>` works after the first resolution on that machine.
+
+For agents, `lore mcp` serves the same verbs as MCP tools over stdio
+(`lore_grep`, `lore_read`, `lore_recall`, `lore_remember`):
+
+```json
+{ "mcpServers": { "lore": { "command": "npx", "args": ["-y", "@nerdburn/lore", "mcp", "-p", "acme"] } } }
+```
 
 ## Everyday commands
 
 ```sh
-npx @nerdburn/lore sync       # pull new docs from all sources
+npx @nerdburn/lore sync       # pull new docs from all sources (run in the context repo)
+npx @nerdburn/lore grep "<pattern>" [-p project] [--channel name] [--json]
+npx @nerdburn/lore recall [category] [--json]
 npx @nerdburn/lore remember "client wants launch before Black Friday" -c decisions
+npx @nerdburn/lore link <owner/repo>   # point a project repo at its context repo
+npx @nerdburn/lore mcp [-p project]    # MCP tools over stdio
 npx @nerdburn/lore check      # validate config + env refs
 ```
 
@@ -144,7 +196,7 @@ Config lives in `lore.json`; secrets are `env:` references, never values:
 
 ## Status
 
-Early. Working: `init`, `check`, `remember`, `sync` with the Slack connector. Next: the `requests` extractor (M2), weekly report (M3). See [docs/SPEC.md](docs/SPEC.md) for the full design — data model, connector interface, extraction contract, security model, milestones.
+Early. Working: `init`, `check`, `sync` with the Slack connector, and the full query surface — `link`, `grep`, `recall`, `remember` (with pointer resolution + `~/.lore/cache`), and `mcp`. Next: the `requests` extractor (M2), weekly report (M3). See [docs/SPEC.md](docs/SPEC.md) for the full design — data model, connector interface, extraction contract, security model, milestones.
 
 ## Principles
 

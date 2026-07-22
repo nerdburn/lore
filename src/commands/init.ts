@@ -5,7 +5,6 @@ import { CONFIG_FILE } from '../config.js'
 
 const TEMPLATE_CONFIG = {
   project: 'my-project',
-  branch: 'lore',
   sources: {
     slack: { channels: ['#my-project'], token: 'env:SLACK_TOKEN' },
   },
@@ -17,13 +16,18 @@ const WORKFLOW_PATH = '.github/workflows/lore-sync.yml'
 
 const AGENTS_POINTER = `## Project context (lore)
 
-Structured project memory lives in \`context/\` (managed by [lore](https://github.com/nerdburn/lore)):
+This is a standalone [lore](https://github.com/nerdburn/lore) context repo:
+project memory synced from Slack daily by GitHub Actions. It is usually kept
+separate from the project's code repo — Slack history has a different
+audience than code. Project repos point here via \`lore link\`.
 
 - \`context/facts.yaml\` — pinned facts, explicitly stored. Trust these; they win over derived data.
 - \`context/derived/\` — roadmap, decisions, outstanding requests, weekly reports. Every item links to its source.
-- \`context/streams/\` — raw synced Slack/email/meeting history. Grep this for anything else.
+- \`context/streams/\` — raw synced Slack/email/meeting history.
+- \`state.json\` — the sync cursor. Committed on purpose; never edit by hand.
 
-To store something on explicit instruction, run \`npx lore remember "<fact>"\`.
+Query with \`npx lore grep "<pattern>"\` / \`npx lore recall\`; pin facts on
+explicit instruction with \`npx lore remember "<fact>"\`.
 `
 
 export function init(root: string): void {
@@ -59,16 +63,15 @@ export function init(root: string): void {
     appendFileSync(agentsPath, '\n' + AGENTS_POINTER)
   }
 
-  // Scheduled deployment: daily sync commits go to a dedicated branch and
-  // squash-merge into the default branch, so sync noise never lands there.
+  // Scheduled deployment: daily cron in this repo, committing straight to
+  // the default branch — a context repo has no CI or deploys to protect.
   const workflowPath = join(root, WORKFLOW_PATH)
   if (!existsSync(workflowPath)) {
-    const template = readFileSync(
-      fileURLToPath(new URL('../../manifests/lore-sync.yml', import.meta.url)),
-      'utf8',
-    )
     mkdirSync(join(root, '.github/workflows'), { recursive: true })
-    writeFileSync(workflowPath, template.replaceAll('__LORE_BRANCH__', TEMPLATE_CONFIG.branch))
+    writeFileSync(
+      workflowPath,
+      readFileSync(fileURLToPath(new URL('../../manifests/lore-sync.yml', import.meta.url)), 'utf8'),
+    )
   }
 
   console.log(`Scaffolded ${CONFIG_FILE}, context/, AGENTS.md, and ${WORKFLOW_PATH}.`)
@@ -76,6 +79,6 @@ export function init(root: string): void {
   console.log('  1. edit lore.json (project name, channels, backfill)')
   console.log('  2. `lore manifest slack` — create the Slack app from the printed manifest')
   console.log('  3. export SLACK_TOKEN=…, then `lore check` and `lore sync`')
-  console.log(`  4. add SLACK_TOKEN to the repo/org Actions secrets — ${WORKFLOW_PATH} syncs daily`)
-  console.log(`     to a "${TEMPLATE_CONFIG.branch}" branch and squash-merges it into the default branch`)
+  console.log('  4. push this repo + add SLACK_TOKEN to its Actions secrets — the workflow syncs daily')
+  console.log('  5. in each project repo: `npx lore link <owner>/<this-repo>`')
 }

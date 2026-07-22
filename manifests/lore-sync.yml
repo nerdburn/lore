@@ -1,12 +1,7 @@
-# Scaffolded by `lore init`. Daily context sync on a dedicated branch,
-# squash-merged into the default branch so individual sync commits never
-# land there. After each squash-merge the branch is reset onto the default
-# branch on the next run (required: squash-merge breaks shared history).
-#
-# Secrets needed (repo or org level):
-#   SLACK_TOKEN         — the lore bot's xoxb- token
-#   LORE_INSTALL_TOKEN  — only while the lore repo is private: a read-only
-#                         PAT for nerdburn/lore so npx can install it
+# Scaffolded by `lore init`. Daily context sync — this is a standalone lore
+# context repo (no CI, no deploys, no protection), so commits go straight to
+# the default branch.
+# Secret needed (repo or org level): SLACK_TOKEN — the lore bot's xoxb- token.
 name: lore sync
 
 on:
@@ -16,81 +11,28 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency: lore-sync
-
-env:
-  LORE_PKG: github:nerdburn/lore # switch to @nerdburn/lore once published
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - name: Check out the sync branch
-        run: |
-          git config user.name "lore"
-          git config user.email "lore@users.noreply.github.com"
-          DEFAULT="${{ github.event.repository.default_branch }}"
-          echo "DEFAULT_BRANCH=$DEFAULT" >> "$GITHUB_ENV"
-          if git ls-remote --exit-code --heads origin __LORE_BRANCH__ >/dev/null; then
-            git checkout -B __LORE_BRANCH__ origin/__LORE_BRANCH__
-            if git diff --quiet "origin/$DEFAULT" -- context/ state.json; then
-              # context already squash-merged — restart the branch from $DEFAULT
-              git reset --hard "origin/$DEFAULT"
-            else
-              # unmerged syncs pending — keep them, but stay current with $DEFAULT
-              git merge --no-edit "origin/$DEFAULT"
-            fi
-          else
-            git checkout -B __LORE_BRANCH__ "origin/$DEFAULT"
-          fi
+          node-version: 22
 
       - name: Sync
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
-          LORE_INSTALL_TOKEN: ${{ secrets.LORE_INSTALL_TOKEN }}
-        run: |
-          PKG="$LORE_PKG"
-          if [ -n "$LORE_INSTALL_TOKEN" ] && [ "${PKG#github:}" != "$PKG" ]; then
-            PKG="git+https://x-access-token:${LORE_INSTALL_TOKEN}@github.com/${PKG#github:}.git"
-          fi
-          npx --yes "$PKG" sync
+        run: npx --yes github:nerdburn/lore sync
 
       - name: Commit and push
-        id: commit
         run: |
+          git config user.name "lore"
+          git config user.email "lore@users.noreply.github.com"
           git add context/ state.json
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            git commit -m "chore(lore): sync"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-          git push --force-with-lease origin __LORE_BRANCH__
-
-      - name: Open or update the merge PR
-        if: steps.commit.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR=$(gh pr list --head __LORE_BRANCH__ --base "$DEFAULT_BRANCH" --state open --json number --jq '.[0].number')
-          if [ -z "$PR" ]; then
-            PR=$(gh pr create --head __LORE_BRANCH__ --base "$DEFAULT_BRANCH" \
-              --title "chore(lore): context sync [skip ci]" \
-              --body "Automated lore context sync. Squash-merge only — the branch resets onto $DEFAULT_BRANCH on the next run." \
-              | grep -oE '[0-9]+$')
-          fi
-          # auto-merge if the repo allows it, else merge directly; if both are
-          # blocked (required reviews etc.), leave the PR for a human
-          gh pr merge "$PR" --squash --auto --subject "chore(lore): context sync [skip ci]" \
-            || gh pr merge "$PR" --squash --subject "chore(lore): context sync [skip ci]" \
-            || echo "::warning::could not merge lore sync PR #$PR automatically — merge it manually"
+          git diff --cached --quiet || git commit -m "chore(lore): sync"
+          git push

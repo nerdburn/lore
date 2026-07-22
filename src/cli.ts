@@ -4,10 +4,22 @@ import { join } from 'node:path'
 import { Command } from 'commander'
 import { check } from './commands/check.js'
 import { extract } from './commands/extract.js'
+import { grep } from './commands/grep.js'
 import { init } from './commands/init.js'
+import { link } from './commands/link.js'
 import { manifest } from './commands/manifest.js'
+import { mcp } from './commands/mcp.js'
+import { recall } from './commands/recall.js'
 import { remember } from './commands/remember.js'
 import { sync } from './commands/sync.js'
+
+/** Options shared by every command that reads or writes a context repo. */
+function contextual(cmd: Command): Command {
+  return cmd
+    .option('--context <repo>', 'context repo ("owner/repo" or path), overriding lore.json resolution')
+    .option('-p, --project <name>', 'resolve the context repo from ~/.lore/registry.json by project name')
+    .option('--no-pull', 'skip pulling the cache clone (offline / hot loop)')
+}
 
 const program = new Command()
 const root = process.cwd()
@@ -19,7 +31,7 @@ if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'))
 program
   .name('lore')
   .description('Git-native project memory for agents. Everything derived, except what you explicitly remember.')
-  .version('0.1.0')
+  .version('0.2.0')
 
 program
   .command('init')
@@ -50,14 +62,46 @@ program
   .argument('<source>', 'source to print the manifest for')
   .action((source) => manifest(source))
 
+contextual(
+  program
+    .command('remember')
+    .description('pin a fact — the only explicit write path (pushes immediately in pointer mode)')
+    .argument('<fact>', 'the fact to store')
+    .option('-c, --category <category>', 'e.g. client, deployment, decisions')
+    .option('--by <who>', 'who authorized this (defaults to OS username)')
+    .option('--source <url>', 'optional source link'),
+).action((fact, opts) => remember(root, fact, opts))
+
 program
-  .command('remember')
-  .description('pin a fact to context/facts.yaml — the only explicit write path')
-  .argument('<fact>', 'the fact to store')
-  .option('-c, --category <category>', 'e.g. client, deployment, decisions')
-  .option('--by <who>', 'who authorized this (defaults to OS username)')
-  .option('--source <url>', 'optional source link')
-  .action((fact, opts) => remember(root, fact, opts))
+  .command('link')
+  .description('point this project repo at a context repo (writes a one-line lore.json pointer + AGENTS.md section)')
+  .argument('<repo>', 'context repo, e.g. "inputlogic/lore-acme"')
+  .action((repo) => link(root, repo))
+
+contextual(
+  program
+    .command('grep')
+    .description('search project memory (streams, facts, derived) — works from any linked repo, or anywhere with -p/--context')
+    .argument('<pattern>', 'regex (falls back to literal)')
+    .option('-i, --ignore-case', 'case-insensitive')
+    .option('--channel <name>', 'filter by path substring, e.g. a channel name')
+    .option('--limit <n>', 'max matches (default 100)')
+    .option('--json', 'machine-readable output'),
+).action((pattern, opts) => grep(root, pattern, opts))
+
+contextual(
+  program
+    .command('recall')
+    .description('pinned facts + derived artifacts — "what do we know" without a search term')
+    .argument('[category]', 'filter, e.g. deployment, decisions')
+    .option('--json', 'machine-readable output'),
+).action((category, opts) => recall(root, category, opts))
+
+contextual(
+  program
+    .command('mcp')
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_remember)'),
+).action((opts) => mcp(root, opts))
 
 program.parseAsync().catch((err) => {
   console.error(err instanceof Error ? err.message : err)
