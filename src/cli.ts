@@ -11,6 +11,7 @@ import { manifest } from './commands/manifest.js'
 import { mcp } from './commands/mcp.js'
 import { recall } from './commands/recall.js'
 import { remember } from './commands/remember.js'
+import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
 
 /** Options shared by every command that reads or writes a context repo. */
@@ -37,6 +38,16 @@ program
   .command('init')
   .description('scaffold lore.json, context/, and an AGENTS.md pointer')
   .action(() => init(root))
+
+program
+  .command('setup')
+  .description('wizard: create + scaffold + push a context repo, set the secret, dispatch the first sync, link this repo')
+  .argument('[repo]', 'context repo name or "owner/name" (derived from cwd/channels if omitted)')
+  .option('--channels <list>', 'comma-separated Slack channels, e.g. "#acme,#acme-dev"')
+  .option('--backfill <months>', 'backfill window for the first sync (default 3)')
+  .option('--org <org>', 'GitHub org for context repos (asked once and saved to ~/.lore/config.json)')
+  .option('-y, --yes', 'no prompts: accept derived defaults (for agents and scripts)')
+  .action((repo, opts) => setup(root, repo, opts))
 
 program
   .command('check')

@@ -56,6 +56,29 @@ the code (contractors, client collaborators), and a standalone repo has no CI,
 deploys, or branch protection for the sync to fight. Code repos get a one-line
 pointer instead (step 7).
 
+### Quick start: `lore setup`
+
+The scriptable half of the steps below is one command. Run it **inside the
+project repo** and it derives the context repo name from the git remote,
+creates and scaffolds it, pushes, sets the `SLACK_TOKEN` secret (from your
+env/`.env`), verifies the sync workflow registered, dispatches the first sync,
+and links the repo you're standing in:
+
+```sh
+cd ~/code/acme
+lore setup --channels "#acme,#acme-dev"
+```
+
+It's an interactive wizard — every value is a prompt with a derived default —
+and the first run asks which GitHub org context repos belong in (yours, never
+the client's) and saves it to `~/.lore/config.json`. Agents and scripts pass
+flags plus `--yes` to skip the prompts.
+
+Two steps stay human, and setup tells you so at the end: creating the Slack
+app in a new workspace (step 2) and `/invite @lore` in each channel (step 4).
+The numbered steps below are the same process by hand, and the reference for
+what setup did.
+
 ### 1. Create the context repo and scaffold it
 
 ```sh
@@ -219,6 +242,7 @@ Agents without the global install can use `"command": "npx", "args": ["--yes", "
 
 | Command | What it does |
 |---|---|
+| `lore setup [owner/repo] [--channels s] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore init` | scaffold a context repo (config, `context/`, AGENTS.md, sync workflow) |
 | `lore link <owner/repo>` | point a project repo at its context repo |
 | `lore check` | validate config, connectors, env refs |
@@ -239,10 +263,18 @@ The shape that scales to many clients: one Slack app per workspace, one
 private context repo per client, one org-level `SLACK_TOKEN` secret. Onboarding
 client N is:
 
-1. `gh repo create your-org/lore-<client> --private --clone` → `lore init` → edit channels → push
-2. `/invite @lore` in each channel
-3. `gh secret set SLACK_TOKEN --repo your-org/lore-<client>` (skip if org-level)
-4. `lore link your-org/lore-<client>` in each of the client's code repos
+1. `cd <client-repo> && lore setup --channels "#client,#client-team"`
+2. `/invite @lore` in each channel, then re-run the sync from Actions
+3. `lore link your-org/lore-<client>` in the client's *other* code repos, if any
+
+### For agents
+
+[`skills/lore-onboard/SKILL.md`](skills/lore-onboard/SKILL.md) is a drop-in
+skill (Claude Code: copy to `~/.claude/skills/lore-onboard/`) that teaches an
+agent the whole onboarding: run `lore setup --yes` with flags, relay the two
+human steps, re-sync after invites, and verify with a real `lore grep` before
+declaring success. It also encodes the rules an agent must not relax — context
+repos go in *your* org, one Slack app per workspace, tokens never in git.
 
 Offboarding is archiving one repo. Access control follows the data: grant
 people (or agents) the context repos they should see, independently of code

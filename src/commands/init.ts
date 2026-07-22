@@ -30,13 +30,12 @@ Query with \`npx lore grep "<pattern>"\` / \`npx lore recall\`; pin facts on
 explicit instruction with \`npx lore remember "<fact>"\`.
 `
 
-export function init(root: string): void {
-  if (existsSync(join(root, CONFIG_FILE))) {
-    console.log(`${CONFIG_FILE} already exists — nothing to do`)
-    return
-  }
+export type ScaffoldConfig = typeof TEMPLATE_CONFIG
 
-  writeFileSync(join(root, CONFIG_FILE), JSON.stringify(TEMPLATE_CONFIG, null, 2) + '\n')
+/** Write the context-repo skeleton into root. Shared by `init` (template
+ * values, human edits after) and `setup` (real values, no edits needed). */
+export function scaffold(root: string, config: ScaffoldConfig = TEMPLATE_CONFIG): void {
+  writeFileSync(join(root, CONFIG_FILE), JSON.stringify(config, null, 2) + '\n')
 
   for (const dir of ['context/streams', 'context/derived/reports']) {
     mkdirSync(join(root, dir), { recursive: true })
@@ -73,6 +72,15 @@ export function init(root: string): void {
       readFileSync(fileURLToPath(new URL('../../manifests/lore-sync.yml', import.meta.url)), 'utf8'),
     )
   }
+}
+
+export function init(root: string): void {
+  if (existsSync(join(root, CONFIG_FILE))) {
+    console.log(`${CONFIG_FILE} already exists — nothing to do`)
+    return
+  }
+
+  scaffold(root)
 
   console.log(`Scaffolded ${CONFIG_FILE}, context/, AGENTS.md, and ${WORKFLOW_PATH}.`)
   console.log('Next:')
