@@ -8,6 +8,9 @@ const backfillSchema = z
 
 export const configSchema = z.object({
   project: z.string(),
+  // Branch the scheduled sync commits to; squash-merged into the default
+  // branch by the scaffolded workflow. "main" = commit directly (legacy).
+  branch: z.string().default('main'),
   sources: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
   backfill: backfillSchema.default({ months: 0 }),
   extract: z.array(z.string()).default([]),

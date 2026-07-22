@@ -38,6 +38,7 @@ This creates:
 - `context/` — where everything lives (`facts.yaml`, `streams/`, `derived/`)
 - an `AGENTS.md` section pointing agents at `context/` (appended if the file already exists)
 - `.gitignore` entries for `.env` and `.lore/`
+- `.github/workflows/lore-sync.yml` — the scheduled sync (see [Running it on a schedule](#running-it-on-a-schedule))
 
 Edit `lore.json`: set your project name and the Slack channels to sync. Optionally set a backfill window for the first sync:
 
@@ -104,7 +105,19 @@ Now open your agent in the repo and ask it something only the Slack history know
 
 ### Running it on a schedule
 
-A GitHub Actions cron that checks out the repo, runs `sync`, and commits is the intended deployment (no server; the repo is the database). Put `SLACK_TOKEN` in the repo's Actions secrets. If the repo auto-deploys on push (Vercel etc.), use `[skip ci]` in sync commit messages or a path-based ignore so context syncs don't trigger builds.
+A GitHub Actions cron is the intended deployment (no server; the repo is the database). `init` scaffolds it at `.github/workflows/lore-sync.yml`. To turn it on, add `SLACK_TOKEN` to the repo's Actions secrets — or as an org-level secret shared across repos, since one workspace token serves every install.
+
+Sync commits don't land on the default branch directly. The workflow:
+
+1. checks out the branch named in `lore.json` (`"branch": "lore"`), creating it from the default branch if needed
+2. runs `sync` and commits to that branch
+3. opens (or reuses) a PR into the default branch and squash-merges it — auto-merge if the repo allows it, direct merge otherwise, and leaves the PR open with a warning if branch protection blocks both
+
+So the default branch gets one tidy `chore(lore): context sync [skip ci]` commit per merge instead of per-sync noise, and `git blame` on your code never meets the bot. **The squash-merge means the sync branch and the default branch stop sharing history** — the workflow handles this by resetting the sync branch onto the default branch on the run after a merge. Don't commit your own work to the sync branch; it gets force-pushed.
+
+Deploy safety: pushes and merges made with the built-in `GITHUB_TOKEN` don't trigger other Actions workflows, and the `[skip ci]` in the squash commit title covers external Git integrations (Vercel etc.). Set `"branch": "main"` in `lore.json` and delete the PR steps if you'd rather commit straight to the default branch.
+
+Two caveats: GitHub disables scheduled workflows on repos with ~60 days of no activity — check dormant projects occasionally. And while this repo is private, installs need a `LORE_INSTALL_TOKEN` Actions secret (a read-only PAT for this repo) so `npx` can fetch it; the workflow picks it up automatically and it becomes unnecessary once the package is published to npm.
 
 ## Everyday commands
 

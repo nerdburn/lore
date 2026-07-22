@@ -1,15 +1,19 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { CONFIG_FILE } from '../config.js'
 
 const TEMPLATE_CONFIG = {
   project: 'my-project',
+  branch: 'lore',
   sources: {
     slack: { channels: ['#my-project'], token: 'env:SLACK_TOKEN' },
   },
   backfill: { months: 0 },
   extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
 }
+
+const WORKFLOW_PATH = '.github/workflows/lore-sync.yml'
 
 const AGENTS_POINTER = `## Project context (lore)
 
@@ -55,9 +59,23 @@ export function init(root: string): void {
     appendFileSync(agentsPath, '\n' + AGENTS_POINTER)
   }
 
-  console.log(`Scaffolded ${CONFIG_FILE}, context/, and AGENTS.md.`)
+  // Scheduled deployment: daily sync commits go to a dedicated branch and
+  // squash-merge into the default branch, so sync noise never lands there.
+  const workflowPath = join(root, WORKFLOW_PATH)
+  if (!existsSync(workflowPath)) {
+    const template = readFileSync(
+      fileURLToPath(new URL('../../manifests/lore-sync.yml', import.meta.url)),
+      'utf8',
+    )
+    mkdirSync(join(root, '.github/workflows'), { recursive: true })
+    writeFileSync(workflowPath, template.replaceAll('__LORE_BRANCH__', TEMPLATE_CONFIG.branch))
+  }
+
+  console.log(`Scaffolded ${CONFIG_FILE}, context/, AGENTS.md, and ${WORKFLOW_PATH}.`)
   console.log('Next:')
   console.log('  1. edit lore.json (project name, channels, backfill)')
   console.log('  2. `lore manifest slack` — create the Slack app from the printed manifest')
   console.log('  3. export SLACK_TOKEN=…, then `lore check` and `lore sync`')
+  console.log(`  4. add SLACK_TOKEN to the repo/org Actions secrets — ${WORKFLOW_PATH} syncs daily`)
+  console.log(`     to a "${TEMPLATE_CONFIG.branch}" branch and squash-merges it into the default branch`)
 }
