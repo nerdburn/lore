@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
@@ -15,7 +16,16 @@ import type { Pin } from '../types.js'
  * - Every new/changed item cites source permalinks
  * - Old unresolved requests → status "stale", never silently dropped
  * - Pins in facts.yaml are audited against fresh evidence → contradictions
- * - No network except the LLM API (connectors never run here)
+ * - No network except the LLM (connectors never run here)
+ *
+ * Two interchangeable backends:
+ * - "sdk": the Claude API via @anthropic-ai/sdk — API-key billing, used
+ *   whenever ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN is set. Structured
+ *   outputs guarantee the fold's shape.
+ * - "cli": headless Claude Code (`claude -p`) — runs on a Claude
+ *   subscription; locally via your existing login, in CI via a
+ *   CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`, Max plans).
+ * Override with LORE_LLM=sdk|cli.
  *
  * Large backfills are folded in batches: each call sees the current
  * artifacts plus one slice of new material and returns the updated
@@ -66,7 +76,7 @@ const ITEM_SCHEMAS: Record<string, object> = {
   },
 }
 
-const FOLD_SCHEMA = {
+const FOLD_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     requests: { type: 'array', items: ITEM_SCHEMAS.requests },
@@ -110,32 +120,36 @@ interface FoldResult {
   contradictions: { pin_id: string; conflict: string; source: string }[]
 }
 
+type Backend = 'sdk' | 'cli'
+
 export async function extract(root: string, opts: { report?: boolean } = {}): Promise<void> {
   const config = loadConfig(root)
   const state = loadState(root)
-  const client = new Anthropic()
+  const llm = pickBackend()
   const today = new Date().toISOString().slice(0, 10)
 
   const wantArtifacts = ARTIFACTS.filter((a) => config.extract.includes(a))
   const reportDue =
-    config.extract.includes('weekly-report') &&
-    (opts.report || today === nextDayDate(config.report?.day ?? 'friday'))
+    config.extract.includes('weekly-report') && (opts.report || isToday(config.report?.day ?? 'friday'))
 
   // Day-granular incremental window: stream files are one file per day.
   const sinceDay = state.lastExtract?.slice(0, 10) ?? ''
   const newFiles = streamFiles(root).filter((f) => f.day >= sinceDay)
 
   if (wantArtifacts.length > 0 && newFiles.length > 0) {
-    let artifacts: Record<string, unknown[]> = {}
+    const artifacts: Record<string, unknown[]> = {}
     for (const name of wantArtifacts) artifacts[name] = readYamlList(root, `context/derived/${name}.yaml`)
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
 
     const batches = pack(newFiles, BATCH_CHARS)
-    console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${MODEL}]…`)
+    console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${MODEL}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
     for (let i = 0; i < batches.length; i++) {
-      const result = await fold(client, artifacts, pins, batches[i], today)
+      const user = `Today is ${today}.\n\n# Current artifacts\n${Object.entries(artifacts)
+        .map(([name, items]) => `## ${name}\n${stringify(items)}`)
+        .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i]}`
+      const result = llm === 'sdk' ? await sdkFold(user) : cliFold(user)
       for (const name of wantArtifacts) artifacts[name] = (result as unknown as Record<string, unknown[]>)[name]
       contradictions = result.contradictions
       console.log(
@@ -152,7 +166,9 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     }
     if (contradictions.length > 0) {
       writeFileSync(join(root, 'context/derived/contradictions.yaml'), stringify(contradictions))
-      console.warn(`⚠ ${contradictions.length} pinned fact(s) contradicted by fresh evidence — see derived/contradictions.yaml`)
+      console.warn(
+        `⚠ ${contradictions.length} pinned fact(s) contradicted by fresh evidence — see derived/contradictions.yaml`,
+      )
     }
   } else if (wantArtifacts.length > 0) {
     console.log('no new stream material since last extract')
@@ -165,22 +181,12 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       console.log('weekly report: no material this week')
     } else {
       const artifactContext = ARTIFACTS.map((n) => `## ${n}\n${readRaw(root, `context/derived/${n}.yaml`)}`).join('\n')
-      const stream = client.messages.stream({
-        model: MODEL,
-        max_tokens: 16000,
-        thinking: { type: 'adaptive' },
-        system: REPORT_SYSTEM,
-        messages: [
-          {
-            role: 'user',
-            content: `Today is ${today}.\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week.map((f) => f.text).join('\n\n')}`,
-          },
-        ],
-      })
-      const message = await stream.finalMessage()
-      const report = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
+      const user = `Today is ${today}.\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
+        .map((f) => f.text)
+        .join('\n\n')}`
+      const report = llm === 'sdk' ? await sdkText(REPORT_SYSTEM, user) : cliCall(REPORT_SYSTEM, user)
       mkdirSync(join(root, 'context/derived/reports'), { recursive: true })
-      writeFileSync(join(root, `context/derived/reports/${today}.md`), report + '\n')
+      writeFileSync(join(root, `context/derived/reports/${today}.md`), report.trim() + '\n')
       console.log(`wrote derived/reports/${today}.md`)
     }
   }
@@ -189,34 +195,71 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
   saveState(root, state)
 }
 
-async function fold(
-  client: Anthropic,
-  artifacts: Record<string, unknown[]>,
-  pins: string,
-  material: string,
-  today: string,
-): Promise<FoldResult> {
+/** API creds → sdk; else a usable claude CLI → cli; else sdk (its
+ * resolution error names the options). LORE_LLM overrides. */
+function pickBackend(): Backend {
+  if (process.env.LORE_LLM === 'cli' || process.env.LORE_LLM === 'sdk') return process.env.LORE_LLM
+  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return 'sdk'
+  try {
+    execFileSync('claude', ['--version'], { stdio: 'ignore' })
+    return 'cli'
+  } catch {
+    return 'sdk'
+  }
+}
+
+// ---- sdk backend: Claude API with structured outputs ----
+
+async function sdkFold(user: string): Promise<FoldResult> {
+  const text = await sdkText(FOLD_SYSTEM, user, FOLD_SCHEMA)
+  return JSON.parse(text) as FoldResult
+}
+
+async function sdkText(system: string, user: string, schema?: Record<string, unknown>): Promise<string> {
+  const client = new Anthropic()
   const stream = client.messages.stream({
     model: MODEL,
     max_tokens: 64000,
     thinking: { type: 'adaptive' },
-    system: FOLD_SYSTEM,
-    output_config: { format: { type: 'json_schema', schema: FOLD_SCHEMA } },
-    messages: [
-      {
-        role: 'user',
-        content: `Today is ${today}.\n\n# Current artifacts\n${Object.entries(artifacts)
-          .map(([name, items]) => `## ${name}\n${stringify(items)}`)
-          .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${material}`,
-      },
-    ],
+    system,
+    ...(schema ? { output_config: { format: { type: 'json_schema' as const, schema } } } : {}),
+    messages: [{ role: 'user', content: user }],
   })
   const message = await stream.finalMessage()
-  if (message.stop_reason === 'refusal') throw new Error('extract: model refused the fold request')
-  if (message.stop_reason === 'max_tokens') throw new Error('extract: output truncated — lower BATCH_CHARS or raise max_tokens')
-  const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
-  return JSON.parse(text) as FoldResult
+  if (message.stop_reason === 'refusal') throw new Error('extract: model refused the request')
+  if (message.stop_reason === 'max_tokens') throw new Error('extract: output truncated — lower BATCH_CHARS')
+  return message.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
 }
+
+// ---- cli backend: headless Claude Code on a subscription ----
+
+function cliFold(user: string): FoldResult {
+  const instruction = `\n\nRespond with ONLY a JSON object matching this schema — no prose, no code fences:\n${JSON.stringify(FOLD_SCHEMA)}`
+  const text = cliCall(FOLD_SYSTEM + instruction, user)
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error(`extract: no JSON in model output: ${text.slice(0, 200)}`)
+  return JSON.parse(text.slice(start, end + 1)) as FoldResult
+}
+
+function cliCall(system: string, user: string): string {
+  // Prompt over stdin: batches are far larger than argv allows.
+  const out = execFileSync('claude', ['-p', '--output-format', 'json', '--model', 'opus'], {
+    input: `${system}\n\n${user}`,
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }).toString()
+  const envelope = JSON.parse(out) as { is_error?: boolean; result?: string }
+  if (envelope.is_error || typeof envelope.result !== 'string') {
+    throw new Error(`extract: claude cli error: ${(envelope.result ?? out).slice(0, 300)}`)
+  }
+  return envelope.result
+}
+
+// ---- shared helpers ----
 
 /** All stream files with their day, sorted ascending — the fold order. */
 function streamFiles(root: string): { day: string; text: string }[] {
@@ -260,9 +303,7 @@ function readRaw(root: string, rel: string): string {
   return existsSync(path) ? readFileSync(path, 'utf8') : '(none yet)'
 }
 
-/** Does `today` fall on the configured weekday? Returns today's date if so. */
-function nextDayDate(day: string): string {
+function isToday(day: string): boolean {
   const names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-  const now = new Date()
-  return names[now.getUTCDay()] === day.toLowerCase() ? now.toISOString().slice(0, 10) : ''
+  return names[new Date().getUTCDay()] === day.toLowerCase()
 }

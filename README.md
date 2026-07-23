@@ -124,6 +124,13 @@ gh secret set SLACK_TOKEN --repo your-org/lore-acme
 
 Channel names must match Slack exactly (hyphens!). Secrets are always `env:`
 references; lore loads `.env` from the working directory, real env vars win.
+
+`extract` picks its LLM backend automatically: with `ANTHROPIC_API_KEY` (or
+`ANTHROPIC_AUTH_TOKEN`) set it calls the Claude API, billed per token;
+otherwise it shells out to a logged-in `claude` CLI, which runs on your
+Claude subscription — in CI, set a `CLAUDE_CODE_OAUTH_TOKEN` secret instead
+of an API key (Max plans: `claude setup-token`). Override with
+`LORE_LLM=sdk|cli`.
 `backfill` seeds the first sync N months back (per-source overrides
 supported); everything after is forward-incremental.
 
@@ -186,7 +193,7 @@ workspace, tokens never in git).
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically) |
-| `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (needs `ANTHROPIC_API_KEY`) |
+| `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
 | `lore init` | scaffold a context repo by hand |
 | `lore check` | validate config, connectors, env refs |
 | `lore manifest slack` | print the bundled Slack app manifest |

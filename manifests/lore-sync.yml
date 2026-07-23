@@ -2,9 +2,11 @@
 # context repo (no CI, no deploys, no protection), so commits go straight to
 # the default branch.
 # Secrets (repo or org level):
-#   SLACK_TOKEN        — the lore bot's xoxb- token (required)
-#   ANTHROPIC_API_KEY  — enables the extract step (derived artifacts + weekly
-#                        report); omit it and sync still runs, extract is skipped
+#   SLACK_TOKEN              — the lore bot's xoxb- token (required)
+#   ANTHROPIC_API_KEY        — enables the extract step, billed per-token, OR
+#   CLAUDE_CODE_OAUTH_TOKEN  — extract on a Claude subscription (Max plans:
+#                              `claude setup-token`). Omit both and sync still
+#                              runs; extract is skipped.
 name: lore sync
 
 on:
@@ -33,10 +35,13 @@ jobs:
         run: npx --yes github:nerdburn/lore sync
 
       - name: Extract
-        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: npx --yes github:nerdburn/lore extract
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then npm install -g @anthropic-ai/claude-code; fi
+          npx --yes github:nerdburn/lore extract
 
       - name: Commit and push
         run: |
