@@ -149,18 +149,22 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     for (let i = 0; i < batches.length; i++) {
       const user = `Today is ${today}.\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
-        .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i]}`
+        .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = llm === 'sdk' ? await sdkFold(user) : cliFold(user)
       for (const name of wantArtifacts) artifacts[name] = (result as unknown as Record<string, unknown[]>)[name]
       contradictions = result.contradictions
-      // Checkpoint after every batch: a failed long fold keeps its progress,
-      // and re-running continues from the last written artifacts.
+      // Checkpoint after every batch — artifacts to disk, fold position to
+      // state.lastExtract — so a killed fold resumes at the next batch
+      // instead of refolding from the start. Batches hold whole day-files,
+      // so the batch's last day is a safe (inclusive) resume point.
       for (const name of wantArtifacts) {
         writeFileSync(
           join(root, `context/derived/${name}.yaml`),
           `# Derived by \`lore extract\` — regenerable; do not hand-edit.\n` + stringify(artifacts[name]),
         )
       }
+      state.lastExtract = batches[i].lastDay
+      saveState(root, state)
       console.log(
         `  batch ${i + 1}/${batches.length}: ${wantArtifacts.map((n) => `${artifacts[n].length} ${n}`).join(', ')}`,
       )
@@ -280,17 +284,19 @@ function streamFiles(root: string): { day: string; text: string }[] {
   return files.sort((a, b) => a.day.localeCompare(b.day))
 }
 
-function pack(files: { text: string }[], budget: number): string[] {
-  const batches: string[] = []
+function pack(files: { day: string; text: string }[], budget: number): { text: string; lastDay: string }[] {
+  const batches: { text: string; lastDay: string }[] = []
   let current = ''
+  let lastDay = ''
   for (const f of files) {
     if (current && current.length + f.text.length > budget) {
-      batches.push(current)
+      batches.push({ text: current, lastDay })
       current = ''
     }
     current += f.text + '\n\n'
+    lastDay = f.day
   }
-  if (current) batches.push(current)
+  if (current) batches.push({ text: current, lastDay })
   return batches
 }
 
