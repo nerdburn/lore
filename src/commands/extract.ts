@@ -145,6 +145,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${MODEL}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
+    mkdirSync(join(root, 'context/derived'), { recursive: true })
     for (let i = 0; i < batches.length; i++) {
       const user = `Today is ${today}.\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
@@ -152,18 +153,19 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       const result = llm === 'sdk' ? await sdkFold(user) : cliFold(user)
       for (const name of wantArtifacts) artifacts[name] = (result as unknown as Record<string, unknown[]>)[name]
       contradictions = result.contradictions
+      // Checkpoint after every batch: a failed long fold keeps its progress,
+      // and re-running continues from the last written artifacts.
+      for (const name of wantArtifacts) {
+        writeFileSync(
+          join(root, `context/derived/${name}.yaml`),
+          `# Derived by \`lore extract\` — regenerable; do not hand-edit.\n` + stringify(artifacts[name]),
+        )
+      }
       console.log(
         `  batch ${i + 1}/${batches.length}: ${wantArtifacts.map((n) => `${artifacts[n].length} ${n}`).join(', ')}`,
       )
     }
 
-    mkdirSync(join(root, 'context/derived'), { recursive: true })
-    for (const name of wantArtifacts) {
-      writeFileSync(
-        join(root, `context/derived/${name}.yaml`),
-        `# Derived by \`lore extract\` — regenerable; do not hand-edit.\n` + stringify(artifacts[name]),
-      )
-    }
     if (contradictions.length > 0) {
       writeFileSync(join(root, 'context/derived/contradictions.yaml'), stringify(contradictions))
       console.warn(
