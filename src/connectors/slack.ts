@@ -37,8 +37,11 @@ export const slack: Connector = {
         ctx.log(`slack: channel ${name} not found or bot not a member — skipping`)
         continue
       }
+      // No cursor (first sync, or channel newly added to config) → start at
+      // the backfill window. Seed latestSeen at the window start too, so an
+      // empty window doesn't write a bogus cursor.
       const oldest = cursor[channel.id] ?? String(ctx.since / 1000)
-      let latestSeen = cursor[channel.id] ?? '0'
+      let latestSeen = oldest
       let pageCursor: string | undefined
 
       do {

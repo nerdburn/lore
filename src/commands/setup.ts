@@ -101,6 +101,13 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     } else {
       console.log('! SLACK_TOKEN not in env — set it: gh secret set SLACK_TOKEN --repo ' + slug)
     }
+    const anthropicKey = process.env.ANTHROPIC_API_KEY
+    if (anthropicKey) {
+      execFileSync('gh', ['secret', 'set', 'ANTHROPIC_API_KEY', '--repo', slug], { input: anthropicKey, stdio: ['pipe', 'ignore', 'pipe'] })
+      console.log('✓ ANTHROPIC_API_KEY set from environment (enables daily extract)')
+    } else {
+      console.log('! ANTHROPIC_API_KEY not in env — extract will be skipped until the secret is set')
+    }
 
     ensureWorkflowRegistered(slug, root)
 

@@ -69,9 +69,11 @@ anywhere. Full docs: https://github.com/nerdburn/lore
 
 ## Known issues
 
-- Adding a channel to an *existing* context repo doesn't backfill it (cursor
-  seeds at "now"). Workaround: set that channel's cursor in `state.json` to an
-  epoch timestamp at the desired start, then sync.
 - A workflow pushed in the repo-creating commit sometimes doesn't register;
   `lore setup` nudges automatically, but if Actions shows nothing, push any
   commit touching the workflow file.
+- The daily extract step (derived artifacts + weekly report) only runs when
+  the context repo has an `ANTHROPIC_API_KEY` Actions secret — `lore setup`
+  sets it from the environment when present; otherwise relay that step to the
+  user. The first extract over a full backfill costs real money (LLM fold over
+  months of history) — tell the user before triggering it.

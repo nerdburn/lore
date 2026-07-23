@@ -29,7 +29,7 @@ export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
     }
   }
 
-  const server = new McpServer({ name: 'lore', version: '0.2.0' })
+  const server = new McpServer({ name: 'lore', version: '0.3.0' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })

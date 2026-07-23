@@ -9,7 +9,7 @@ No server, no database service. Text in git is the source of truth; a GitHub Act
 ```
 lore setup     # wizard: create a context repo, sync it, link this repo
 lore sync      # connectors → context/streams/   (deterministic, no LLM)
-lore extract   # streams → derived artifacts      (LLM fold, no external APIs)
+lore extract   # streams → derived artifacts      (LLM fold — Claude API only)
 
 lore grep      # search project memory — from any linked repo, or anywhere with -p
 lore recall    # pinned facts + derived artifacts
@@ -185,8 +185,8 @@ workspace, tokens never in git).
 | `lore recall [category] [--json]` | pinned facts + derived artifacts |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore mcp` | MCP server over stdio |
-| `lore sync [--backfill]` | pull new docs into `context/streams/` (run in the context repo) |
-| `lore extract` | LLM fold: streams → derived artifacts *(not built yet)* |
+| `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically) |
+| `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (needs `ANTHROPIC_API_KEY`) |
 | `lore init` | scaffold a context repo by hand |
 | `lore check` | validate config, connectors, env refs |
 | `lore manifest slack` | print the bundled Slack app manifest |
@@ -198,7 +198,7 @@ workspace, tokens never in git).
 
 - **`not_in_channel` during sync** — the bot isn't in a listed channel; `/invite @lore` and re-run.
 - **`channel #x not found … skipping`** — usually a name mismatch; check the exact name in Slack (hyphens!).
-- **Added a channel to an existing config, got 0 docs** — known issue: a new channel's cursor seeds at "now" and `--backfill` refuses once any cursor exists. Workaround: set that channel's cursor in `state.json` to an epoch timestamp at the desired start, then sync.
+- **Re-backfill one channel** — delete that channel's cursor from `state.json` and `lore sync`; it refetches its backfill window and dedupes. (Channels newly added to `lore.json` backfill automatically.)
 - **No "lore sync" workflow in the Actions tab** — GitHub sometimes misses workflows pushed in the repo-creating commit; `setup` nudges automatically, otherwise push any commit touching the file.
 - **Scheduled syncs stopped after ~2 months of quiet** — GitHub disables cron on inactive repos; re-enable from the Actions tab.
 - **`could not pull … using cached copy`** — offline or no read access; queries serve the cache. Delete `~/.lore/cache/<owner>__<repo>` to force a fresh clone.
@@ -206,7 +206,7 @@ workspace, tokens never in git).
 
 ## Status
 
-Early. Working: `setup`, `link`, `init`, `check`, `sync` (Slack connector), and the query surface — `grep`, `recall`, `remember`, `mcp`, with pointer resolution + `~/.lore/cache`. Next: the `requests` extractor (M2), weekly report (M3), fixing per-channel backfill. See [docs/SPEC.md](docs/SPEC.md) for the full design.
+Early but complete through M3: `setup`, `link`, `init`, `check`, `sync` (Slack connector, per-channel backfill), `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit, via the Claude API), and the query surface — `grep`, `recall`, `remember`, `mcp`, with pointer resolution + `~/.lore/cache`. Next: more connectors (email, Linear), `roadmap` push-to-tickets. See [docs/SPEC.md](docs/SPEC.md) for the full design.
 
 ## Principles
 

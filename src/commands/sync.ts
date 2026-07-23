@@ -5,10 +5,12 @@ import { writeDocs } from '../streams.js'
 
 /**
  * Deterministic sync: connectors → context/streams/. No LLM involved.
- * Backfill is just cursor seeding — on a source's first sync, `since` is
- * now minus the configured backfill months; after that, cursors rule.
+ * Backfill is just cursor seeding, per channel: any channel without a
+ * cursor — first sync or newly whitelisted — starts at now minus the
+ * configured backfill months; after that, cursors rule. To re-backfill a
+ * channel, delete its cursor from state.json.
  */
-export async function sync(root: string, opts: { backfill?: boolean } = {}): Promise<void> {
+export async function sync(root: string): Promise<void> {
   const config = loadConfig(root)
   const state = loadState(root)
 
@@ -24,13 +26,9 @@ export async function sync(root: string, opts: { backfill?: boolean } = {}): Pro
       continue
     }
 
-    const firstSync = !state.cursors[name]
-    if (opts.backfill && !firstSync) {
-      console.log(`${name}: --backfill ignored (cursor exists; delete it from state.json to re-backfill)`)
-    }
-    const since = firstSync ? backfillSince(config, name) : Date.now()
+    const since = backfillSince(config, name)
 
-    console.log(`syncing ${name}${firstSync ? ` (since ${new Date(since).toISOString().slice(0, 10)})` : ''}…`)
+    console.log(`syncing ${name} (new channels since ${new Date(since).toISOString().slice(0, 10)})…`)
     const { docs, nextCursor } = await connector.fetch({
       config: resolved,
       cursor: state.cursors[name] ?? {},

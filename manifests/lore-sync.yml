@@ -1,7 +1,10 @@
 # Scaffolded by `lore init`. Daily context sync — this is a standalone lore
 # context repo (no CI, no deploys, no protection), so commits go straight to
 # the default branch.
-# Secret needed (repo or org level): SLACK_TOKEN — the lore bot's xoxb- token.
+# Secrets (repo or org level):
+#   SLACK_TOKEN        — the lore bot's xoxb- token (required)
+#   ANTHROPIC_API_KEY  — enables the extract step (derived artifacts + weekly
+#                        report); omit it and sync still runs, extract is skipped
 name: lore sync
 
 on:
@@ -28,6 +31,12 @@ jobs:
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
         run: npx --yes github:nerdburn/lore sync
+
+      - name: Extract
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npx --yes github:nerdburn/lore extract
 
       - name: Commit and push
         run: |

@@ -32,7 +32,7 @@ if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'))
 program
   .name('lore')
   .description('Git-native project memory for agents. Everything derived, except what you explicitly remember.')
-  .version('0.2.0')
+  .version('0.3.0')
 
 program
   .command('init')
@@ -58,14 +58,14 @@ program
 
 program
   .command('sync')
-  .description('pull new docs from all configured sources into context/streams/ (no LLM)')
-  .option('--backfill', 'seed first sync from the configured backfill window')
-  .action((opts) => sync(root, opts))
+  .description('pull new docs from all configured sources into context/streams/ (no LLM; new channels backfill automatically)')
+  .action(() => sync(root))
 
 program
   .command('extract')
-  .description('LLM fold: streams → derived artifacts (roadmap, decisions, requests, report)')
-  .action(() => extract(root))
+  .description('LLM fold: streams → derived artifacts (requests, decisions, roadmap, weekly report)')
+  .option('--report', 'generate the weekly report now, regardless of the configured day')
+  .action((opts) => extract(root, opts))
 
 program
   .command('manifest')
