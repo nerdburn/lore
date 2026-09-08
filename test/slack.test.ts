@@ -217,6 +217,20 @@ test('slack: honours 429 Retry-After and retries', async () => {
   assert.deepEqual(docs.map((d) => d.text), ['after retry'])
 })
 
+test('slack: api_base routes calls to a proxy and drops the Authorization header', async () => {
+  const s = fakeSlack()
+  s.history.C0ACME = [{ ts: daysAgo(1), user: 'U0PRIYA', text: 'via proxy' }]
+  const seen: { url: string; auth?: string }[] = []
+  const inner = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push({ url: String(input), auth: (init?.headers as Record<string, string>)?.Authorization })
+    return inner(input, init)
+  }) as typeof fetch
+  const { docs } = await slack.fetch(ctx({ config: { channels: ['#acme'], api_base: 'http://slack.int.exe.xyz/api' } }))
+  assert.deepEqual(docs.map((d) => d.text), ['via proxy'])
+  assert.ok(seen.every((c) => c.url.startsWith('http://slack.int.exe.xyz/api/') && c.auth === undefined), JSON.stringify(seen[0]))
+})
+
 test('slack: missing token or channels fails loudly', async () => {
   fakeSlack()
   await assert.rejects(slack.fetch(ctx({ config: { channels: ['#a'] } })), /no token/)

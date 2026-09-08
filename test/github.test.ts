@@ -263,6 +263,23 @@ test('github: an inaccessible repo is a reported error; other repos still sync',
   assert.equal(nextCursor['acme/missing'], undefined)
 })
 
+test('github: an explicit api_base allows a tokenless (proxy or public) sync and sends no Authorization', async () => {
+  const g = fakeGithub()
+  g.repos['acme/web'] = { issues: [issue(1)] }
+  let sawAuth: string | undefined = 'unset'
+  const inner = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    sawAuth = (init?.headers as Record<string, string>)?.Authorization
+    // the fake demands Bearer ghp_test; emulate a proxy that injects it
+    return inner(input, { ...init, headers: { ...(init?.headers as Record<string, string>), Authorization: 'Bearer ghp_test' } })
+  }) as typeof fetch
+  const { docs } = await github.fetch(ctx({ config: { repos: ['acme/web'], api_base: 'http://gh.int.exe.xyz', include: ['issues'] } }))
+  assert.equal(docs.length, 1)
+  assert.equal(sawAuth, undefined)
+  assert.ok(g.calls[0].startsWith('/repos/acme/web/issues'))
+  await assert.rejects(github.fetch(ctx({ config: { repos: ['acme/web'] } })), /no token resolved/)
+})
+
 test('github: bad credentials fail the whole source', async () => {
   const g = fakeGithub()
   g.repos['acme/web'] = { issues: [] }

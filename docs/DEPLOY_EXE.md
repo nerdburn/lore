@@ -15,13 +15,18 @@ laptop / agent ── ssh clone/pull/push ──▶  VM  /srv/lore/repos/<client
 ## 1. VM
 
 ```sh
-ssh exe.dev new --name lore --cpu 1 --memory 2GB --disk 30GB --tag lore
-scp deploy/exe/setup.sh lore.exe.xyz:/tmp/ && ssh lore.exe.xyz sudo bash /tmp/setup.sh
+ssh exe.dev new --name lore-host --cpu 1 --memory 2GB --disk 30GB --tag lore
+npm pack                                   # builds dist/ and produces nerdburn-lore-<version>.tgz
+scp deploy/exe/setup.sh nerdburn-lore-*.tgz exedev@lore-host.exe.xyz:/tmp/
+ssh exedev@lore-host.exe.xyz sudo LORE_REF=/tmp/nerdburn-lore-0.3.0.tgz bash /tmp/setup.sh
 ```
+
+(`LORE_REF` defaults to `github:nerdburn/lore`, which builds on the VM and
+needs the dev toolchain there; the tarball path needs nothing but Node.)
 
 `setup.sh` installs Node 22 and lore, creates `/srv/lore/{repos,work}`, and
 enables `lore-sync.timer` (hourly, `INTERVAL=30m` to change). Re-run it to
-upgrade lore. Logs: `ssh lore.exe.xyz journalctl -u lore-sync -f`.
+upgrade lore. Logs: `ssh lore-host.exe.xyz journalctl -u lore-sync -f`.
 
 ## 2. Secrets as integrations
 
@@ -44,7 +49,7 @@ with a fine-grained token: `--name github-api --target https://api.github.com --
 
 ```json
 {
-  "remote": "exedev@lore.exe.xyz:/srv/lore/repos",
+  "remote": "exedev@lore-host.exe.xyz:/srv/lore/repos",
   "proxy": {
     "slack":   "http://slack.int.exe.xyz/api",
     "github":  "http://github-api.int.exe.xyz",
@@ -73,8 +78,10 @@ file), pushes, links the repo you're in. The next timer run syncs it.
 
 `run-all` only extracts when `LORE_EXTRACT=1` in `/etc/lore/env`, and needs
 one of: `ANTHROPIC_API_KEY`; `ANTHROPIC_BASE_URL=https://llm.int.exe.xyz`
-(exe.dev's LLM integration, key held off-VM); or `CLAUDE_CODE_OAUTH_TOKEN`
-for the subscription backend via the preinstalled `claude` CLI.
+plus any placeholder `ANTHROPIC_API_KEY` (exe.dev's default LLM integration
+speaks the Anthropic Messages API and holds the key off-VM — verified with
+`claude-opus-4-8`); or `CLAUDE_CODE_OAUTH_TOKEN` for the subscription
+backend via the preinstalled `claude` CLI.
 
 ## 6. Archive, backup, access
 

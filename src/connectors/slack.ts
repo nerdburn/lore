@@ -40,7 +40,7 @@ export const slack: Connector = {
     const token = ctx.config.token as string | undefined
     const apiBase = ((ctx.config.api_base as string | undefined) ?? DEFAULT_API_BASE).replace(/\/$/, '')
     const wanted = (ctx.config.channels as string[]) ?? []
-    if (!token && apiBase === DEFAULT_API_BASE) throw new Error('slack: no token resolved (set token, or api_base to a proxy that injects one)')
+    if (!token && ctx.config.api_base === undefined) throw new Error('slack: no token resolved (set token, or api_base to a proxy that injects one)')
     if (wanted.length === 0) throw new Error('slack: no channels whitelisted in config')
     const overlapS = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_S
     const threadWindowS = numberOr(ctx.config.thread_window_days, DEFAULT_THREAD_WINDOW_DAYS) * DAY_S

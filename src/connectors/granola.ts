@@ -54,7 +54,7 @@ export function makeGranola(
     async fetch(ctx: ConnectorContext) {
       const token = ctx.config.token as string | undefined
       const endpoint = (ctx.config.endpoint as string | undefined) ?? DEFAULT_ENDPOINT
-      if (!token && endpoint === DEFAULT_ENDPOINT) throw new Error('granola: no token resolved (set token, or endpoint to a proxy that injects one)')
+      if (!token && ctx.config.endpoint === undefined) throw new Error('granola: no token resolved (set token, or endpoint to a proxy that injects one)')
       const folders = (ctx.config.folders as string[] | undefined) ?? []
       const domains = ((ctx.config.attendee_domains as string[] | undefined) ?? []).map((d) => d.toLowerCase().replace(/^@/, ''))
       if (folders.length === 0 && domains.length === 0) throw new Error('granola: no folders or attendee_domains configured')

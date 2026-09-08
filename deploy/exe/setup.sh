@@ -5,6 +5,12 @@
 #
 #   scp deploy/exe/setup.sh <vm>:/tmp/ && ssh <vm> sudo bash /tmp/setup.sh
 #
+# LORE_REF picks what to install (default github:nerdburn/lore, which builds
+# on the VM and needs the dev toolchain there). A prebuilt tarball is faster
+# and needs no toolchain — this is what the runbook uses:
+#   npm pack && scp nerdburn-lore-*.tgz <vm>:/tmp/lore.tgz
+#   ssh <vm> sudo LORE_REF=/tmp/lore.tgz bash /tmp/setup.sh
+#
 # Layout:
 #   /srv/lore/repos/<name>.git   bare context repos (what laptops clone)
 #   /srv/lore/work/<name>        working clones the timer syncs in

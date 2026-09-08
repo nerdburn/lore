@@ -65,7 +65,9 @@ export const github: Connector = {
     const token = ctx.config.token as string | undefined
     const apiBase = ((ctx.config.api_base as string | undefined) ?? API).replace(/\/$/, '')
     const repos = (ctx.config.repos as string[]) ?? []
-    if (!token && apiBase === API) throw new Error('github: no token resolved (set token, or api_base to a proxy that injects one)')
+    // An explicit api_base is a deliberate choice (a proxy that injects the
+    // token, or the public API for public repos); only a bare config is an error.
+    if (!token && ctx.config.api_base === undefined) throw new Error('github: no token resolved (set token, or api_base to a proxy that injects one)')
     if (repos.length === 0) throw new Error('github: no repos configured')
     const kinds = new Set<Kind>((ctx.config.include as Kind[] | undefined) ?? ALL_KINDS)
     const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
