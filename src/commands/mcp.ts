@@ -2,11 +2,10 @@ import { readFileSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { parse } from 'yaml'
 import { z } from 'zod'
-import { git, resolveContext, type ResolveOptions } from '../context.js'
+import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
+import { recallData } from '../recall.js'
 import { grepContext } from '../search.js'
-import type { Pin } from '../types.js'
 import { remember } from './remember.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -18,6 +17,17 @@ const PULL_INTERVAL_MS = 60_000
  */
 export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
   const ctx = resolveContext(cwd, opts)
+  const server = createServer(ctx, { cwd, opts })
+  await server.connect(new StdioServerTransport())
+}
+
+/**
+ * Build the server for an already-resolved context. Split from `mcp()` so
+ * tests can connect it over an in-memory transport against a fixture repo.
+ * `rememberOpts` are the resolve options the write path re-resolves with,
+ * so cache mode still commits + pushes.
+ */
+export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; opts: ResolveOptions }): McpServer {
   let lastPull = Date.now()
   const freshen = () => {
     if (ctx.mode !== 'cache' || Date.now() - lastPull < PULL_INTERVAL_MS) return
@@ -29,6 +39,10 @@ export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
     }
   }
 
+  const archived = ctx.config.lifecycle === 'archived'
+  const label = archived
+    ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
+    : ''
   const server = new McpServer({ name: 'lore', version: '0.3.0' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
@@ -37,7 +51,7 @@ export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
   server.registerTool(
     'lore_grep',
     {
-      description: `Search ${ctx.config.project}'s project memory (synced Slack history, decisions, pinned facts). Pattern is a regex; falls back to literal. Returns file:line matches — read surrounding context with lore_read.`,
+      description: `${label}Search ${ctx.config.project}'s project memory (synced Slack history, decisions, pinned facts). Pattern is a regex; falls back to literal. Returns file:line matches — read surrounding context with lore_read.`,
       inputSchema: {
         pattern: z.string().describe('regex or literal to search for'),
         channel: z.string().optional().describe('substring filter on the file path, e.g. a channel name'),
@@ -70,20 +84,23 @@ export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
   server.registerTool(
     'lore_recall',
     {
-      description: 'List pinned facts (and derived artifacts, when present) — "what do we know" without a search term.',
+      description:
+        label +
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (e.g. the live GitHub issue list — authoritative for what is open/in progress/done), and recent weekly reports, with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports.',
       inputSchema: { category: z.string().optional() },
     },
     async ({ category }) => {
       freshen()
-      const pins = (parse(readFileSync(join(ctx.root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? []
-      return text(category ? pins.filter((p) => p.category === category) : pins)
+      return text(recallData(ctx.root, ctx.config, category))
     },
   )
 
   server.registerTool(
     'lore_remember',
     {
-      description: 'Pin a fact to project memory permanently. Use ONLY on explicit user instruction — never to cache your own inferences.',
+      description: archived
+        ? 'Unavailable: this client is archived and its memory is read-only.'
+        : 'Pin a fact to project memory permanently. Use ONLY on explicit user instruction — never to cache your own inferences.',
       inputSchema: {
         fact: z.string(),
         category: z.string().optional().describe('e.g. client, deployment, decisions'),
@@ -91,11 +108,12 @@ export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
       },
     },
     async ({ fact, category, source }) => {
-      // Re-resolve with the server's own options so cache mode commits+pushes.
-      remember(cwd, fact, { ...opts, category, source, by: 'mcp-agent' })
-      return text(`pinned: ${fact}`)
+      // The caller never supplies the actor: it is the OS identity the
+      // server runs as, tagged as an MCP write in the audit log.
+      const pin = remember(rememberOpts.cwd, fact, { ...rememberOpts.opts, category, source, via: 'mcp' })
+      return text(`pinned ${pin.id}: ${fact}`)
     },
   )
 
-  await server.connect(new StdioServerTransport())
+  return server
 }

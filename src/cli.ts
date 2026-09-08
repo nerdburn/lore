@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Command } from 'commander'
+import { archive } from './commands/archive.js'
 import { check } from './commands/check.js'
 import { extract } from './commands/extract.js'
 import { grep } from './commands/grep.js'
@@ -11,6 +12,7 @@ import { manifest } from './commands/manifest.js'
 import { mcp } from './commands/mcp.js'
 import { recall } from './commands/recall.js'
 import { remember } from './commands/remember.js'
+import { runAll } from './commands/run-all.js'
 import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
 
@@ -44,6 +46,7 @@ program
   .description('wizard: create + scaffold + push a context repo, set the secret, dispatch the first sync, link this repo')
   .argument('[repo]', 'context repo name or "owner/name" (derived from cwd/channels if omitted)')
   .option('--channels <list>', 'comma-separated Slack channels, e.g. "#acme,#acme-dev"')
+  .option('--github <repos>', 'comma-separated GitHub repos to sync, e.g. "acme/web,acme/mobile"')
   .option('--backfill <months>', 'backfill window for the first sync (default 3)')
   .option('--org <org>', 'GitHub org for context repos (asked once and saved to ~/.lore/config.json)')
   .option('-y, --yes', 'no prompts: accept derived defaults (for agents and scripts)')
@@ -59,13 +62,28 @@ program
 program
   .command('sync')
   .description('pull new docs from all configured sources into context/streams/ (no LLM; new channels backfill automatically)')
-  .action(() => sync(root))
+  .action(async () => {
+    const summary = await sync(root)
+    if (!summary.ok) process.exitCode = 1
+  })
 
 program
   .command('extract')
   .description('LLM fold: streams → derived artifacts (requests, decisions, roadmap, weekly report)')
   .option('--report', 'generate the weekly report now, regardless of the configured day')
   .action((opts) => extract(root, opts))
+
+program
+  .command('run-all')
+  .description('self-hosted scheduler: sync (+ extract) every context repo under --repos, commit, push (run from a timer on the host)')
+  .requiredOption('--repos <dir>', 'directory of bare context repos, <name>.git each')
+  .requiredOption('--work <dir>', 'directory for working clones')
+  .option('--extract', 'run extract after sync (needs LLM credentials in the environment)')
+  .option('--report', 'force the weekly report')
+  .action(async (opts) => {
+    const summary = await runAll(opts)
+    if (!summary.ok) process.exitCode = 1
+  })
 
 program
   .command('manifest')
@@ -81,7 +99,9 @@ contextual(
     .option('-c, --category <category>', 'e.g. client, deployment, decisions')
     .option('--by <who>', 'who authorized this (defaults to OS username)')
     .option('--source <url>', 'optional source link'),
-).action((fact, opts) => remember(root, fact, opts))
+).action((fact, opts) => {
+  remember(root, fact, opts)
+})
 
 program
   .command('link')
@@ -107,6 +127,14 @@ contextual(
     .argument('[category]', 'filter, e.g. deployment, decisions')
     .option('--json', 'machine-readable output'),
 ).action((category, opts) => recall(root, category, opts))
+
+contextual(
+  program
+    .command('archive')
+    .description('end an engagement: mark the context repo archived (sync/extract stop, writes refused, reads labelled), archive it on GitHub, drop the local cache')
+    .option('--restore', 'reopen an archived client')
+    .option('--keep-local', 'keep the ~/.lore cache clone and registry entry'),
+).action((opts) => archive(root, opts))
 
 contextual(
   program

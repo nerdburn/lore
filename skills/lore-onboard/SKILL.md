@@ -28,15 +28,22 @@ anywhere. Full docs: https://github.com/nerdburn/lore
 
 ## Procedure
 
-1. **Gather**: which Slack channels (exact names — hyphens matter), how many
-   months of backfill (default 3), and which project repo(s) to link.
+1. **Gather**: which Slack channels (exact names — hyphens matter), which
+   GitHub repos (`owner/repo`), which Granola folder(s) and/or client email
+   domain(s), how many months of backfill (default 3), and which project
+   repo(s) to link.
 2. **Run setup from inside the main project repo** so it derives the name and
    links automatically. Use flags — the interactive wizard is for humans:
 
    ```sh
    cd <project-repo>
-   lore setup --channels "#acme,#acme-team" --backfill 3 --yes
+   lore setup --channels "#acme,#acme-team" --github "acme/web" --backfill 3 --yes
    ```
+
+   Granola is added by hand to the context repo's `lore.json` afterwards —
+   `"granola": { "token": "env:GRANOLA_TOKEN", "folders": ["Acme"] }` — plus a
+   `GRANOLA_TOKEN` repo secret. GitHub needs a `LORE_GITHUB_TOKEN` secret: a
+   fine-grained token scoped to those repos, never someone's broad PAT.
 
    This creates `<org>/lore-<project>` (private), scaffolds it, pushes, sets
    the `SLACK_TOKEN` secret, verifies the workflow registered, dispatches the
@@ -53,8 +60,10 @@ anywhere. Full docs: https://github.com/nerdburn/lore
    gh run watch --repo <org>/lore-<project> $(gh run list --repo <org>/lore-<project> --limit 1 --json databaseId --jq '.[0].databaseId')
    ```
 
-   `not_in_channel` or "channel not found — skipping" means a missed invite or
-   a misspelled channel; check exact names via the Slack API before retrying.
+   A `✗ slack: channel #x not found or bot not a member` line fails the run
+   (non-zero exit; the Actions job goes red and commits nothing) — it means a
+   missed invite or a misspelled channel; check exact names via the Slack
+   API before retrying. Other channels still synced.
 5. **Link any additional project repos**: `lore link <org>/lore-<project>` in
    each, then commit the two changed files (PR if the repo requires review).
 6. **Verify end-to-end before declaring success** — run a real query for
@@ -66,6 +75,15 @@ anywhere. Full docs: https://github.com/nerdburn/lore
 
    Zero matches on a channel you know has traffic means the sync didn't
    actually ingest it — investigate, don't hand off.
+
+## When a client engagement ends
+
+`lore archive --context <org>/lore-<project>` — never delete the context repo,
+it is the only copy of the history and pins. Archiving flips the lifecycle
+flag, pushes, archives the GitHub repo, and cleans up locally; reads keep
+working and are labelled ARCHIVED. Relay the two manual steps it prints:
+unlink project repos, remove @lore from the Slack channels. `--restore`
+reopens.
 
 ## Known issues
 

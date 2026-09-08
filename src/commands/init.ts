@@ -3,8 +3,15 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CONFIG_FILE } from '../config.js'
 
-const TEMPLATE_CONFIG = {
+const TEMPLATE_CONFIG: {
+  project: string
+  lifecycle: 'active'
+  sources: Record<string, Record<string, unknown>>
+  backfill: { months: number }
+  extract: string[]
+} = {
   project: 'my-project',
+  lifecycle: 'active',
   sources: {
     slack: { channels: ['#my-project'], token: 'env:SLACK_TOKEN' },
   },
@@ -34,7 +41,7 @@ export type ScaffoldConfig = typeof TEMPLATE_CONFIG
 
 /** Write the context-repo skeleton into root. Shared by `init` (template
  * values, human edits after) and `setup` (real values, no edits needed). */
-export function scaffold(root: string, config: ScaffoldConfig = TEMPLATE_CONFIG): void {
+export function scaffold(root: string, config: ScaffoldConfig = TEMPLATE_CONFIG, opts: { workflow?: boolean } = {}): void {
   writeFileSync(join(root, CONFIG_FILE), JSON.stringify(config, null, 2) + '\n')
 
   for (const dir of ['context/streams', 'context/derived/reports']) {
@@ -65,7 +72,7 @@ export function scaffold(root: string, config: ScaffoldConfig = TEMPLATE_CONFIG)
   // Scheduled deployment: daily cron in this repo, committing straight to
   // the default branch — a context repo has no CI or deploys to protect.
   const workflowPath = join(root, WORKFLOW_PATH)
-  if (!existsSync(workflowPath)) {
+  if (opts.workflow !== false && !existsSync(workflowPath)) {
     mkdirSync(join(root, '.github/workflows'), { recursive: true })
     writeFileSync(
       workflowPath,

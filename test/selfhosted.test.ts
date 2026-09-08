@@ -1,0 +1,159 @@
+// Self-hosted layout: bare repos on a "remote" (here: a local directory),
+// resolved through ~/.lore/config.json `remote`, synced by `run-all`.
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { before, test } from 'node:test'
+import { runAll } from '../src/commands/run-all.js'
+import { buildSources } from '../src/commands/setup.js'
+import { configSchema } from '../src/config.js'
+import { cachePath, isRepoRef, readGlobalConfig, remoteUrl, resolveContext, writeGlobalConfig } from '../src/context.js'
+import type { Connector, Doc } from '../src/types.js'
+import { captureConsole, makeContextRepo } from './helpers.js'
+
+const home = mkdtempSync(join(tmpdir(), 'lore-home-'))
+const repos = mkdtempSync(join(tmpdir(), 'lore-repos-'))
+const work = mkdtempSync(join(tmpdir(), 'lore-work-'))
+process.env.LORE_HOME = home
+
+const g = (root: string, ...args: string[]) =>
+  execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim()
+
+/** Scaffold a context repo and push it into <repos>/<name>.git, as `lore setup` would. */
+function seedBare(name: string, config: Record<string, unknown>, files: Record<string, string> = {}) {
+  const bare = join(repos, `${name}.git`)
+  mkdirSync(bare, { recursive: true })
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', bare])
+  const src = makeContextRepo(files, config)
+  g(src, 'init', '--quiet', '-b', 'main')
+  g(src, 'config', 'user.email', 't@t')
+  g(src, 'config', 'user.name', 't')
+  g(src, 'add', '-A')
+  g(src, 'commit', '--quiet', '-m', 'scaffold')
+  g(src, 'push', '--quiet', bare, 'main')
+  return bare
+}
+
+before(() => {
+  writeGlobalConfig({ remote: repos, proxy: { slack: 'http://slack.int.exe.xyz/api', github: 'http://gh.int.exe.xyz' } })
+})
+
+test('config: LORE_HOME redirects the global config, registry and cache', () => {
+  assert.equal(readGlobalConfig().remote, repos)
+  assert.ok(cachePath('lore-acme').startsWith(home))
+})
+
+test('context: bare names are repo refs when a remote is configured; owner/repo stays GitHub', () => {
+  assert.ok(isRepoRef('lore-acme'))
+  assert.ok(isRepoRef('inputlogic/lore-acme'))
+  assert.ok(!isRepoRef('not a ref'))
+  assert.equal(remoteUrl('lore-acme'), `${repos}/lore-acme.git`)
+  assert.equal(remoteUrl('inputlogic/lore-acme'), 'git@github.com:inputlogic/lore-acme.git')
+  assert.equal(remoteUrl('inputlogic/lore-acme', true), 'https://github.com/inputlogic/lore-acme.git')
+})
+
+test('context: a pointer to a remote name clones from the remote into the cache and registers the project', () => {
+  seedBare('lore-acme', { project: 'acme', sources: { slack: { channels: ['#acme'], api_base: 'http://slack.int.exe.xyz/api' } } })
+  const pointer = makeContextRepo({ 'lore.json': JSON.stringify({ context: 'lore-acme' }) })
+  const ctx = resolveContext(pointer)
+  assert.equal(ctx.mode, 'cache')
+  assert.equal(ctx.repo, 'lore-acme')
+  assert.equal(ctx.root, cachePath('lore-acme'))
+  assert.equal(ctx.config.project, 'acme')
+  assert.ok(existsSync(join(ctx.root, '.git')))
+  const registry = JSON.parse(readFileSync(join(home, 'registry.json'), 'utf8'))
+  assert.equal(registry.acme, 'lore-acme')
+  // and by project name from anywhere
+  assert.equal(resolveContext(tmpdir(), { project: 'acme', pull: false }).config.project, 'acme')
+})
+
+test('config: proxy api_base makes the token optional; without either it is an error', () => {
+  const ok = configSchema.parse({
+    project: 'x',
+    sources: {
+      slack: { channels: ['#a'], api_base: 'http://slack.int.exe.xyz/api' },
+      github: { repos: ['acme/web'], api_base: 'http://gh.int.exe.xyz' },
+      granola: { endpoint: 'http://granola.int.exe.xyz/mcp', folders: ['Acme'] },
+    },
+  })
+  assert.equal(ok.sources.slack.token, undefined)
+  assert.throws(() => configSchema.parse({ project: 'x', sources: { slack: { channels: ['#a'] } } }), /token/)
+  assert.throws(() => configSchema.parse({ project: 'x', sources: { github: { repos: ['a/b'] } } }), /token/)
+  assert.throws(() => configSchema.parse({ project: 'x', sources: { granola: { folders: ['A'] } } }), /token/)
+})
+
+test('setup: buildSources writes proxy bases (no tokens) when proxies are configured, env refs otherwise', () => {
+  assert.deepEqual(buildSources(['#acme'], ['acme/web'], readGlobalConfig().proxy), {
+    slack: { channels: ['#acme'], api_base: 'http://slack.int.exe.xyz/api' },
+    github: { repos: ['acme/web'], api_base: 'http://gh.int.exe.xyz' },
+  })
+  assert.deepEqual(buildSources(['#acme'], [], undefined), { slack: { channels: ['#acme'], token: 'env:SLACK_TOKEN' } })
+  assert.deepEqual(buildSources(['#acme'], ['a/b'], { slack: 'http://s' }), {
+    slack: { channels: ['#acme'], api_base: 'http://s' },
+    github: { repos: ['a/b'], token: 'env:LORE_GITHUB_TOKEN' },
+  })
+})
+
+const doc = (id: string): Doc => ({ id, source: 'fake', channel: '#c', author: 'a', timestamp: '2026-09-01T10:00:00.000Z', text: 'hello' })
+
+test('run-all: syncs every active bare repo, commits and pushes; archived skipped; failures isolated', async () => {
+  seedBare('lore-good', { project: 'good', sources: { fake: {} } })
+  seedBare('lore-old', { project: 'old', lifecycle: 'archived', archived_at: '2026-09-01T00:00:00Z', sources: { fake: {} } })
+  seedBare('lore-bad', { project: 'bad', sources: { fake: {}, boom: {} } })
+  let calls = 0
+  const registry: Record<string, Connector> = {
+    fake: { name: 'fake', fetch: async () => ({ docs: [doc(`fake-${++calls}`)], nextCursor: { n: calls } }) },
+  }
+
+  const { result, out } = await captureConsole(() => runAll({ repos, work }, registry))
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.clients['lore-good'], { status: 'synced', committed: true })
+  assert.deepEqual(result.clients['lore-old'], { status: 'archived', committed: false })
+  assert.equal(result.clients['lore-bad'].status, 'failed')
+  assert.match(result.clients['lore-bad'].error!, /boom/)
+  assert.equal(result.clients['lore-bad'].committed, false, 'a failed sync is not committed')
+  assert.match(out, /=== lore-acme/) // the repo from the earlier test is picked up too — the directory is the registry
+  assert.match(out, /run-all summary/)
+
+  // The bare repo received the sync commit; a fresh clone sees the stream file.
+  const check = mkdtempSync(join(tmpdir(), 'lore-check-'))
+  execFileSync('git', ['clone', '--quiet', join(repos, 'lore-good.git'), check])
+  assert.equal(g(check, 'log', '-1', '--format=%s'), 'chore(lore): sync lore-good')
+  assert.ok(existsSync(join(check, 'context/streams/fake/#c/2026-09-01.md')))
+  assert.ok(existsSync(join(check, 'state.json')))
+  assert.equal(g(check, 'log', '--format=%an', '-1'), 'lore')
+
+  // Second run: incremental, still commits (new doc), and a dirty work tree is reset first.
+  writeFileSync(join(work, 'lore-good/context/junk.md'), 'leftover')
+  const again = await captureConsole(() => runAll({ repos, work }, registry))
+  assert.deepEqual(again.result.clients['lore-good'], { status: 'synced', committed: true })
+  assert.ok(!existsSync(join(work, 'lore-good/context/junk.md')))
+})
+
+test('run-all: no-change runs commit a state heartbeat only', async () => {
+  const registry: Record<string, Connector> = { fake: { name: 'fake', fetch: async () => ({ docs: [], nextCursor: {} }) } }
+  const bareDir = mkdtempSync(join(tmpdir(), 'lore-repos2-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'lore-work2-'))
+  const bare = join(bareDir, 'lore-quiet.git')
+  mkdirSync(bare)
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', bare])
+  const src = makeContextRepo({}, { project: 'quiet', sources: { fake: {} } })
+  g(src, 'init', '--quiet', '-b', 'main')
+  g(src, 'config', 'user.email', 't@t')
+  g(src, 'config', 'user.name', 't')
+  g(src, 'add', '-A')
+  g(src, 'commit', '--quiet', '-m', 'scaffold')
+  g(src, 'push', '--quiet', bare, 'main')
+
+  const first = await captureConsole(() => runAll({ repos: bareDir, work: workDir }, registry))
+  assert.deepEqual(first.result.clients['lore-quiet'], { status: 'synced', committed: true }, 'first run writes state.json')
+  const second = await captureConsole(() => runAll({ repos: bareDir, work: workDir }, registry))
+  assert.equal(second.result.clients['lore-quiet'].committed, true, 'state.json lastSync changes every run')
+  assert.equal(g(join(workDir, 'lore-quiet'), 'log', '-1', '--format=%s'), 'chore(lore): heartbeat lore-quiet')
+})
+
+test('run-all: missing repos dir is an error', async () => {
+  await assert.rejects(runAll({ repos: '/nonexistent/lore-repos', work }), /repos dir not found/)
+})

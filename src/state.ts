@@ -4,8 +4,19 @@ import type { Cursor } from './types.js'
 
 export const STATE_FILE = 'state.json'
 
+/** Per-source sync health. Operators read this; `lore check` prints it. */
+export interface SourceHealth {
+  /** ISO 8601 of the last time sync tried this source. */
+  lastAttempt: string
+  /** ISO 8601 of the last fully successful sync (no errors). */
+  lastSuccess?: string
+  /** The most recent failure, cleared on the next full success. */
+  lastError?: { at: string; message: string }
+}
+
 export interface LoreState {
   cursors: Record<string, Cursor>
+  sources?: Record<string, SourceHealth>
   lastSync?: string
   lastExtract?: string
 }

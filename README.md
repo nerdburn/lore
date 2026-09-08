@@ -1,6 +1,6 @@
 # lore
 
-**Git-native project memory for agents.** Everything is derived from sources of truth (Slack, email, Linear, GitHub, meetings) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
+**Git-native project memory for agents.** Everything is derived from sources of truth (Slack, GitHub, Granola meetings; Jira and email planned) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
 
 No server, no database service. Text in git is the source of truth; a GitHub Actions cron keeps it fresh; the CLI is the interface — the repo is just the database.
 
@@ -8,7 +8,7 @@ No server, no database service. Text in git is the source of truth; a GitHub Act
 
 ```
 lore setup     # wizard: create a context repo, sync it, link this repo
-lore sync      # connectors → context/streams/   (deterministic, no LLM)
+lore sync      # connectors → context/streams/ + context/work/  (deterministic, no LLM)
 lore extract   # streams → derived artifacts      (LLM fold — Claude API only)
 
 lore grep      # search project memory — from any linked repo, or anywhere with -p
@@ -27,11 +27,17 @@ Storage and interface are separate layers:
   resolves it, keeps a clone in `~/.lore/cache/`, pulls before reads, pushes
   writes. Neither agents nor humans need to know where the files live.
 
-Sync pulls raw material into `context/streams/` as permalinked markdown.
-Extract folds it into structured artifacts — `derived/requests.yaml`,
-`decisions.yaml`, `roadmap.yaml`, weekly reports — every item citing its
-source. `facts.yaml` is the pinned layer: written only via `lore remember`,
-and it wins over derived data on conflict.
+Sync pulls raw material into `context/streams/` as permalinked markdown,
+scrubbing anything that looks like a token, key, or password on the way in
+(git history is forever). Sources that own delivery state — GitHub Issues —
+also write a table under `context/work/` that sync overwrites and the LLM
+never touches: what is open, in progress, or done comes from the tracker,
+not from a model's reading of the conversation. Extract folds it into structured artifacts —
+`derived/requests.yaml`, `decisions.yaml`, `roadmap.yaml`, weekly reports —
+every item citing its source. `facts.yaml` is the pinned layer: written only
+via `lore remember`, and it wins over derived data on conflict. Every pin
+also lands in `context/audit.jsonl` with who asked, through which surface,
+and the supporting source.
 
 ## Setup
 
@@ -76,6 +82,37 @@ private context repo, scaffolds and pushes it, sets the `SLACK_TOKEN` Actions
 secret, verifies the daily sync workflow registered, dispatches the first
 sync, and links the repo you're standing in. Agents and scripts pass flags
 plus `--yes` to skip prompts.
+
+### 2b. Add GitHub and Granola (optional, per client)
+
+Both are extra entries under `sources` in the context repo's `lore.json`,
+plus a secret on the repo. Every scope belongs to exactly one client repo.
+
+```json
+"github":  { "repos": ["acme/web", "acme/mobile"], "token": "env:LORE_GITHUB_TOKEN" },
+"granola": { "token": "env:GRANOLA_TOKEN", "folders": ["Acme"], "attendee_domains": ["acme.com"] }
+```
+
+- **GitHub** syncs issues, pull requests, comments, reviews, commits, and
+  releases for each repo, and maintains `context/work/github/<owner>__<repo>.yaml`
+  — the live issue/PR table, seeded with every open item on the first sync.
+  Use a fine-grained token (or a GitHub App installation token) with read
+  access to Contents, Issues, Pull requests, and Metadata on just those
+  repos, and store it as `LORE_GITHUB_TOKEN`. Never a broad personal token,
+  and not the workflow's own `GITHUB_TOKEN`, which only sees the context
+  repo. `include` narrows the kinds (`issues`, `comments`, `reviews`,
+  `commits`, `releases`); `overlap_days` defaults to 1.
+- **Granola** talks to Granola's MCP server as a client, so it sees exactly
+  what a Granola-connected agent sees. Scope a client's meetings by
+  `folders` (titles or ids) and/or `attendee_domains`; the union is synced.
+  Each meeting becomes a notes doc (title, attendees with emails, private
+  notes, AI summary) plus a threaded transcript (`"transcripts": false` to
+  skip). Meetings sync once they are `settle_hours` old (default 3) so the
+  summary exists. Meeting content is evidence for extraction, never
+  authoritative work or facts.
+
+`lore setup --github "acme/web,acme/mobile"` writes the GitHub source and
+sets `LORE_GITHUB_TOKEN` from your environment when present.
 
 ### 3. Invite the bot — the one step that stays human
 
@@ -125,6 +162,22 @@ gh secret set SLACK_TOKEN --repo your-org/lore-acme
 Channel names must match Slack exactly (hyphens!). Secrets are always `env:`
 references; lore loads `.env` from the working directory, real env vars win.
 
+Every configured source must be usable or the sync fails — a source with no
+connector or an unresolved `env:` ref is an error, not a skip, so CI never
+commits a partial sync as if it were complete. To keep a source configured
+but skipped, set `"disabled": true` on it. Per-source health (last success,
+last error) is recorded in `state.json` and printed by `lore check`.
+
+Optional `"write": { "allow": ["shawn", "priya"] }` restricts who may
+`remember`. The actor is the OS user (or `--by` on the CLI; MCP callers can
+never name one). It is an honesty check, not authentication — anyone who can
+push to the context repo can bypass it.
+
+Slack sync re-reads a rolling `overlap_days` window (default 7) on every run
+and tracks replies per thread for `thread_window_days` (default 30), so late
+replies to old threads and edits within the window are picked up. Both are
+per-source settings under `sources.slack`.
+
 `extract` picks its LLM backend automatically: with `ANTHROPIC_API_KEY` (or
 `ANTHROPIC_AUTH_TOKEN`) set it calls the Claude API, billed per token;
 otherwise it shells out to a logged-in `claude` CLI, which runs on your
@@ -144,6 +197,8 @@ From a linked repo:
 lore grep "black friday"                  # search everything
 lore grep -i --channel acme-dev "deploy"  # case-insensitive, one channel
 lore recall decisions                     # pinned facts + derived, one category
+lore recall reports                       # the latest weekly reports
+lore recall work                          # source-owned tables: live GitHub issues/PRs per repo
 lore remember "client wants launch before Black Friday" -c decisions
 ```
 
@@ -160,10 +215,30 @@ remembered, it's misplaced. Resolution order: `--context` flag → nearest
 `lore.json` walking up from cwd → `-p/--project` via the registry. The cache
 is disposable; delete `~/.lore/cache/` any time.
 
+### When an engagement ends
+
+```sh
+lore archive --context inputlogic/lore-acme     # or -p acme, or from inside the repo
+lore archive --restore --context inputlogic/lore-acme
+```
+
+`archive` marks the context repo `lifecycle: archived` in `lore.json`,
+commits and pushes, archives the GitHub repo (read-only, history kept, daily
+cron stops), and drops the local cache clone and registry entry. From then
+on `sync` and `extract` are no-ops, `remember` is refused, and every read —
+CLI and MCP — is labelled ARCHIVED with the date, so an agent never presents
+old history as current state. The repo is never deleted: it is the only
+copy of the synced history and the pins. `--restore` reopens it. What stays
+manual: unlinking any project repos, and removing @lore from the Slack
+channels.
+
 ### For agents (MCP)
 
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
-`lore_recall`, `lore_remember`. In a linked repo with Claude Code:
+`lore_recall`, `lore_remember`. `lore_recall` returns exactly what the CLI
+does — pins, every derived artifact, recent reports, and sync/extract
+timestamps so an agent can say how fresh its answer is. In a linked repo
+with Claude Code:
 
 ```sh
 claude mcp add lore -- lore mcp
@@ -175,8 +250,15 @@ Any MCP client, pinned to a project:
 { "mcpServers": { "lore": { "command": "lore", "args": ["mcp", "-p", "acme"] } } }
 ```
 
+Two skills ship with the repo (Claude Code: copy each to `~/.claude/skills/<name>/`):
+
+[`skills/lore-mcp/SKILL.md`](skills/lore-mcp/SKILL.md) teaches an agent to
+*use* the memory well: recall the structured layers first, grep → read the
+raw streams for specifics, cite sources, and pin facts only on explicit user
+instruction — plus how to connect the server when it isn't already.
+
 And [`skills/lore-onboard/SKILL.md`](skills/lore-onboard/SKILL.md) teaches an
-agent the whole onboarding (Claude Code: copy to `~/.claude/skills/lore-onboard/`):
+agent the whole onboarding:
 run `lore setup --yes` with flags, relay the human steps, re-sync after
 invites, verify with a real `lore grep` before declaring success — plus the
 rules an agent must not relax (context repos in *your* org, one Slack app per
@@ -186,34 +268,55 @@ workspace, tokens never in git).
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo |
+| `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore mcp` | MCP server over stdio |
-| `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically) |
+| `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
 | `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
 | `lore init` | scaffold a context repo by hand |
-| `lore check` | validate config, connectors, env refs |
+| `lore check` | validate config, connectors, env refs; print per-source sync health |
 | `lore manifest slack` | print the bundled Slack app manifest |
 
-`grep`, `recall`, `remember`, and `mcp` all take `--context <owner/repo>`,
+`grep`, `recall`, `remember`, `archive`, and `mcp` all take `--context <owner/repo>`,
 `-p/--project <name>`, and `--no-pull`.
 
 ## Troubleshooting
 
-- **`not_in_channel` during sync** — the bot isn't in a listed channel; `/invite @lore` and re-run.
-- **`channel #x not found … skipping`** — usually a name mismatch; check the exact name in Slack (hyphens!).
+- **`✗ slack: channel #x not found or bot not a member`** — the sync fails (non-zero exit, nothing committed in CI) until fixed: `/invite @lore`, or check the exact channel name in Slack (hyphens!). Other channels still synced and their cursors were kept.
+- **`✗ jira: no such connector`** — a source is configured before its connector exists; remove it or set `"disabled": true`.
+- **`✗ github: repo acme/x not found or token lacks access`** — the token's repository access doesn't include it, or the name is wrong. Other repos still synced.
+- **`✗ granola: folder "Acme" not found`** — folder titles are matched case-insensitively against `list_meeting_folders`; pass the folder id instead if the title is ambiguous.
+- **`"<user>" is not in lore.json write.allow`** — pins are restricted; run `lore remember --by <allowed-name>` or edit `write.allow`.
 - **Re-backfill one channel** — delete that channel's cursor from `state.json` and `lore sync`; it refetches its backfill window and dedupes. (Channels newly added to `lore.json` backfill automatically.)
 - **No "lore sync" workflow in the Actions tab** — GitHub sometimes misses workflows pushed in the repo-creating commit; `setup` nudges automatically, otherwise push any commit touching the file.
 - **Scheduled syncs stopped after ~2 months of quiet** — GitHub disables cron on inactive repos; re-enable from the Actions tab.
 - **`could not pull … using cached copy`** — offline or no read access; queries serve the cache. Delete `~/.lore/cache/<owner>__<repo>` to force a fresh clone.
 - **`remember` failed to push** — the pin is committed in the cache clone; fix access and `git -C ~/.lore/cache/<owner>__<repo> push`.
 
+## Development
+
+```sh
+npm install
+npm test          # node:test via tsx — fixtures only, no credentials needed
+npm run typecheck
+npm run build
+```
+
+CI (`.github/workflows/ci.yml`) runs the same three on every push and PR.
+Tests cover config validation (typed per-source schemas), the secrets
+scrubber, stream writing and dedup, the Slack connector against a fake Slack
+API, the GitHub connector against a fake REST API, the Granola connector
+against captured MCP responses, sync/check failure handling, context
+resolution, archive, recall, every MCP tool over an in-memory transport,
+`remember` + audit, and extract output parsing.
+
 ## Status
 
-Early but complete through M3: `setup`, `link`, `init`, `check`, `sync` (Slack connector, per-channel backfill), `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit, via the Claude API), and the query surface — `grep`, `recall`, `remember`, `mcp`, with pointer resolution + `~/.lore/cache`. Next: more connectors (email, Linear), `roadmap` push-to-tickets. See [docs/SPEC.md](docs/SPEC.md) for the full design.
+Connectors: Slack, GitHub (with the source-owned work table), Granola. `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit), the query surface — `grep`, `recall`, `remember`, `mcp` — with pointer resolution + `~/.lore/cache`, client lifecycle (`archive`), fail-safe sync with per-source health, secret scrubbing, and an audit log. Next (see [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): client/contact model, `work_tracking` modes, client-scoped MCP tools. Jira when a client needs it.
 
 ## Principles
 

@@ -5,12 +5,20 @@ export interface Doc {
   source: string
   /** Human-readable container: "#acme", "inbox", "linear/acme" */
   channel: string
+  /** Display name — for reading. Machine identity goes in `meta`. */
   author: string
   /** ISO 8601 */
   timestamp: string
   permalink?: string
   /** Parent thread id, if this doc is a reply */
   thread?: string
+  /**
+   * Stable machine identifiers the source owns (Slack user id, workspace id,
+   * GitHub node id…). Persisted verbatim in the stream so later layers can
+   * resolve identities without re-querying the source. Values must be
+   * single tokens (no whitespace).
+   */
+  meta?: Record<string, string>
   text: string
 }
 
@@ -24,11 +32,35 @@ export interface ConnectorContext {
   /** Earliest timestamp to fetch, ms epoch. Set from backfill on first sync. */
   since: number
   log: (msg: string) => void
+  /**
+   * Read a file this connector previously emitted via `FetchResult.files`
+   * (path relative to the context root), or undefined if absent. Lets a
+   * connector maintain a source-owned state table without bloating the cursor.
+   */
+  readFile: (relPath: string) => string | undefined
+}
+
+export interface FetchResult {
+  docs: Doc[]
+  nextCursor: Cursor
+  /**
+   * Problems that did not stop the fetch but mean the source is not fully
+   * synced (a configured channel the bot can't see, a repo that 404s).
+   * `sync` records them as source health and fails the run.
+   */
+  errors?: string[]
+  /**
+   * Source-owned files to write verbatim under the context root (e.g.
+   * "context/work/github/acme__web.yaml" — the current issue table). Unlike
+   * streams these are overwritten, not appended: the source is authoritative
+   * for their content and the LLM never edits them.
+   */
+  files?: Record<string, string>
 }
 
 export interface Connector {
   name: string
-  fetch(ctx: ConnectorContext): Promise<{ docs: Doc[]; nextCursor: Cursor }>
+  fetch(ctx: ConnectorContext): Promise<FetchResult>
 }
 
 export interface Pin {

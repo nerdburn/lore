@@ -124,6 +124,10 @@ type Backend = 'sdk' | 'cli'
 
 export async function extract(root: string, opts: { report?: boolean } = {}): Promise<void> {
   const config = loadConfig(root)
+  if (config.lifecycle === 'archived') {
+    console.log(`${config.project} is archived — nothing to extract`)
+    return
+  }
   const state = loadState(root)
   const llm = pickBackend()
   const today = new Date().toISOString().slice(0, 10)
@@ -244,11 +248,28 @@ async function sdkText(system: string, user: string, schema?: Record<string, unk
 
 function cliFold(user: string): FoldResult {
   const instruction = `\n\nRespond with ONLY a JSON object matching this schema — no prose, no code fences:\n${JSON.stringify(FOLD_SCHEMA)}`
-  const text = cliCall(FOLD_SYSTEM + instruction, user)
+  return parseFoldOutput(cliCall(FOLD_SYSTEM + instruction, user))
+}
+
+/**
+ * The CLI backend has no structured-output guarantee, so tolerate prose or
+ * code fences around the JSON and validate the shape before trusting it.
+ */
+export function parseFoldOutput(text: string): FoldResult {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error(`extract: no JSON in model output: ${text.slice(0, 200)}`)
-  return JSON.parse(text.slice(start, end + 1)) as FoldResult
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1))
+  } catch (err) {
+    throw new Error(`extract: model output is not valid JSON: ${err instanceof Error ? err.message : err}`)
+  }
+  const obj = parsed as Record<string, unknown>
+  for (const key of ['requests', 'decisions', 'roadmap', 'contradictions']) {
+    if (!Array.isArray(obj[key])) throw new Error(`extract: model output missing array "${key}"`)
+  }
+  return obj as unknown as FoldResult
 }
 
 function cliCall(system: string, user: string): string {
@@ -284,7 +305,7 @@ function streamFiles(root: string): { day: string; text: string }[] {
   return files.sort((a, b) => a.day.localeCompare(b.day))
 }
 
-function pack(files: { day: string; text: string }[], budget: number): { text: string; lastDay: string }[] {
+export function pack(files: { day: string; text: string }[], budget: number): { text: string; lastDay: string }[] {
   const batches: { text: string; lastDay: string }[] = []
   let current = ''
   let lastDay = ''

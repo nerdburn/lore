@@ -2,7 +2,11 @@
 # context repo (no CI, no deploys, no protection), so commits go straight to
 # the default branch.
 # Secrets (repo or org level):
-#   SLACK_TOKEN              — the lore bot's xoxb- token (required)
+#   SLACK_TOKEN              — the lore bot's xoxb- token (required for a slack source)
+#   LORE_GITHUB_TOKEN        — fine-grained PAT / GitHub App installation token
+#                              with read access to the configured repos (github source).
+#                              Not the workflow's own GITHUB_TOKEN — that only sees this repo.
+#   GRANOLA_TOKEN            — bearer token for Granola's MCP endpoint (granola source)
 #   ANTHROPIC_API_KEY        — enables the extract step, billed per-token, OR
 #   CLAUDE_CODE_OAUTH_TOKEN  — extract on a Claude subscription (Max plans:
 #                              `claude setup-token`). Omit both and sync still
@@ -32,6 +36,8 @@ jobs:
       - name: Sync
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          LORE_GITHUB_TOKEN: ${{ secrets.LORE_GITHUB_TOKEN }}
+          GRANOLA_TOKEN: ${{ secrets.GRANOLA_TOKEN }}
         run: npx --yes github:nerdburn/lore sync
 
       - name: Extract

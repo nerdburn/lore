@@ -13,6 +13,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },

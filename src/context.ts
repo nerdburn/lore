@@ -29,14 +29,65 @@ export interface ResolveOptions {
   pull?: boolean
 }
 
-const LORE_HOME = join(homedir(), '.lore')
-const REGISTRY_FILE = join(LORE_HOME, 'registry.json')
+/** ~/.lore — overridable with LORE_HOME (tests, or a runner with its own home). */
+export function loreHome(): string {
+  return process.env.LORE_HOME ?? join(homedir(), '.lore')
+}
+const registryFile = () => join(loreHome(), 'registry.json')
+const globalConfigFile = () => join(loreHome(), 'config.json')
 
-const REPO_RE = /^[\w.-]+\/[\w.-]+$/
+/** "owner/repo" — a GitHub-hosted context repo (the original layout). */
+const GITHUB_RE = /^[\w.-]+\/[\w.-]+$/
+/** "lore-acme" — a repo on the configured remote (self-hosted layout). */
+const NAME_RE = /^[\w.-]+$/
+
+/**
+ * ~/.lore/config.json — machine-wide settings.
+ * - defaultOrg: GitHub org for `lore setup` in GitHub mode.
+ * - remote: where self-hosted context repos live, e.g.
+ *   "exedev@lore.exe.xyz:/srv/lore/repos" or "/srv/lore/repos" (on the
+ *   host itself). A pointer "lore-acme" resolves to "<remote>/lore-acme.git".
+ * - proxy: per-source API base URLs `lore setup` writes into new repos when
+ *   tokens are injected by a proxy (exe.dev integrations) instead of env.
+ */
+export interface GlobalConfig {
+  defaultOrg?: string
+  remote?: string
+  proxy?: { slack?: string; github?: string; granola?: string }
+}
+
+export function readGlobalConfig(): GlobalConfig {
+  try {
+    return JSON.parse(readFileSync(globalConfigFile(), 'utf8')) as GlobalConfig
+  } catch {
+    return {}
+  }
+}
+
+export function writeGlobalConfig(config: GlobalConfig): void {
+  mkdirSync(loreHome(), { recursive: true })
+  writeFileSync(globalConfigFile(), JSON.stringify(config, null, 2) + '\n')
+}
+
+/** Is this string a context-repo reference (GitHub or remote name) rather than a path? */
+export function isRepoRef(value: string): boolean {
+  return GITHUB_RE.test(value) || (NAME_RE.test(value) && Boolean(readGlobalConfig().remote))
+}
+
+/**
+ * Clone URL for a repo reference. "owner/repo" → GitHub; a bare name →
+ * the configured remote. `preferHttps` picks the GitHub fallback URL.
+ */
+export function remoteUrl(ref: string, preferHttps = false): string {
+  if (GITHUB_RE.test(ref)) return preferHttps ? `https://github.com/${ref}.git` : `git@github.com:${ref}.git`
+  const remote = readGlobalConfig().remote
+  if (!remote) throw new Error(`"${ref}" is a bare repo name but ~/.lore/config.json has no "remote"`)
+  return `${remote.replace(/\/$/, '')}/${ref}.git`
+}
 
 export function resolveContext(cwd: string, opts: ResolveOptions = {}): ResolvedContext {
   if (opts.context) {
-    if (REPO_RE.test(opts.context)) return fromCache(opts.context, opts)
+    if (isRepoRef(opts.context) && !existsSync(resolve(cwd, opts.context))) return fromCache(opts.context, opts)
     const root = resolve(cwd, opts.context)
     return fromLocalDir(root)
   }
@@ -45,10 +96,13 @@ export function resolveContext(cwd: string, opts: ResolveOptions = {}): Resolved
   if (found) {
     const raw = JSON.parse(readFileSync(join(found, CONFIG_FILE), 'utf8')) as Record<string, unknown>
     if (typeof raw.context === 'string') {
-      if (!REPO_RE.test(raw.context) && !isAbsolute(raw.context)) {
-        throw new Error(`${CONFIG_FILE}: "context" must be "owner/repo" or an absolute path, got "${raw.context}"`)
+      if (isAbsolute(raw.context)) return fromLocalDir(raw.context)
+      if (!isRepoRef(raw.context)) {
+        throw new Error(
+          `${CONFIG_FILE}: "context" must be "owner/repo", a repo name on the configured remote, or an absolute path, got "${raw.context}"`,
+        )
       }
-      return REPO_RE.test(raw.context) ? fromCache(raw.context, opts) : fromLocalDir(raw.context)
+      return fromCache(raw.context, opts)
     }
     return fromLocalDir(found)
   }
@@ -57,7 +111,7 @@ export function resolveContext(cwd: string, opts: ResolveOptions = {}): Resolved
     const repo = readRegistry()[opts.project]
     if (!repo) {
       throw new Error(
-        `project "${opts.project}" not in ${REGISTRY_FILE} — run any lore command once from a repo that points at it, or pass --context owner/repo`,
+        `project "${opts.project}" not in ${registryFile()} — run any lore command once from a repo that points at it, or pass --context owner/repo`,
       )
     }
     return fromCache(repo, opts)
@@ -97,7 +151,9 @@ function fromCache(repo: string, opts: ResolveOptions): ResolvedContext {
     }
   }
   const config = loadFullConfig(root)
-  registerProject(config.project, repo)
+  // Archived clients stay out of the registry: `-p <name>` is for live
+  // work, and a read shouldn't undo `lore archive`'s cleanup.
+  if (config.lifecycle !== 'archived') registerProject(config.project, repo)
   return { root, config, mode: 'cache', repo }
 }
 
@@ -112,17 +168,19 @@ function loadFullConfig(root: string): LoreConfig {
 }
 
 export function cachePath(repo: string): string {
-  return join(LORE_HOME, 'cache', repo.replace('/', '__'))
+  return join(loreHome(), 'cache', repo.replace('/', '__'))
 }
 
 function clone(repo: string, dest: string): void {
-  // SSH first (how dev machines usually auth), https as fallback (CI, tokens).
+  // GitHub: SSH first (how dev machines usually auth), https as fallback
+  // (CI, tokens). Remote names have exactly one URL.
   try {
-    execFileSync('git', ['clone', '--depth', '50', '--quiet', `git@github.com:${repo}.git`, dest], {
+    execFileSync('git', ['clone', '--depth', '50', '--quiet', remoteUrl(repo), dest], {
       stdio: ['ignore', 'ignore', 'pipe'],
     })
-  } catch {
-    execFileSync('git', ['clone', '--depth', '50', '--quiet', `https://github.com/${repo}.git`, dest], {
+  } catch (err) {
+    if (!GITHUB_RE.test(repo)) throw err
+    execFileSync('git', ['clone', '--depth', '50', '--quiet', remoteUrl(repo, true), dest], {
       stdio: ['ignore', 'ignore', 'pipe'],
     })
   }
@@ -139,9 +197,9 @@ export function git(root: string, ...args: string[]): string {
  * effect of every cache resolution, so `lore --project <name> …` works from
  * anywhere after the first use.
  */
-function readRegistry(): Record<string, string> {
+export function readRegistry(): Record<string, string> {
   try {
-    return JSON.parse(readFileSync(REGISTRY_FILE, 'utf8')) as Record<string, string>
+    return JSON.parse(readFileSync(registryFile(), 'utf8')) as Record<string, string>
   } catch {
     return {}
   }
@@ -151,6 +209,29 @@ function registerProject(project: string, repo: string): void {
   const registry = readRegistry()
   if (registry[project] === repo) return
   registry[project] = repo
-  mkdirSync(LORE_HOME, { recursive: true })
-  writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2) + '\n')
+  writeRegistry(registry)
+}
+
+export function unregisterProject(project: string): boolean {
+  const registry = readRegistry()
+  if (!(project in registry)) return false
+  delete registry[project]
+  writeRegistry(registry)
+  return true
+}
+
+function writeRegistry(registry: Record<string, string>): void {
+  mkdirSync(loreHome(), { recursive: true })
+  writeFileSync(registryFile(), JSON.stringify(registry, null, 2) + '\n')
+}
+
+/** "owner/repo" from a GitHub remote URL (ssh or https), else undefined. */
+export function githubRepoFromRemote(root: string): string | undefined {
+  try {
+    const url = git(root, 'remote', 'get-url', 'origin')
+    const m = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(url)
+    return m?.[1]
+  } catch {
+    return undefined
+  }
 }

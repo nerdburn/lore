@@ -14,7 +14,7 @@ export function grep(
   })
 
   if (opts.json) {
-    console.log(JSON.stringify({ project: ctx.config.project, matches }, null, 2))
+    console.log(JSON.stringify({ project: ctx.config.project, lifecycle: ctx.config.lifecycle, matches }, null, 2))
     return
   }
   if (matches.length === 0) {
@@ -23,5 +23,6 @@ export function grep(
     return
   }
   for (const m of matches) console.log(`${m.file}:${m.line}: ${m.text}`)
-  console.error(`\n${matches.length} match${matches.length === 1 ? '' : 'es'} (${ctx.config.project}${ctx.repo ? ` via ${ctx.repo}` : ''})`)
+  const archived = ctx.config.lifecycle === 'archived' ? ', ARCHIVED' : ''
+  console.error(`\n${matches.length} match${matches.length === 1 ? '' : 'es'} (${ctx.config.project}${ctx.repo ? ` via ${ctx.repo}` : ''}${archived})`)
 }

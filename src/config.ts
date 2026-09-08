@@ -6,14 +6,118 @@ const backfillSchema = z
   .object({ months: z.number().int().min(0).default(0) })
   .catchall(z.number().int().min(0))
 
+/**
+ * Every source shares one control field; the rest is connector-owned.
+ * `disabled: true` is the only way a configured source may be skipped by
+ * `sync` without failing the run — a source that is merely unavailable
+ * (no connector, missing env) is an error, never a silent skip.
+ */
+const baseSource = z.object({ disabled: z.boolean().optional() })
+
+/** "env:VAR" — lore.json carries references, never the secret itself. */
+const envRef = z.string().regex(/^env:[A-Z_][A-Z0-9_]*$/, 'must be an "env:VAR_NAME" reference')
+
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/
+
+/**
+ * Typed per-source schemas (backlog §8). Invalid scope config is rejected
+ * before a sync starts. Sources not listed here are accepted structurally
+ * (so a config can be written ahead of its connector) but `check`/`sync`
+ * fail on them until a connector exists or they are disabled.
+ */
+export const sourceSchemas = {
+  slack: baseSource
+    .extend({
+      channels: z.array(z.string().min(1)).min(1),
+      /** Required unless `api_base` points at a proxy that injects the token. */
+      token: envRef.optional(),
+      /** Slack Web API base (default https://slack.com/api); a proxy URL when tokens live off-host. */
+      api_base: z.string().url().optional(),
+    /** Days of history re-read on every sync (default 7). */
+    overlap_days: z.number().min(0).optional(),
+      /** Days a thread stays tracked for late replies (default 30). */
+      thread_window_days: z.number().min(0).optional(),
+    })
+    .refine((s) => s.token || s.api_base, { message: 'slack needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
+  github: baseSource
+    .extend({
+      /** "owner/repo" — each syncs issues, PRs, comments, reviews, commits, releases. */
+      repos: z.array(z.string().regex(REPO_RE, 'must be "owner/repo"')).min(1),
+      /** Fine-grained PAT or GitHub App installation token; never a personal classic token.
+       *  Optional when `api_base` is a proxy that injects it (or for public repos). */
+      token: envRef.optional(),
+      /** REST API base (default https://api.github.com); a proxy URL when tokens live off-host. */
+      api_base: z.string().url().optional(),
+    /** Days re-read on every sync (default 1). */
+    overlap_days: z.number().min(0).optional(),
+      /** Default: all. */
+      include: z.array(z.enum(['issues', 'comments', 'reviews', 'commits', 'releases'])).optional(),
+    })
+    .refine((g) => g.token || g.api_base, { message: 'github needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
+  granola: baseSource
+    .extend({
+      /** Bearer token for Granola's MCP endpoint; optional when `endpoint` is a proxy that injects it. */
+      token: envRef.optional(),
+      /** MCP endpoint (default https://mcp.granola.ai/mcp); a proxy URL when the token lives off-host. */
+      endpoint: z.string().url().optional(),
+      /** Folder titles or ids whose meetings belong to this client. */
+      folders: z.array(z.string().min(1)).optional(),
+      /** Email domains: a meeting with any attendee at one of these belongs to this client. */
+      attendee_domains: z.array(z.string().min(1)).optional(),
+      /** Store the verbatim transcript alongside notes + summary (default true). */
+      transcripts: z.boolean().optional(),
+      /** Days re-read on every sync (default 2). */
+      overlap_days: z.number().min(0).optional(),
+      /** Hours a meeting must be over before it is synced, so Granola has finished the summary (default 3). */
+      settle_hours: z.number().min(0).optional(),
+    })
+    .refine((g) => (g.folders?.length ?? 0) > 0 || (g.attendee_domains?.length ?? 0) > 0, {
+      message: 'granola needs folders and/or attendee_domains to scope meetings to this client',
+    })
+    .refine((g) => g.token || g.endpoint, { message: 'granola needs a token (env:…) or an endpoint proxy that injects one', path: ['token'] }),
+} as const
+
+export type SourceName = keyof typeof sourceSchemas
+export const KNOWN_SOURCES = Object.keys(sourceSchemas) as SourceName[]
+
+/** Any source: typed when known, structurally checked otherwise. */
+export const sourceSchema = baseSource.catchall(z.unknown())
+export type SourceConfig = z.infer<typeof sourceSchema>
+
+const sourcesSchema = z.record(z.string(), sourceSchema).superRefine((sources, ctx) => {
+  for (const [name, cfg] of Object.entries(sources)) {
+    const schema = (sourceSchemas as Record<string, z.ZodTypeAny>)[name]
+    if (!schema) continue
+    const r = schema.safeParse(cfg)
+    if (!r.success) {
+      for (const issue of r.error.issues) {
+        ctx.addIssue({ ...issue, path: [name, ...issue.path] })
+      }
+    }
+  }
+})
+
+export const LIFECYCLES = ['active', 'archived'] as const
+export type Lifecycle = (typeof LIFECYCLES)[number]
+
 export const configSchema = z.object({
-  project: z.string(),
-  sources: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
+  project: z.string().min(1),
+  /**
+   * Client lifecycle. `archived` = the engagement ended: sync and extract
+   * become no-ops, writes are refused, reads still work but are labelled.
+   * Set by `lore archive`, never by hand.
+   */
+  lifecycle: z.enum(LIFECYCLES).default('active'),
+  /** ISO 8601, set when lifecycle became archived. */
+  archived_at: z.string().optional(),
+  sources: sourcesSchema.default({}),
   backfill: backfillSchema.default({ months: 0 }),
   extract: z.array(z.string()).default([]),
   report: z
     .object({ post_to: z.string(), day: z.string().default('friday') })
     .optional(),
+  /** Who may `remember`. Absent = anyone with push access (the default). */
+  write: z.object({ allow: z.array(z.string().min(1)).min(1) }).optional(),
 })
 
 export type LoreConfig = z.infer<typeof configSchema>
