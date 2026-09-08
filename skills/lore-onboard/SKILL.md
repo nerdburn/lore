@@ -16,6 +16,16 @@ anywhere. Full docs: https://github.com/nerdburn/lore
 3. `SLACK_TOKEN` is available (env or `.env` in cwd) — the lore Slack app's
    `xoxb-` bot token for the workspace whose channels you're syncing
 
+## Hosting mode — check before anything else
+
+`cat ~/.lore/config.json`. If it has `remote` (e.g.
+`exedev@lore-host.exe.xyz:/srv/lore/repos`), context repos are **self-hosted**:
+`lore setup` creates a bare repo on that host over SSH, there is no GitHub
+repo, no Actions workflow and no secrets to set — the host's timer syncs it
+within the hour, and tokens come from the host's proxy integrations (see
+`docs/DEPLOY_EXE.md`). Pointers are bare names (`lore-acme`). Everything
+below about `gh`, `--org`, secrets and Actions applies only to GitHub mode.
+
 ## Rules that are not yours to relax
 
 - **The context repo goes in the agency's org, never the client's.** Slack

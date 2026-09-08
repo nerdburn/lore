@@ -17,6 +17,13 @@ lore remember  # pin a fact (the only explicit write)
 lore mcp       # the same verbs as MCP tools over stdio, for agents
 ```
 
+Two ways to host the storage — GitHub repos synced by Actions (the original
+layout, below), or **self-hosted**: one VM holds every client's context repo
+and a timer runs the sync; tokens live in the host platform's secret
+injection, never on disk. See [docs/DEPLOY_EXE.md](docs/DEPLOY_EXE.md) for
+the exe.dev runbook; `lore setup` switches modes on `remote` in
+`~/.lore/config.json`, and everything else is identical.
+
 Storage and interface are separate layers:
 
 - **Storage** is a *context repo* — a plain private git repo, usually one per
@@ -269,7 +276,8 @@ workspace, tokens never in git).
 | Command | What it does |
 |---|---|
 | `lore setup [owner/repo] [--channels s] [--github repos] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
-| `lore link <owner/repo>` | point a project repo at its context repo |
+| `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
+| `lore run-all --repos d --work d [--extract] [--report]` | self-hosted scheduler: sync every bare repo under a dir, commit, push (from a timer on the host) |
 | `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts |
