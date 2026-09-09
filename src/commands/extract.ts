@@ -169,7 +169,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       )
       for (const name of wantArtifacts) {
         const merged = acceptFold(name, artifacts[name], (result as unknown as Record<string, unknown[]>)[name])
-        if (merged.rejected) console.warn(`  ⚠ ${name}: model returned ${merged.rejected} — keeping the previous ${artifacts[name].length} item(s)`)
+        if (merged.rejected) console.warn(`  ⚠ ${name}: model ${merged.rejected}`)
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
@@ -291,10 +291,12 @@ export async function withRetry<T>(
 
 /**
  * The fold is update-only: items may be added or changed, never dropped.
- * A model that returns fewer items than it was given (or loses existing
- * ids) has failed the batch for that artifact — keep the previous list
- * rather than commit data loss to git. Returns what to store and, when the
- * new list was rejected, a short reason for the log.
+ * Models do drop them — a batch of pure commit history often comes back
+ * with `requests: []` — so merge instead of trusting the returned list:
+ * every existing item survives (replaced by the proposed version when the
+ * same id is returned), and proposed items with new ids are appended.
+ * Returns what to store and, when existing items were omitted, a short
+ * note for the log.
  */
 export function acceptFold(
   name: string,
@@ -302,18 +304,35 @@ export function acceptFold(
   proposed: unknown[] | undefined,
 ): { items: unknown[]; rejected?: string } {
   if (!Array.isArray(proposed)) return { items: previous, rejected: `no "${name}" array` }
-  if (previous.length === 0) return { items: proposed }
-  const ids = (list: unknown[]) => new Set(list.map((i) => (i as { id?: string }).id).filter(Boolean) as string[])
-  const before = ids(previous)
-  const after = ids(proposed)
-  const lost = [...before].filter((id) => !after.has(id))
-  if (proposed.length < previous.length || lost.length > 0) {
-    return {
-      items: previous,
-      rejected: `${proposed.length} item(s) for ${previous.length} existing${lost.length ? `, missing ${lost.slice(0, 5).join(', ')}${lost.length > 5 ? '…' : ''}` : ''}`,
+  const idOf = (i: unknown) => (i as { id?: string }).id
+  const proposedById = new Map<string, unknown>()
+  for (const item of proposed) {
+    const id = idOf(item)
+    if (id) proposedById.set(id, item)
+  }
+  const merged: unknown[] = []
+  const seen = new Set<string>()
+  const omitted: string[] = []
+  for (const item of previous) {
+    const id = idOf(item)
+    if (id && proposedById.has(id)) {
+      merged.push(proposedById.get(id))
+      seen.add(id)
+    } else {
+      merged.push(item)
+      if (id) omitted.push(id)
     }
   }
-  return { items: proposed }
+  for (const item of proposed) {
+    const id = idOf(item)
+    if (!id || !seen.has(id)) {
+      merged.push(item)
+      if (id) seen.add(id)
+    }
+  }
+  return omitted.length
+    ? { items: merged, rejected: `omitted ${omitted.length} existing item(s) (${omitted.slice(0, 4).join(', ')}${omitted.length > 4 ? '…' : ''}) — kept them` }
+    : { items: merged }
 }
 
 /**

@@ -41,21 +41,27 @@ test('extract: pack never splits a single oversized file', () => {
   assert.equal(batches[0].lastDay, '2026-08-01')
 })
 
-test('extract: acceptFold keeps the previous list when the model drops items', () => {
+test('extract: acceptFold merges — existing items survive omission, proposed items add or update by id', () => {
   const prev = [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0002', decision: 'b' }]
-  assert.deepEqual(acceptFold('decisions', prev, []), { items: prev, rejected: '0 item(s) for 2 existing, missing dec-0001, dec-0002' })
-  assert.equal(acceptFold('decisions', prev, [{ id: 'dec-0002', decision: 'b' }]).rejected, '1 item(s) for 2 existing, missing dec-0001')
-  const renamed = [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0003', decision: 'c' }]
-  assert.match(acceptFold('decisions', prev, renamed).rejected!, /missing dec-0002/)
+  const empty = acceptFold('decisions', prev, [])
+  assert.deepEqual(empty.items, prev)
+  assert.match(empty.rejected!, /omitted 2 existing item\(s\) \(dec-0001, dec-0002\) — kept them/)
+
+  const partial = acceptFold('decisions', prev, [{ id: 'dec-0002', decision: 'b (updated)' }, { id: 'dec-0003', decision: 'c' }])
+  assert.deepEqual(partial.items, [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0002', decision: 'b (updated)' }, { id: 'dec-0003', decision: 'c' }])
+  assert.match(partial.rejected!, /omitted 1 existing item\(s\) \(dec-0001\)/)
+
+  const full = acceptFold('decisions', prev, [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0002', decision: 'b' }, { id: 'dec-0003', decision: 'c' }])
+  assert.equal(full.rejected, undefined)
+  assert.equal(full.items.length, 3)
   assert.equal(acceptFold('decisions', prev, undefined).rejected, 'no "decisions" array')
 })
 
-test('extract: acceptFold accepts growth and in-place updates, and anything when starting from empty', () => {
-  const prev = [{ id: 'req-0001', status: 'open' }]
-  const updated = [{ id: 'req-0001', status: 'done' }, { id: 'req-0002', status: 'open' }]
-  assert.deepEqual(acceptFold('requests', prev, updated), { items: updated })
+test('extract: acceptFold starting from empty takes the proposal as-is; id-less items are appended', () => {
+  const proposed = [{ id: 'req-0001', status: 'open' }, { status: 'open', request: 'no id' }]
+  assert.deepEqual(acceptFold('requests', [], proposed), { items: proposed })
   assert.deepEqual(acceptFold('requests', [], []), { items: [] })
-  assert.deepEqual(acceptFold('requests', [], updated), { items: updated })
+  assert.deepEqual(acceptFold('requests', [{ id: 'req-0001', status: 'open' }], [{ status: 'x' }]).items.length, 2)
 })
 
 test('extract: streamFiles lists every source in day order with root-relative paths', () => {
