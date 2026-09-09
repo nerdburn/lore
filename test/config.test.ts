@@ -93,7 +93,9 @@ test('config: known sources are validated by their typed schema', () => {
     },
   })
   assert.deepEqual(ok.sources.notion.roots?.length, 1)
-  assert.equal(configSchema.parse({ project: 'x', sources: { jira: { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.projects[0], 'ACM')
+  assert.equal(configSchema.parse({ project: 'x', sources: { jira: { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.projects?.[0], 'ACM')
+  assert.deepEqual(configSchema.parse({ project: 'x', sources: { jira: { boards: [293], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.boards, [293])
+  bad({ jira: { api_base: 'https://jira.int.exe.xyz/rest/api/3' } })
   assert.deepEqual(ok.sources.github.repos, ['acme/web', 'acme/mobile'])
 })
 

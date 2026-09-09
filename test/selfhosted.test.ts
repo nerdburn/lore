@@ -96,6 +96,7 @@ test('setup: buildSources writes proxy bases (no tokens) when proxies are config
   assert.deepEqual(buildSources(['#acme'], [], { notion: 'https://notion.int.exe.xyz/v1' }, [], ['abc']).notion, { roots: ['abc'], api_base: 'https://notion.int.exe.xyz/v1' })
   assert.deepEqual(buildSources(['#acme'], [], { jira: 'https://jira.int.exe.xyz/rest/api/3' }, [], [], ['ACM'], 'https://acme.atlassian.net').jira, { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3', site: 'https://acme.atlassian.net' })
   assert.deepEqual(buildSources(['#acme'], [], undefined, [], [], ['ACM']).jira, { projects: ['ACM'], site: 'https://CHANGE-ME.atlassian.net', email: 'env:JIRA_EMAIL', token: 'env:JIRA_TOKEN' })
+  assert.deepEqual(buildSources(['#acme'], [], { jira: 'https://jira.int.exe.xyz/rest/api/3' }, [], [], [], 'https://input-logic.atlassian.net', [293]).jira, { boards: [293], api_base: 'https://jira.int.exe.xyz/rest/api/3', site: 'https://input-logic.atlassian.net' })
   assert.deepEqual(buildSources(['#acme'], ['a/b'], { slack: 'http://s' }), {
     slack: { channels: ['#acme'], api_base: 'http://s' },
     github: { repos: ['a/b'], token: 'env:LORE_GITHUB_TOKEN' },

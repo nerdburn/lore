@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { parse } from 'yaml'
-import { adfToMarkdown, jira, jqlDate, readWorkTable, type JiraIssue, type JiraWorkItem } from '../src/connectors/jira.js'
+import { adfToMarkdown, jira, jqlDate, readWorkTable, stripOrderBy, type JiraIssue, type JiraWorkItem } from '../src/connectors/jira.js'
 import type { ConnectorContext } from '../src/types.js'
 
 const SITE = 'https://acme.atlassian.net'
@@ -56,9 +56,12 @@ function fakeJira() {
     const path = url.pathname.replace(/^\/rest\/api\/3/, '')
     if (path === '/search/jql') {
       const jql = String(body?.jql ?? '')
+      if (/ORDER BY[\s\S]*AND/i.test(jql)) return json({ errorMessages: ['Error in the JQL Query: ORDER BY must be last'] }, { status: 400 })
       const proj = /project = "([^"]+)"/.exec(jql)?.[1]
       if (proj === 'NOPE') return json({ errorMessages: ["The value 'NOPE' does not exist for the field 'project'."] }, { status: 400 })
-      let items = state.issues.filter((i) => i.key.startsWith(`${proj}-`))
+      let items = /Client Project\[Dropdown\]" = Jointly/.test(jql)
+        ? state.issues.filter((i) => (i.fields.labels ?? []).includes('jointly'))
+        : state.issues.filter((i) => i.key.startsWith(`${proj}-`))
       const since = /updated >= "([^"]+)"/.exec(jql)?.[1]
       if (since) items = items.filter((i) => new Date(i.fields.updated!).getTime() >= Date.parse(since.replace(' ', 'T') + ':00Z'))
       if (/statusCategory != Done/.test(jql)) items = items.filter((i) => i.fields.status?.statusCategory?.name !== 'Done')
@@ -67,6 +70,9 @@ function fakeJira() {
       const isLast = start + state.pageSize >= items.length
       return json({ issues: page, isLast, ...(isLast ? {} : { nextPageToken: String(start + state.pageSize) }) })
     }
+    if (url.pathname === '/rest/agile/1.0/board/293/configuration') return json({ id: 293, name: 'Jointly scrum', filter: { id: '10444' } })
+    if (url.pathname === '/rest/agile/1.0/board/404/configuration') return json({ errorMessages: ['Board does not exist'] }, { status: 404 })
+    if (path === '/filter/10444') return json({ id: '10444', jql: 'project = "Input Logic" AND "Client Project[Dropdown]" = Jointly ORDER BY Rank ASC' })
     const m = /^\/issue\/([^/]+)\/comment$/.exec(path)
     if (m) {
       const all = state.comments[m[1]] ?? []
@@ -203,8 +209,36 @@ test('jira: an unknown project is a reported error; other projects still sync; b
   const { docs, errors } = await jira.fetch(ctx({ config: { site: SITE, email: 'lore@inputlogic.ca', token: 'tok_123', projects: ['ACM', 'NOPE'], include: ['issues'] } }))
   assert.equal(docs.length, 1)
   assert.equal(errors?.length, 1)
-  assert.match(errors![0], /project NOPE: jira 400/)
+  assert.match(errors![0], /NOPE: jira 400/)
   await assert.rejects(jira.fetch(ctx({ config: { site: SITE, email: 'x', token: 'wrong', projects: ['ACM'] } })), /jira 401/)
   assert.deepEqual(readWorkTable(undefined), [])
   assert.deepEqual(readWorkTable('not: a list'), [])
+})
+
+test('jira: stripOrderBy removes a trailing ORDER BY clause only', () => {
+  assert.equal(stripOrderBy('project = "X" AND "Client Project[Dropdown]" = Jointly ORDER BY Rank ASC'), 'project = "X" AND "Client Project[Dropdown]" = Jointly')
+  assert.equal(stripOrderBy('project = X order by created DESC, key'), 'project = X')
+  assert.equal(stripOrderBy('project = X'), 'project = X')
+})
+
+test('jira: boards scope by the saved filter JQL; channel is the board name; unknown board is a reported error', async () => {
+  const j = fakeJira()
+  j.issues = [
+    issue('INPT-10', { labels: ['jointly'] }),
+    issue('INPT-11', { labels: ['jointly'], status: { name: 'In Progress', statusCategory: { name: 'In Progress' } }, updated: '2026-08-03T00:00:00.000+0000' }),
+    issue('INPT-12', { labels: ['other-client'] }),
+  ]
+  const { docs, files, errors, nextCursor } = await jira.fetch(ctx({ config: { site: SITE, email: 'lore@inputlogic.ca', token: 'tok_123', boards: [293, 404], include: ['issues'] } }))
+  assert.deepEqual(docs.map((d) => d.id), ['jira-INPT-10', 'jira-INPT-11'])
+  assert.equal(docs[0].channel, 'Jointly scrum')
+  assert.equal(docs[0].meta?.project, 'INPT')
+  assert.equal(docs[0].meta?.scope, 'Jointly_scrum')
+  assert.ok(files!['context/work/jira/board-293.yaml'], 'work table per board')
+  assert.match(files!['context/work/jira/board-293.yaml'], /Jointly scrum \(board-293\)/)
+  assert.ok(nextCursor['board-293'])
+  assert.equal(errors?.length, 1)
+  assert.match(errors![0], /board 404: jira 404/)
+  const sent = j.calls.filter((c) => c.path.startsWith('/rest/api/3/search/jql')).map((c) => String(c.body?.jql))
+  assert.ok(sent.every((q) => q.startsWith('(project = "Input Logic" AND "Client Project[Dropdown]" = Jointly) AND')), sent.join('\n'))
+  assert.ok(sent.every((q) => !/ORDER BY Rank/.test(q)), 'filter ORDER BY stripped before AND-ing conditions')
 })

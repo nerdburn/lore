@@ -15,7 +15,7 @@ export interface SetupFlags {
   granola?: string
   /** Comma-separated Notion page/database ids or URLs scoping this client's docs — adds a notion source. */
   notion?: string
-  /** Comma-separated Jira project keys — adds a jira source (site from --jira-site or the proxy). */
+  /** Comma-separated Jira project keys and/or "board:<id>" entries — adds a jira source. */
   jira?: string
   /** https://<site>.atlassian.net, for permalinks (and the API when no proxy). */
   jiraSite?: string
@@ -91,10 +91,13 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       .split(/[,\s]+/)
       .map((r) => r.trim())
       .filter(Boolean)
-    const jiraProjects = (flags.jira ?? '')
+    const jiraEntries = (flags.jira ?? '')
       .split(/[,\s]+/)
-      .map((k) => k.trim().toUpperCase())
+      .map((k) => k.trim())
       .filter(Boolean)
+    const jiraProjects = jiraEntries.filter((e) => !/^board:/i.test(e)).map((k) => k.toUpperCase())
+    const jiraBoards = jiraEntries.filter((e) => /^board:/i.test(e)).map((e) => Number(e.split(':')[1]))
+    if (jiraBoards.some((b) => !Number.isInteger(b) || b <= 0)) throw new Error('--jira: board entries look like "board:293"')
 
     // Name: explicit arg > the project repo we're standing in > first channel.
     let name = repoArg?.includes('/') ? repoArg.split('/')[1] : repoArg
@@ -116,14 +119,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       project,
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite),
+      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length ? ` · jira: ${jiraProjects.join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -176,6 +179,7 @@ export function buildSources(
   notionRoots: string[] = [],
   jiraProjects: string[] = [],
   jiraSite?: string,
+  jiraBoards: number[] = [],
 ): Record<string, Record<string, unknown>> {
   const sources: Record<string, Record<string, unknown>> = {
     slack: proxy?.slack ? { channels, api_base: proxy.slack } : { channels, token: 'env:SLACK_TOKEN' },
@@ -190,10 +194,11 @@ export function buildSources(
   if (notionRoots.length) {
     sources.notion = proxy?.notion ? { roots: notionRoots, api_base: proxy.notion } : { roots: notionRoots, token: 'env:NOTION_TOKEN' }
   }
-  if (jiraProjects.length) {
+  if (jiraProjects.length || jiraBoards.length) {
+    const scope = { ...(jiraProjects.length ? { projects: jiraProjects } : {}), ...(jiraBoards.length ? { boards: jiraBoards } : {}) }
     sources.jira = proxy?.jira
-      ? { projects: jiraProjects, api_base: proxy.jira, ...(jiraSite ? { site: jiraSite } : {}) }
-      : { projects: jiraProjects, site: jiraSite ?? 'https://CHANGE-ME.atlassian.net', email: 'env:JIRA_EMAIL', token: 'env:JIRA_TOKEN' }
+      ? { ...scope, api_base: proxy.jira, ...(jiraSite ? { site: jiraSite } : {}) }
+      : { ...scope, site: jiraSite ?? 'https://CHANGE-ME.atlassian.net', email: 'env:JIRA_EMAIL', token: 'env:JIRA_TOKEN' }
   }
   return sources
 }

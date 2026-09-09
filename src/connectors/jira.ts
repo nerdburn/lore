@@ -4,8 +4,10 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
 /**
  * Jira Cloud connector (backlog §10/§11 — Jira as the canonical tracker).
  *
- * Per configured project key, deterministic and incremental via the REST v3
- * API (`/search/jql`, `/issue/{key}/comment`). Two kinds of output, like
+ * Per configured scope — a project key, or a board (Jira Agile board id,
+ * resolved to its saved filter's JQL, for workspaces that run many clients
+ * as boards in one big project) — deterministic and incremental via the REST
+ * v3 API (`/search/jql`, `/issue/{key}/comment`). Two kinds of output, like
  * GitHub:
  *
  * - Stream docs (append-only events): an issue when first seen and again
@@ -67,7 +69,8 @@ export const jira: Connector = {
     if (!apiBase) throw new Error('jira: set site (https://x.atlassian.net) or api_base')
     if (!(email && token) && ctx.config.api_base === undefined) throw new Error('jira: no credentials (set email + token, or api_base to a proxy that injects them)')
     const projects = (ctx.config.projects as string[] | undefined) ?? []
-    if (projects.length === 0) throw new Error('jira: no projects configured')
+    const boards = (ctx.config.boards as number[] | undefined) ?? []
+    if (projects.length === 0 && boards.length === 0) throw new Error('jira: no projects or boards configured')
     const includeComments = !((ctx.config.include as string[] | undefined)?.length) || (ctx.config.include as string[]).includes('comments')
     const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
 
@@ -78,7 +81,19 @@ export const jira: Connector = {
     const files: Record<string, string> = {}
     let browseBase = site
 
-    for (const project of projects) {
+    // Scopes: projects as-is; boards resolved to their saved filter's JQL.
+    const scopes: { name: string; channel: string; jql: string }[] = projects.map((p) => ({ name: p, channel: p, jql: `project = "${p}"` }))
+    for (const id of boards) {
+      try {
+        const b = await api.board(id)
+        scopes.push({ name: `board-${id}`, channel: b.name, jql: `(${b.jql})` })
+      } catch (err) {
+        errors.push(`board ${id}: ${err instanceof Error ? err.message : err} — check the id and that the account can see the board`)
+      }
+    }
+
+    for (const scope of scopes) {
+      const project = scope.name
       const prev = cursor[project]
       const sinceMs = prev ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
       const sinceJql = jqlDate(sinceMs)
@@ -89,8 +104,8 @@ export const jira: Connector = {
       for (const item of readWorkTable(ctx.readFile(workPath))) table.set(item.key, item)
 
       try {
-        const updated = await api.search(`project = "${project}" AND updated >= "${sinceJql}" ORDER BY updated ASC`)
-        const seed = prev ? [] : await api.search(`project = "${project}" AND statusCategory != Done ORDER BY created ASC`)
+        const updated = await api.search(`${scope.jql} AND updated >= "${sinceJql}" ORDER BY updated ASC`)
+        const seed = prev ? [] : await api.search(`${scope.jql} AND statusCategory != Done ORDER BY created ASC`)
         if (!browseBase && (updated[0] ?? seed[0])?.self) browseBase = new URL((updated[0] ?? seed[0]).self).origin
         const seen = new Set<string>()
         for (const issue of [...seed, ...updated]) {
@@ -100,7 +115,7 @@ export const jira: Connector = {
           seen.add(issue.key)
           const fp = fingerprint(issue)
           if (fingerprints[issue.key] === fp) continue
-          docs.push(fingerprints[issue.key] ? stateChangeDoc(project, issue, item) : openedDoc(project, issue, item))
+          docs.push(fingerprints[issue.key] ? stateChangeDoc(scope.channel, issue, item) : openedDoc(scope.channel, issue, item))
           fingerprints[issue.key] = fp
         }
         if (includeComments) {
@@ -108,16 +123,16 @@ export const jira: Connector = {
             const comments = await api.comments(issue.key)
             for (const c of comments) {
               if (new Date(c.created).getTime() < sinceMs) continue
-              docs.push(commentDoc(project, issue, c, browseBase))
+              docs.push(commentDoc(scope.channel, issue, c, browseBase))
             }
           }
         }
-        files[workPath] = renderWorkTable(project, [...table.values()])
+        files[workPath] = renderWorkTable(scope.channel === project ? project : `${scope.channel} (${project})`, [...table.values()])
         cursor[project] = { since: startedAt, fingerprints }
-        ctx.log(`jira: ${project} → ${docs.length} docs so far, ${table.size} work items`)
+        ctx.log(`jira: ${scope.channel} → ${docs.length} docs so far, ${table.size} work items`)
       } catch (err) {
         if (err instanceof JiraError && (err.status === 400 || err.status === 404)) {
-          errors.push(`project ${project}: ${err.message} — check the key and the account's project access`)
+          errors.push(`${project}: ${err.message} — check the key/board and the account's project access`)
           continue
         }
         throw err
@@ -142,8 +157,8 @@ function statusLine(item: JiraWorkItem): string {
   return bits.join(' · ')
 }
 
-function baseMeta(project: string, issue: JiraIssue, extra: Record<string, string | undefined> = {}): Record<string, string> {
-  const meta: Record<string, string> = { project, key: issue.key, issue_id: issue.id }
+function baseMeta(scope: string, issue: JiraIssue, extra: Record<string, string | undefined> = {}): Record<string, string> {
+  const meta: Record<string, string> = { project: issue.key.replace(/-\d+$/, ''), scope: scope.replace(/\s+/g, '_'), key: issue.key, issue_id: issue.id }
   for (const [k, v] of Object.entries(extra)) if (v) meta[k] = v
   return meta
 }
@@ -355,6 +370,11 @@ function iso(s: string | undefined): string {
   return s ? new Date(s).toISOString() : new Date(0).toISOString()
 }
 
+/** A saved filter's JQL usually ends in ORDER BY; that must go before we AND more conditions onto it. */
+export function stripOrderBy(jql: string): string {
+  return jql.replace(/\s+ORDER\s+BY\s[\s\S]*$/i, '').trim()
+}
+
 /** Jira JQL wants "yyyy-MM-dd HH:mm" in the account's timezone; UTC is what the API uses for `updated`. */
 export function jqlDate(ms: number): string {
   const d = new Date(ms)
@@ -377,14 +397,16 @@ class JiraError extends Error {
 interface Api {
   search(jql: string): Promise<JiraIssue[]>
   comments(key: string): Promise<JiraComment[]>
+  /** Board name + the JQL of its saved filter (Jira Agile API). */
+  board(id: number): Promise<{ name: string; jql: string }>
 }
 
 function jiraClient(apiBase: string, basic: { email: string; token: string } | undefined): Api {
   const headers: Record<string, string> = { Accept: 'application/json', 'content-type': 'application/json' }
   if (basic) headers.Authorization = `Basic ${Buffer.from(`${basic.email}:${basic.token}`).toString('base64')}`
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(path: string, init: RequestInit = {}, base = apiBase): Promise<T> {
     for (;;) {
-      const res = await fetch(`${apiBase}${path}`, { ...init, headers: { ...headers, ...(init.headers as Record<string, string> | undefined) } })
+      const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers, ...(init.headers as Record<string, string> | undefined) } })
       if (res.status === 429) {
         const wait = Number(res.headers.get('retry-after') ?? '5')
         await new Promise((r) => setTimeout(r, Math.min(wait, 120) * 1000))
@@ -394,7 +416,16 @@ function jiraClient(apiBase: string, basic: { email: string; token: string } | u
       return (await res.json()) as T
     }
   }
+  // The Agile API lives beside the REST API: /rest/api/3 → /rest/agile/1.0.
+  const agileBase = apiBase.replace(/\/rest\/api\/\d+$/, '/rest/agile/1.0')
   return {
+    async board(id) {
+      const b = await request<{ name?: string; filter?: { id: string } }>(`/board/${id}/configuration`, {}, agileBase)
+      if (!b.filter?.id) throw new JiraError(404, `board ${id} has no saved filter`)
+      const f = await request<{ jql?: string }>(`/filter/${b.filter.id}`)
+      if (!f.jql) throw new JiraError(404, `filter ${b.filter.id} has no JQL`)
+      return { name: b.name ?? `board-${id}`, jql: stripOrderBy(f.jql) }
+    },
     async search(jql) {
       const out: JiraIssue[] = []
       let nextPageToken: string | undefined

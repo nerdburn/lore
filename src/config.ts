@@ -95,7 +95,9 @@ export const sourceSchemas = {
   jira: baseSource
     .extend({
       /** Project keys, e.g. ["JNT"]. */
-      projects: z.array(z.string().regex(/^[A-Z][A-Z0-9_]+$/, 'Jira project keys are uppercase, e.g. JNT')).min(1),
+      projects: z.array(z.string().regex(/^[A-Z][A-Z0-9_]+$/, 'Jira project keys are uppercase, e.g. JNT')).optional(),
+      /** Agile board ids — for workspaces that run clients as boards inside one project; scope = the board's saved filter. */
+      boards: z.array(z.number().int().positive()).optional(),
       /** https://<site>.atlassian.net — for the API (unless api_base) and for permalinks. */
       site: z.string().url().optional(),
       /** Atlassian account email + API token (HTTP Basic); optional when api_base is a proxy that injects the header. */
@@ -108,6 +110,7 @@ export const sourceSchemas = {
       /** Days re-read on every sync (default 1). */
       overlap_days: z.number().min(0).optional(),
     })
+    .refine((j) => (j.projects?.length ?? 0) > 0 || (j.boards?.length ?? 0) > 0, { message: 'jira needs projects and/or boards', path: ['projects'] })
     .refine((j) => j.site || j.api_base, { message: 'jira needs site (https://x.atlassian.net) or api_base', path: ['site'] })
     .refine((j) => (j.email && j.token) || j.api_base, { message: 'jira needs email + token (env:…) or an api_base proxy that injects them', path: ['token'] }),
 } as const
