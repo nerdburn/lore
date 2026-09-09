@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { before, test } from 'node:test'
 import { runAll } from '../src/commands/run-all.js'
 import { buildSources } from '../src/commands/setup.js'
-import { refresh, sshTargetFromRemote } from '../src/commands/refresh.js'
+import { refresh, sshTargetFromRemote, START_CMD, STATE_CMD, unitOutcome, WAIT_CMD } from '../src/commands/refresh.js'
 import { configSchema } from '../src/config.js'
 import { cachePath, isRepoRef, readGlobalConfig, remoteUrl, resolveContext, writeGlobalConfig } from '../src/context.js'
 import type { Connector, Doc } from '../src/types.js'
@@ -247,7 +247,7 @@ test('refresh: with a path remote the host trigger is unavailable but the pull s
   assert.equal(r.after.lastSync, '2026-09-09T10:00:00Z')
 })
 
-test('refresh: with an ssh remote it runs the host service unless the last sync is recent', () => {
+test('refresh: with an ssh remote it checks the unit state, runs the host service unless the last sync is recent, and reports the outcome', () => {
   seedBare('lore-ssh', { project: 'ssh' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z' }) })
   // clone first so the cache exists, then swap the global remote to an ssh form for the trigger check
   resolveContext(tmpdir(), { context: 'lore-ssh' })
@@ -255,20 +255,66 @@ test('refresh: with an ssh remote it runs the host service unless the last sync 
   writeGlobalConfig({ ...saved, remote: 'exedev@lore-host.example:/srv/lore/repos' })
   try {
     const calls: string[] = []
-    const ssh = (t: string, c: string) => { calls.push(`${t} ${c}`); return '' }
+    let state = 'inactive'
+    let show = 'Result=success\nExecMainStatus=0\n'
     // The cache's origin is still the local bare path, so `git pull` after the trigger keeps working.
+    const ssh = (t: string, c: string) => {
+      calls.push(`${t} ${c}`)
+      if (c === STATE_CMD) return `${state}\n`
+      if (c === START_CMD || c === WAIT_CMD) return show
+      throw new Error(`unexpected ssh command: ${c}`)
+    }
+    const target = 'exedev@lore-host.example'
     const recent = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
     assert.equal(recent.host, 'skipped-recent')
-    assert.deepEqual(calls, [])
+    assert.equal(recent.outcome, undefined)
+    assert.deepEqual(calls, [`${target} ${STATE_CMD}`], 'idle + recent: only the state probe, no start')
+
+    calls.length = 0
     const stale = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
     assert.equal(stale.host, 'ran')
-    assert.deepEqual(calls, ['exedev@lore-host.example sudo systemctl start lore-sync.service'])
+    assert.equal(stale.outcome, 'success')
+    assert.deepEqual(calls, [`${target} ${STATE_CMD}`, `${target} ${START_CMD}`])
+    assert.match(START_CMD, /^sudo systemctl start lore-sync\.service; systemctl show/, 'start is not the last command, so its exit code never fails the ssh')
+
+    calls.length = 0
     const forced = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, force: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
     assert.equal(forced.host, 'ran')
+    assert.deepEqual(calls, [`${target} ${STATE_CMD}`, `${target} ${START_CMD}`])
+
+    // A run already in flight is waited out, never re-triggered — even when recent/force would otherwise decide.
+    calls.length = 0
+    state = 'activating'
+    const waited = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
+    assert.equal(waited.host, 'waited')
+    assert.equal(waited.outcome, 'success')
+    assert.match(waited.note ?? '', /already running/)
+    assert.deepEqual(calls, [`${target} ${STATE_CMD}`, `${target} ${WAIT_CMD}`])
+    assert.ok(!WAIT_CMD.includes('systemctl start'), 'waiting must not start the unit')
+
+    // A failed host run is an outcome in the result, not a thrown error.
+    calls.length = 0
+    state = 'failed'
+    show = 'Result=exit-code\nExecMainStatus=1\n'
+    const failed = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
+    assert.equal(failed.host, 'ran')
+    assert.equal(failed.outcome, 'failed')
+    assert.match(failed.note ?? '', /exit-code, exit 1/)
+    assert.equal(calls.length, 2)
+
+    calls.length = 0
     const noTrigger = refresh(tmpdir(), { context: 'lore-ssh', pull: false }, { ssh })
     assert.equal(noTrigger.host, 'not-requested')
-    assert.equal(calls.length, 2)
+    assert.deepEqual(calls, [])
   } finally {
     writeGlobalConfig(saved)
   }
+})
+
+test('refresh: unitOutcome reads systemd Result/ExecMainStatus', () => {
+  assert.deepEqual(unitOutcome('Result=success\nExecMainStatus=0\n'), { outcome: 'success' })
+  assert.deepEqual(unitOutcome('Result=success\n', 'waited'), { outcome: 'success', note: 'waited' })
+  assert.equal(unitOutcome('Result=exit-code\nExecMainStatus=2\n').outcome, 'failed')
+  assert.match(unitOutcome('Result=timeout\nExecMainStatus=0\n').note ?? '', /failed \(timeout\)/)
+  assert.match(unitOutcome('').note ?? '', /could not read/)
 })
