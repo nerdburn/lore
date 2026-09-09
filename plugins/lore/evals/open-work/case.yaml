@@ -18,10 +18,10 @@ graders:
     type: llm
     weight: 1
     criteria: |
-      PASS if the response (a) says that nothing is currently open in the GitHub
-      tracker — no open issues or pull requests — attributing that to GitHub's own
-      work table / tracker state, and (b) gives the time or date the memory was last
-      synced. Additional context about roadmap or derived items is acceptable as long
-      as it is presented as distinct from tracker state.
-      FAIL if the response invents open issues or PRs, says it cannot reach the
-      data, omits the last-synced time, or claims to have pinned/saved anything.
+      PASS if the response (a) says exactly one item is open in the GitHub tracker —
+      PR #42, the Black Friday landing page — attributing that to GitHub's own work
+      table / tracker state, and (b) gives the time or date the memory was last synced
+      (2026-08-21). Additional context about requests or the roadmap is acceptable as
+      long as it is presented as distinct from tracker state.
+      FAIL if it invents other open items, says it cannot reach the data, omits the
+      last-synced time, or claims to have pinned/saved anything.

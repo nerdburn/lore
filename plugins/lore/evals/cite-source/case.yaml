@@ -6,20 +6,19 @@ context:
   scaffold_script: scaffold.sh
 execution:
   prompt: |
-    When was the "resumable folds" change committed, and by whom? Cite your source.
+    When was the November 17 launch date for the landing page decided, and who made the call? Cite your source.
   max_turns: 14
   allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_grep, mcp__plugin_lore_lore__lore_read]
 graders:
   - name: facts
     type: regex
     weight: 1
-    pattern: '(2026-07-23|July 23,? 2026)[\s\S]*nerdburn|nerdburn[\s\S]*(2026-07-23|July 23,? 2026)'
+    pattern: '(2026-08-03|Aug(ust)? 3,? 2026)[\s\S]*Shawn|Shawn[\s\S]*(2026-08-03|Aug(ust)? 3,? 2026)'
   - name: citation
     type: llm
     weight: 1
     criteria: |
-      The answer identifies the commit (hash beginning 6b24470 and/or the message
-      "fix(extract): resumable folds — checkpoint fold position in state.json"),
-      gives the date 2026-07-23 and the author nerdburn, and cites a checkable
-      source: a GitHub permalink or the stream path
-      context/streams/github/nerdburn_lore/2026-07-23.md.
+      The answer says Shawn Adrian decided it on 2026-08-03 (August 3, 2026), in
+      reply to Priya's request, and cites a checkable source: the Slack permalink
+      https://slack.com/archives/C0ACME/p1754230200000200 or the stream path
+      context/streams/slack/#acme/2026-08-03.md.

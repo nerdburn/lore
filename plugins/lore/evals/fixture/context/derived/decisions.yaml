@@ -1,0 +1,6 @@
+# Derived by `lore extract` — regenerable; do not hand-edit.
+- id: dec-0001
+  decision: Ship the Black Friday landing page on November 17; deploys stay manual until then
+  decided_by: Shawn Adrian
+  date: 2026-08-03
+  source: https://slack.com/archives/C0ACME/p1754230200000200

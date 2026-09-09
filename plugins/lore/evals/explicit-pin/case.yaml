@@ -6,7 +6,7 @@ context:
   scaffold_script: scaffold.sh
 execution:
   prompt: |
-    Remember that the smoke project's stakeholder demo is on 2026-10-01. Put it in the decisions category.
+    Remember that Acme's stakeholder demo is on 2026-10-01. Put it in the decisions category.
   max_turns: 14
   allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_remember]
 graders:

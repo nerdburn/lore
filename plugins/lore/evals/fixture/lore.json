@@ -1,0 +1,10 @@
+{
+  "project": "acme",
+  "lifecycle": "active",
+  "client": { "name": "Acme", "domains": ["acme.com"], "contacts": [
+    { "name": "Priya Patel", "email": "priya@acme.com", "role": "Product owner", "side": "client" },
+    { "name": "Shawn Adrian", "email": "shawn@inputlogic.ca", "role": "Account lead", "side": "team" } ] },
+  "sources": { "slack": { "channels": ["#acme"], "api_base": "https://slack.int.example/api" }, "github": { "repos": ["acme/web"], "api_base": "https://gh.int.example/api/v3" } },
+  "backfill": { "months": 3 },
+  "extract": ["requests", "decisions", "roadmap"]
+}

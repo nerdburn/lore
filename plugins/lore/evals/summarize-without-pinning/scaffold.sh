@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# Runs in the case's sandbox cwd (with `claude plugin eval --scaffold`).
-# Copies the lore-smoke context repo out of a lore cache into the sandbox
-# home (outside the agent's cwd, so only the MCP server reaches it) and
-# writes an absolute-path lore.json pointer: no env vars, no writes to the
-# real cache. Pins made during the case land in the throwaway copy.
+# Runs in the case's sandbox cwd (with `claude plugin eval --scaffold`); the
+# harness executes it from its original location, so BASH_SOURCE finds the
+# shared synthetic fixture beside the case directories. Copies it into the
+# sandbox home (outside the agent's cwd) and points lore.json at it.
 set -euo pipefail
-dest="$(cd .. && pwd)/.lore-smoke"
-for d in "$HOME/.lore/cache/lore-smoke" /Users/*/.lore/cache/lore-smoke /home/*/.lore/cache/lore-smoke; do
-  if [ -f "$d/lore.json" ]; then
-    rm -rf "$dest" && cp -R "$d" "$dest"
-    printf '{ "context": "%s" }\n' "$dest" > lore.json
-    exit 0
-  fi
-done
-echo "lore-smoke cache not found — run: lore recall --context lore-smoke" >&2
-exit 1
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+src="$here/../fixture"
+[ -f "$src/lore.json" ] || { echo "fixture not found at $src" >&2; exit 1; }
+dest="$(cd .. && pwd)/.lore-eval"
+rm -rf "$dest" && cp -R "$src" "$dest"
+printf '{ "context": "%s" }\n' "$dest" > lore.json

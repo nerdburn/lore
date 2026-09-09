@@ -1,0 +1,13 @@
+# Derived by `lore extract` — regenerable; do not hand-edit.
+- id: req-0001
+  request: Black Friday landing page live before Nov 20
+  requested_by: Priya Patel (client)
+  date: 2026-08-03
+  status: in_progress
+  source: https://slack.com/archives/C0ACME/p1754229720000100
+- id: req-0002
+  request: Show checkout prices in CAD for Canadian visitors
+  requested_by: Priya Patel (client)
+  date: 2026-08-03
+  status: done
+  source: https://slack.com/archives/C0ACME/p1754230320000300

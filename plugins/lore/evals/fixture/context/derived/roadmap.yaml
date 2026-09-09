@@ -1,0 +1,11 @@
+# Derived by `lore extract` — regenerable; do not hand-edit.
+- id: rm-0001
+  item: Black Friday landing page (hero, countdown, email capture)
+  priority: P1
+  status: in_progress
+  source: https://github.com/acme/web/pull/42
+- id: rm-0002
+  item: CAD pricing at checkout
+  priority: P1
+  status: done
+  source: https://github.com/acme/web/pull/41
