@@ -6,7 +6,7 @@ description: Query project memory through the lore MCP server (lore_grep, lore_r
 # Using lore over MCP
 
 Lore is git-native project memory for one client at a time: Slack history,
-GitHub activity, and Granola meetings synced into a private context repo,
+GitHub activity, Granola meetings, and Notion pages synced into a private context repo,
 plus LLM-derived artifacts and explicitly pinned facts. The MCP server
 exposes the query surface so you never touch the repo directly. Full docs:
 https://github.com/nerdburn/lore
@@ -57,6 +57,9 @@ history, say so, and never present it as current state.
      opened and on each state change, comments, reviews, commits, releases
    - `context/streams/granola/<Folder>/YYYY-MM-DD.md` — meeting notes +
      AI summary, and the transcript as a threaded reply
+   - `context/streams/notion/<Top-level page>/YYYY-MM-DD.md` — a Notion
+     page rendered to markdown each time it was edited (documentation
+     history; the newest snapshot is the current page)
    Search with `lore_grep`, read with `lore_read`.
 
 Every doc carries an id comment with machine ids (Slack user/channel ids,

@@ -13,6 +13,8 @@ export interface SetupFlags {
   github?: string
   /** Comma-separated Granola folder titles (or ids) holding this client's meetings — adds a granola source. */
   granola?: string
+  /** Comma-separated Notion page/database ids or URLs scoping this client's docs — adds a notion source. */
+  notion?: string
   /** Client display name (defaults to the project name, capitalised). */
   client?: string
   /** Comma-separated client email domains, e.g. "acme.com,acme.ca". */
@@ -81,6 +83,10 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       .split(',')
       .map((f) => f.trim())
       .filter(Boolean)
+    const notionRoots = (flags.notion ?? '')
+      .split(/[,\s]+/)
+      .map((r) => r.trim())
+      .filter(Boolean)
 
     // Name: explicit arg > the project repo we're standing in > first channel.
     let name = repoArg?.includes('/') ? repoArg.split('/')[1] : repoArg
@@ -102,14 +108,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       project,
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders),
+      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -159,6 +165,7 @@ export function buildSources(
   repos: string[],
   proxy: GlobalConfig['proxy'],
   granolaFolders: string[] = [],
+  notionRoots: string[] = [],
 ): Record<string, Record<string, unknown>> {
   const sources: Record<string, Record<string, unknown>> = {
     slack: proxy?.slack ? { channels, api_base: proxy.slack } : { channels, token: 'env:SLACK_TOKEN' },
@@ -169,6 +176,9 @@ export function buildSources(
   if (granolaFolders.length) {
     // Auth comes from `lore auth granola` on the syncing host (token file); no token here.
     sources.granola = proxy?.granola ? { folders: granolaFolders, endpoint: proxy.granola } : { folders: granolaFolders }
+  }
+  if (notionRoots.length) {
+    sources.notion = proxy?.notion ? { roots: notionRoots, api_base: proxy.notion } : { roots: notionRoots, token: 'env:NOTION_TOKEN' }
   }
   return sources
 }

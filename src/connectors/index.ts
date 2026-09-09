@@ -1,6 +1,7 @@
 import type { Connector } from '../types.js'
 import { github } from './github.js'
 import { granola } from './granola.js'
+import { notion } from './notion.js'
 import { slack } from './slack.js'
 
 /**
@@ -15,4 +16,5 @@ export const connectors: Record<string, Connector> = {
   slack,
   github,
   granola,
+  notion,
 }

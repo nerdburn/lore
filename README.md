@@ -1,6 +1,6 @@
 # lore
 
-**Git-native project memory for agents.** Everything is derived from sources of truth (Slack, GitHub, Granola meetings; Jira and email planned) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
+**Git-native project memory for agents.** Everything is derived from sources of truth (Slack, GitHub, Granola meetings, Notion; Jira and email planned) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
 
 No server, no database service. Text in git is the source of truth; a GitHub Actions cron keeps it fresh; the CLI is the interface — the repo is just the database.
 
@@ -123,8 +123,18 @@ plus a secret on the repo. Every scope belongs to exactly one client repo.
   summary exists. Meeting content is evidence for extraction, never
   authoritative work or facts.
 
-`lore setup --github "acme/web,acme/mobile" --client "Acme" --domains "acme.com"`
-writes the GitHub source and the client block (below).
+- **Notion** reads pages and databases an internal integration has been
+  connected to (Notion → page ··· → Connections). Sharing is the consent
+  model. Scope a client's docs with `roots` — page or database ids or URLs;
+  anything beneath one is in — or leave it empty for everything shared. Each
+  edit becomes a stream doc with the page rendered to markdown (title,
+  database properties, blocks), so documentation history is grep-able and
+  folded like everything else. Pages edited in the last `settle_minutes`
+  (default 30) wait for the next run. Token as `env:NOTION_TOKEN`, or an
+  `api_base` proxy that injects it.
+
+`lore setup --github "acme/web,acme/mobile" --granola "Acme" --notion "<page url>" --client "Acme" --domains "acme.com"`
+writes the sources and the client block (below).
 
 **Who the client is.** Every context repo can carry a `client` block — name,
 email domains, known contacts with `side: client|team|vendor`. Email is the
@@ -321,7 +331,7 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore run-all --repos d --work d [--extract] [--report]` | self-hosted scheduler: sync every bare repo under a dir, commit, push (from a timer on the host) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
@@ -372,7 +382,7 @@ resolution, archive, recall, every MCP tool over an in-memory transport,
 
 ## Status
 
-Connectors: Slack, GitHub (with the source-owned work table), Granola. `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit), the query surface — `grep`, `recall`, `remember`, `mcp` — with pointer resolution + `~/.lore/cache`, client lifecycle (`archive`), fail-safe sync with per-source health, secret scrubbing, and an audit log. Next (see [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): client/contact model, `work_tracking` modes, client-scoped MCP tools. Jira when a client needs it.
+Connectors: Slack, GitHub (with the source-owned work table), Granola, Notion. `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit), the query surface — `grep`, `recall`, `remember`, `mcp` — with pointer resolution + `~/.lore/cache`, client lifecycle (`archive`), fail-safe sync with per-source health, secret scrubbing, and an audit log. Next (see [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): client/contact model, `work_tracking` modes, client-scoped MCP tools. Jira when a client needs it.
 
 ## Principles
 

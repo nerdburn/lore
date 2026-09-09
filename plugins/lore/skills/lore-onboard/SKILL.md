@@ -37,7 +37,9 @@ relay the human steps, and verify before declaring success.
 
 1. **Gather** (ask, don't guess): client name + email domains; exact Slack
    channel names (here `#<client>` is internal, `#<client>-team` has the client
-   in it); GitHub repos as `owner/repo`; Granola folder title; backfill months
+   in it); GitHub repos as `owner/repo`; Granola folder title; the client's
+   top-level Notion page URL (relay: connect the `lore` integration to it via
+   `···` → Connections); backfill months
    (default 3); known contacts (name, email, role, client/team side).
 2. **Slack** — relay: `/invite @lore` in each channel. Confirm membership
    before syncing: the bot's channel list is visible via the host's proxy
@@ -53,7 +55,7 @@ relay the human steps, and verify before declaring success.
 
    ```sh
    lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
-              --client "Acme" --domains "acme.com" --backfill 3 --yes
+              --notion "<client's Notion page URL>" --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```
 
    Then add `client.contacts` to the repo's `lore.json` (cache clone at

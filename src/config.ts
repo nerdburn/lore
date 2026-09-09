@@ -78,6 +78,20 @@ export const sourceSchemas = {
     // (token, proxy endpoint, or a device-flow token file) are checked at
     // sync time by the connector: both can come from outside this block.
     ,
+  notion: baseSource
+    .extend({
+      /** Internal-integration token (`ntn_…`); optional when `api_base` is a proxy that injects it. */
+      token: envRef.optional(),
+      /** REST base (default https://api.notion.com/v1); a proxy URL when the token lives off-host. */
+      api_base: z.string().url().optional(),
+      /** Page/database ids or URLs; anything under one of them is in scope. Empty = everything shared with the integration. */
+      roots: z.array(z.string().min(1)).optional(),
+      /** Days re-read on every sync (default 1). */
+      overlap_days: z.number().min(0).optional(),
+      /** Skip pages edited within the last N minutes (default 30) — let edits settle. */
+      settle_minutes: z.number().min(0).optional(),
+    })
+    .refine((n) => n.token || n.api_base, { message: 'notion needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
 } as const
 
 export type SourceName = keyof typeof sourceSchemas

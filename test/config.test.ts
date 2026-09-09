@@ -76,6 +76,8 @@ test('config: known sources are validated by their typed schema', () => {
   bad({ github: { repos: ['acme/web'] } })
   bad({ github: { repos: ['acme/web'], token: 'env:T', include: ['wiki'] } })
   bad({ granola: { token: 'env:T', folders: ['Acme'], endpoint: 'not a url' } })
+  bad({ notion: { roots: ['abc'] } })
+  bad({ notion: { token: 'literal', roots: ['abc'] } })
   bad({ granola: { token: 'literal-token', folders: ['Acme'] } })
 
   const ok = configSchema.parse({
@@ -84,8 +86,10 @@ test('config: known sources are validated by their typed schema', () => {
       slack: { channels: ['#a'], token: 'env:SLACK_TOKEN', overlap_days: 3 },
       github: { repos: ['acme/web', 'acme/mobile'], token: 'env:LORE_GITHUB_TOKEN', include: ['issues', 'commits'] },
       granola: { token: 'env:GRANOLA_TOKEN', folders: ['Acme'], attendee_domains: ['acme.com'], transcripts: false },
+      notion: { token: 'env:NOTION_TOKEN', roots: ['https://www.notion.so/x/Docs-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d'], settle_minutes: 10 },
     },
   })
+  assert.deepEqual(ok.sources.notion.roots?.length, 1)
   assert.deepEqual(ok.sources.github.repos, ['acme/web', 'acme/mobile'])
 })
 
