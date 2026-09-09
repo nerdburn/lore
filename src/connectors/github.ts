@@ -376,11 +376,22 @@ function githubClient(apiBase: string, token: string | undefined): Api {
       while (url) {
         const res = await request(url)
         out.push(...((await res.json()) as T[]))
-        url = nextLink(res.headers.get('link'))
+        url = rebase(nextLink(res.headers.get('link')), apiBase)
       }
       return out
     },
   }
+}
+
+/**
+ * Proxies (exe.dev's GitHub integration, an http-proxy to api.github.com)
+ * pass GitHub's Link headers through untouched, so "next" points at
+ * https://api.github.com/… — following it verbatim would step off the proxy
+ * and lose the injected credentials. Re-root such URLs onto apiBase.
+ */
+export function rebase(url: string | undefined, apiBase: string): string | undefined {
+  if (!url || apiBase === API) return url
+  return url.startsWith(`${API}/`) ? `${apiBase}${url.slice(API.length)}` : url
 }
 
 export function nextLink(header: string | null): string | undefined {

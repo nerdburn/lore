@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { parse } from 'yaml'
-import { github, nextLink, readWorkTable, type WorkItem } from '../src/connectors/github.js'
+import { github, nextLink, readWorkTable, rebase, type WorkItem } from '../src/connectors/github.js'
 import type { ConnectorContext } from '../src/types.js'
 
 /** A fake GitHub REST API. Tests fill `repos[owner/repo]` with fixtures. */
@@ -251,6 +251,33 @@ test('github: pagination follows Link headers', async () => {
   assert.equal(nextLink('<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=9>; rel="last"'), 'https://api.github.com/x?page=2')
   assert.equal(nextLink('<https://api.github.com/x?page=1>; rel="prev"'), undefined)
   assert.equal(nextLink(null), undefined)
+})
+
+test('github: Link "next" URLs from a proxy are re-rooted onto api_base', () => {
+  assert.equal(rebase('https://api.github.com/repositories/1/commits?page=2', 'https://github.int.exe.xyz/api/v3'), 'https://github.int.exe.xyz/api/v3/repositories/1/commits?page=2')
+  assert.equal(rebase('https://api.github.com/x?page=2', 'https://api.github.com'), 'https://api.github.com/x?page=2', 'no proxy → untouched')
+  assert.equal(rebase('https://elsewhere.example/x', 'https://github.int.exe.xyz/api/v3'), 'https://elsewhere.example/x', 'foreign hosts untouched')
+  assert.equal(rebase(undefined, 'https://github.int.exe.xyz/api/v3'), undefined)
+})
+
+test('github: pagination through a proxy stays on the proxy', async () => {
+  const g = fakeGithub()
+  g.repos['acme/web'] = { issues: Array.from({ length: 150 }, (_, i) => issue(i + 1)) }
+  // The fake emits Link headers on its own host; emulate a proxy that rewrites
+  // them to api.github.com the way GitHub's real headers arrive.
+  const inner = globalThis.fetch
+  const seen: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    seen.push(url)
+    const real = url.replace('http://gh.int.exe.xyz', 'https://api.github.com')
+    const res = await inner(real, { ...init, headers: { ...(init?.headers as Record<string, string>), Authorization: 'Bearer ghp_test' } })
+    return res
+  }) as typeof fetch
+  const { docs } = await github.fetch(ctx({ config: { repos: ['acme/web'], api_base: 'http://gh.int.exe.xyz', include: ['issues'] } }))
+  assert.equal(docs.length, 150)
+  assert.ok(seen.every((u) => u.startsWith('http://gh.int.exe.xyz/')), seen.find((u) => !u.startsWith('http://gh.int.exe.xyz/')))
+  assert.ok(seen.some((u) => u.includes('page=2')))
 })
 
 test('github: an inaccessible repo is a reported error; other repos still sync', async () => {
