@@ -86,7 +86,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (e.g. the live GitHub issue list — authoritative for what is open/in progress/done), and recent weekly reports, with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports.',
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (the live GitHub issue/PR list — authoritative for delivery state; open items in full, closed/merged as counts, full table via lore_read of the given file), and recent weekly reports, with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports.',
       inputSchema: { category: z.string().optional() },
     },
     async ({ category }) => {

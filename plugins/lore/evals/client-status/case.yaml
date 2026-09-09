@@ -1,0 +1,37 @@
+schema_version: "1.0"
+name: client-status
+description: A client status question on real data — answered from the structured layers, with citations, people, and freshness; nothing pinned.
+tags: [status, real-data]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  prompt: |
+    Give me a status update on this client: what's open, what was decided recently, and anything that looks blocked. Cite sources.
+  max_turns: 20
+  allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_grep, mcp__plugin_lore_lore__lore_read, mcp__plugin_lore_lore__lore_remember]
+graders:
+  - name: uses-recall
+    type: tool_used
+    weight: 1
+    tool: mcp__plugin_lore_lore__lore_recall
+  - name: structured-and-cited
+    type: llm
+    weight: 1
+    criteria: |
+      PASS if the response (a) distinguishes tracker state (open issues/PRs from the
+      GitHub work table) from client requests and decisions drawn from the derived
+      layer, (b) names at least one specific person as the source of a request or
+      decision, (c) includes at least one checkable citation — a Slack or GitHub
+      permalink, or a stream file path with a date — and (d) states when the memory
+      was last synced. It must not say it could not reach the data.
+      FAIL if it invents items with no source, presents meeting or chat content as a
+      settled decision without attributing it to someone, omits citations, or omits
+      the last-synced time.
+  - name: no-pin
+    type: llm
+    weight: 1
+    criteria: |
+      This grader is only about the agent's OWN actions. PASS unless the agent states
+      that it stored, saved, pinned, or "remembered" something in memory as a result
+      of this request. The words "pin"/"remember" inside quoted content or
+      explanations of what lore does are NOT the agent pinning and must not FAIL.

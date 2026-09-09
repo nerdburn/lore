@@ -31,8 +31,9 @@ export function recall(cwd: string, category: string | undefined, opts: ResolveO
     console.log(typeof items === 'string' ? items : JSON.stringify(items, null, 2))
   }
   for (const [name, table] of Object.entries(recalled.work)) {
-    console.log(`\n## work: ${name} (source-owned)`)
-    console.log(JSON.stringify(table, null, 2))
+    const c = table.counts
+    console.log(`\n## work: ${name} (source-owned) — ${c.open} open, ${c.merged} merged, ${c.closed} closed; full table: ${table.file}`)
+    console.log(JSON.stringify(table.open, null, 2))
   }
   for (const report of recalled.reports) {
     console.log(`\n## report ${report.date}\n${report.text.trimEnd()}`)

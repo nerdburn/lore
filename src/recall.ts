@@ -18,11 +18,20 @@ export interface Recalled {
   /**
    * Source-owned work tables (context/work/<source>/<scope>.yaml), keyed
    * "source/scope". The source system is authoritative for these — GitHub
-   * Issues state, not an LLM's reading of it.
+   * Issues state, not an LLM's reading of it. Compact by design: open items
+   * in full, closed ones as counts — a real repo has hundreds of closed
+   * items and recall is the "what's outstanding" call. The full table is one
+   * `lore_read` of `file` away.
    */
-  work: Record<string, unknown>
+  work: Record<string, WorkSummary>
   /** Most recent weekly reports, newest first. */
   reports: { date: string; text: string }[]
+}
+
+export interface WorkSummary {
+  file: string
+  counts: { open: number; closed: number; merged: number }
+  open: unknown[]
 }
 
 export const REPORTS_CATEGORY = 'reports'
@@ -58,7 +67,7 @@ export function recallData(
     }
   }
 
-  const work: Record<string, unknown> = {}
+  const work: Record<string, WorkSummary> = {}
   const workDir = join(root, 'context/work')
   if ((!category || category === WORK_CATEGORY) && existsSync(workDir)) {
     for (const source of readdirSync(workDir).sort()) {
@@ -66,7 +75,19 @@ export function recallData(
       if (!statSync(dir).isDirectory()) continue
       for (const entry of readdirSync(dir).sort()) {
         if (!/\.ya?ml$/.test(entry)) continue
-        work[`${source}/${entry.replace(/\.ya?ml$/, '')}`] = parse(readFileSync(join(dir, entry), 'utf8'))
+        const rel = `context/work/${source}/${entry}`
+        const items = (parse(readFileSync(join(dir, entry), 'utf8')) as Record<string, unknown>[] | null) ?? []
+        const list = Array.isArray(items) ? items : []
+        const open = list.filter((i) => i.state === 'open')
+        work[`${source}/${entry.replace(/\.ya?ml$/, '')}`] = {
+          file: rel,
+          counts: {
+            open: open.length,
+            closed: list.filter((i) => i.state !== 'open' && !i.merged).length,
+            merged: list.filter((i) => i.merged === true).length,
+          },
+          open,
+        }
       }
     }
   }

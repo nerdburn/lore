@@ -67,3 +67,31 @@ test('recall CLI: human output lists pins, derived sections and reports', async 
   const none = await captureConsole(() => recall(root, 'nothing-here', { context: root }))
   assert.match(none.out, /nothing recalled for category "nothing-here"/)
 })
+
+test('recall: work tables are summarised — open items in full, the rest as counts, with the file to read', () => {
+  const root = makeContextRepo({
+    'context/work/github/acme__web.yaml': `# Source-owned by GitHub
+- number: 3
+  type: pr
+  title: Open PR
+  state: open
+  merged: false
+- number: 2
+  type: pr
+  title: Merged PR
+  state: closed
+  merged: true
+- number: 1
+  type: issue
+  title: Closed issue
+  state: closed
+`,
+  })
+  const r = recallData(root, ACME)
+  const w = r.work['github/acme__web']
+  assert.equal(w.file, 'context/work/github/acme__web.yaml')
+  assert.deepEqual(w.counts, { open: 1, closed: 1, merged: 1 })
+  assert.deepEqual(w.open.map((i) => (i as { number: number }).number), [3])
+  assert.deepEqual(Object.keys(recallData(root, ACME, 'work').work), ['github/acme__web'])
+  assert.deepEqual(recallData(root, ACME, 'requests').work, {})
+})

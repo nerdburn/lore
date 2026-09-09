@@ -42,7 +42,9 @@ history, say so, and never present it as current state.
    own record, written by sync, never by an LLM. For anything about delivery
    state — what is open, closed, merged, assigned, labelled, in which
    milestone — this is the answer. Do not infer issue state from Slack or
-   from `derived` when a work table covers the repo.
+   from `derived` when a work table covers the repo. Recall returns open
+   items in full and closed/merged as counts; for a closed item's details,
+   `lore_read` the `file` it names.
 3. **Derived artifacts** (`derived`: `requests`, `decisions`, `roadmap`,
    `contradictions`) — LLM-extracted from the raw material; every item cites
    a source. Good for "what has the client asked for" and "what was decided";

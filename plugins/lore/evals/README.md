@@ -20,6 +20,12 @@ pointer for the plugin's `lore mcp` server. Pins made by the explicit-pin
 case land in that throwaway copy, never in your cache. MCP
 responses are recorded into `mocks/` on the first run and replayed after
 (`--mocks off` to hit the live server).
+`client-status` is the one case meant for real client data: its scaffold copies
+whichever context repo `eval_repo` in `~/.lore/config.json` names (default
+`lore-smoke`), and its rubric is client-agnostic — structure, attribution,
+citations, freshness — so nothing about a client ever lands in this repo.
+Set `"eval_repo": "lore-<client>"` locally to run it against a live client.
+
 The default ablation arm runs each case without the plugin, so the report
 shows what the skill adds. The judge defaults to haiku; pass
 `--judge-model sonnet` when a rubric verdict looks wrong before loosening the
