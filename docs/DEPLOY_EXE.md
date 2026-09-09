@@ -119,7 +119,7 @@ it: `journalctl -u lore-sync` shows `[sdk:<model>]` on the extracting line.
 
 | Unit | Started by | Does | Typical time |
 |---|---|---|---|
-| `lore-sync.service` | `lore-sync.timer`, hourly | every client: sync → commit → push → fold → commit → push | minutes (the fold) |
+| `lore-sync.service` | `lore-sync.timer`, hourly; `lore refresh --trigger --fold`, `lore_sync_now` with `fold: true` | every client: sync → commit → push → fold → commit → push | a minute or two for a routine delta; longer for a backfill |
 | `lore-sync-now.service` | `lore refresh --trigger`, `lore_sync_now` | every client: sync → commit → push. Never folds | under a minute |
 
 Both run `lore run-all` on the same work clones and may overlap: per-client

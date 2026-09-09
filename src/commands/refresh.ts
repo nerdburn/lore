@@ -13,6 +13,8 @@ export interface RefreshResult {
   host: 'ran' | 'waited' | 'skipped-recent' | 'unavailable' | 'not-requested'
   /** How the host run ended, when host is 'ran' or 'waited'. A failed run is a result, not an error. */
   outcome?: 'success' | 'failed'
+  /** True when the trigger asked for sync + fold (the hourly unit) rather than sync only. */
+  fold?: true
   note?: string
 }
 
@@ -27,20 +29,37 @@ const HOST_TIMEOUT_MS = 45 * 60_000
 const STATUS_TIMEOUT_MS = 60_000
 
 /**
- * Which unit "sync now" means on the host. Newer hosts have a sync-only
- * unit (`lore-sync-now.service`, seconds) beside the hourly sync+fold unit
- * (`lore-sync.service`, minutes); older hosts only the latter. Every command
- * below resolves `$U` first so a laptop on the new CLI still works against a
- * host that has not been re-provisioned.
+ * Which unit a trigger means on the host. Newer hosts have a sync-only unit
+ * (`lore-sync-now.service`, seconds) beside the hourly sync+fold unit
+ * (`lore-sync.service`, minutes); older hosts only the latter. `--fold` asks
+ * for the sync+fold unit outright. Every command resolves `$U` first so a
+ * laptop on the new CLI still works against a host that has not been
+ * re-provisioned.
  */
 export const UNIT_PRELUDE = 'U=$(systemctl cat lore-sync-now.service >/dev/null 2>&1 && echo lore-sync-now.service || echo lore-sync.service)'
-/** Prints the unit's ActiveState; `is-active` exits non-zero for anything but `active`, so swallow that. */
-export const STATE_CMD = `${UNIT_PRELUDE}; systemctl is-active $U || true`
+export const FOLD_UNIT_PRELUDE = 'U=lore-sync.service'
 const SHOW_CMD = 'systemctl show -p Result,ExecMainStatus $U'
-/** Block until the in-flight run finishes (a oneshot is `activating` while ExecStart runs), then report how it ended. */
-export const WAIT_CMD = `${UNIT_PRELUDE}; while case "$(systemctl is-active $U)" in activating|active|deactivating) true;; *) false;; esac; do sleep 5; done; ${SHOW_CMD}`
-/** `systemctl start` on a oneshot blocks until it exits; its exit code is not the signal, the unit's Result is. */
-export const START_CMD = `${UNIT_PRELUDE}; sudo systemctl start $U; ${SHOW_CMD}`
+
+export interface HostCommands {
+  /** Prints the unit's ActiveState; `is-active` exits non-zero for anything but `active`, so swallow that. */
+  state: string
+  /** Block until the in-flight run finishes (a oneshot is `activating` while ExecStart runs), then report how it ended. */
+  wait: string
+  /** `systemctl start` on a oneshot blocks until it exits; its exit code is not the signal, the unit's Result is. */
+  start: string
+}
+
+export function hostCommands(fold: boolean): HostCommands {
+  const prelude = fold ? FOLD_UNIT_PRELUDE : UNIT_PRELUDE
+  return {
+    state: `${prelude}; systemctl is-active $U || true`,
+    wait: `${prelude}; while case "$(systemctl is-active $U)" in activating|active|deactivating) true;; *) false;; esac; do sleep 5; done; ${SHOW_CMD}`,
+    start: `${prelude}; sudo systemctl start $U; ${SHOW_CMD}`,
+  }
+}
+
+/** The sync-only commands, as constants for callers and tests. */
+export const { state: STATE_CMD, wait: WAIT_CMD, start: START_CMD } = hostCommands(false)
 
 const IN_FLIGHT = new Set(['activating', 'active', 'deactivating'])
 
@@ -49,16 +68,19 @@ const IN_FLIGHT = new Set(['activating', 'active', 'deactivating'])
  * clone so reads see everything the host has committed; with `trigger`, first
  * asks the host to run its sync-only service and waits for it — raw streams
  * land in about a minute; the LLM fold that updates derived artifacts stays
- * on the hourly timer, so `lastExtract` may lag `lastSync`. Only possible when the remote is an SSH target the
- * caller can reach — that is how self-hosted lore is wired. A run already in
- * flight (the timer fired, or another caller triggered) is waited out rather
- * than re-triggered; a sync that finished within the last 10 minutes is not
- * re-run unless forced. The run's outcome comes back in the result — only
- * failing to reach the host throws.
+ * on the hourly timer, so `lastExtract` may lag `lastSync`. With `fold` it
+ * starts the hourly sync+fold unit instead and waits for that (a minute or
+ * two for a routine delta). Only possible when the remote is an SSH target
+ * the caller can reach — that is how self-hosted lore is wired. A run of
+ * that unit already in flight (the timer fired, or another caller
+ * triggered) is waited out rather than re-triggered; a sync (or, with fold,
+ * a fold) that finished within the last 10 minutes is not re-run unless
+ * forced. The run's outcome comes back in the result — only failing to
+ * reach the host throws.
  */
 export function refresh(
   cwd: string,
-  opts: ResolveOptions & { trigger?: boolean; force?: boolean },
+  opts: ResolveOptions & { trigger?: boolean; force?: boolean; fold?: boolean },
   deps: RefreshDeps = { ssh: sshExec },
 ): RefreshResult {
   const ctx = resolveContext(cwd, { ...opts, pull: opts.pull ?? true })
@@ -73,23 +95,27 @@ export function refresh(
       host = 'unavailable'
       note = ctx.mode === 'cache' ? 'remote is not an SSH host — the host syncs on its own timer' : 'local context repo — run `lore sync` here'
     } else {
-      const state = deps.ssh(target, STATE_CMD, STATUS_TIMEOUT_MS).trim()
+      const fold = opts.fold === true
+      const cmd = hostCommands(fold)
+      const what = fold ? 'sync + fold' : 'sync'
+      const state = deps.ssh(target, cmd.state, STATUS_TIMEOUT_MS).trim()
       const now = deps.now?.() ?? Date.now()
-      const lastMs = before.lastSync ? new Date(before.lastSync).getTime() : 0
+      const last = fold ? before.lastExtract : before.lastSync
+      const lastMs = last ? new Date(last).getTime() : 0
       if (IN_FLIGHT.has(state)) {
         host = 'waited'
-        ;({ outcome, note } = unitOutcome(deps.ssh(target, WAIT_CMD, HOST_TIMEOUT_MS), 'a sync was already running; waited for it'))
+        ;({ outcome, note } = unitOutcome(deps.ssh(target, cmd.wait, HOST_TIMEOUT_MS), `a ${what} was already running; waited for it`))
       } else if (!opts.force && now - lastMs < MIN_INTERVAL_MS) {
         host = 'skipped-recent'
-        note = `host synced ${Math.round((now - lastMs) / 60_000)} min ago; not re-running (force to override)`
+        note = `host ${fold ? 'folded' : 'synced'} ${Math.round((now - lastMs) / 60_000)} min ago; not re-running (force to override)`
       } else {
         host = 'ran'
-        ;({ outcome, note } = unitOutcome(deps.ssh(target, START_CMD, HOST_TIMEOUT_MS)))
+        ;({ outcome, note } = unitOutcome(deps.ssh(target, cmd.start, HOST_TIMEOUT_MS)))
       }
       if (outcome && ctx.mode === 'cache') git(ctx.root, 'pull', '--ff-only', '--quiet')
     }
   }
-  return { before, after: freshness(ctx), host, ...(outcome ? { outcome } : {}), ...(note ? { note } : {}) }
+  return { before, after: freshness(ctx), host, ...(outcome ? { outcome } : {}), ...(opts.trigger && opts.fold ? { fold: true as const } : {}), ...(note ? { note } : {}) }
 }
 
 /** Parse `systemctl show -p Result,ExecMainStatus` into an outcome; `Result=success` is the only success. */

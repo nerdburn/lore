@@ -166,10 +166,11 @@ contextual(
     .command('refresh')
     .description('pull the latest synced memory; --trigger asks the self-hosted host to sync now and waits (~a minute; the fold stays on the hourly timer), or waits out a run already in flight')
     .option('--trigger', 'run the host sync service now (SSH to the configured remote)')
-    .option('--force', 're-run even if the host synced within 10 minutes'),
+    .option('--fold', 'with --trigger: run sync + the LLM fold (the hourly unit) so derived artifacts update too; a minute or two')
+    .option('--force', 're-run even if the host synced (or, with --fold, folded) within 10 minutes'),
 ).action((opts) => {
   const r = refresh(root, opts)
-  console.log(`host: ${r.host}${r.outcome ? ` (${r.outcome})` : ''}${r.note ? ` — ${r.note}` : ''}`)
+  console.log(`host: ${r.host}${r.fold ? ' [sync + fold]' : ''}${r.outcome ? ` (${r.outcome})` : ''}${r.note ? ` — ${r.note}` : ''}`)
   console.log(`synced: ${r.before.lastSync ?? 'never'} → ${r.after.lastSync ?? 'never'}; extracted: ${r.before.lastExtract ?? 'never'} → ${r.after.lastExtract ?? 'never'}`)
 })
 

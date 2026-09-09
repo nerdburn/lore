@@ -97,7 +97,9 @@ look for that in Slack or a pin before stating it as settled.
   `lore_grep`/`lore_read`; the derived lists behind `lore_recall` (requests,
   decisions, roadmap) are updated by the hourly fold, so after a sync-now
   check the streams for anything newer than `lastExtract` before answering
-  from recall. Check `outcome`: a `failed` host run comes back in the result
+  from recall — or, when the user needs recall itself current (status,
+  open requests), call `lore_sync_now` with `fold: true`, which also runs
+  the fold and takes a minute or two longer. Check `outcome`: a `failed` host run comes back in the result
   rather than as an error — say so instead of presenting the data as fresh.
   With `trigger: false` it only pulls what the host already has.
 - Zero grep hits ≠ "it never happened" — try synonyms and looser patterns;
