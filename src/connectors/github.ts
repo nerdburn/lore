@@ -376,7 +376,7 @@ function githubClient(apiBase: string, token: string | undefined): Api {
       while (url) {
         const res = await request(url)
         out.push(...((await res.json()) as T[]))
-        url = rebase(nextLink(res.headers.get('link')), apiBase)
+        url = nextPage(nextLink(res.headers.get('link')), `${apiBase}${path}`)
       }
       return out
     },
@@ -384,14 +384,19 @@ function githubClient(apiBase: string, token: string | undefined): Api {
 }
 
 /**
- * Proxies (exe.dev's GitHub integration, an http-proxy to api.github.com)
- * pass GitHub's Link headers through untouched, so "next" points at
- * https://api.github.com/… — following it verbatim would step off the proxy
- * and lose the injected credentials. Re-root such URLs onto apiBase.
+ * Next-page URL for a paginated request. GitHub's Link header points at
+ * api.github.com and often at the id form (/repositories/<id>/issues), which
+ * a proxy (exe.dev's GitHub integration, an http-proxy) either can't reach
+ * or refuses. Only the query string carries pagination state, so keep our
+ * own base + path and adopt the link's query.
  */
-export function rebase(url: string | undefined, apiBase: string): string | undefined {
-  if (!url || apiBase === API) return url
-  return url.startsWith(`${API}/`) ? `${apiBase}${url.slice(API.length)}` : url
+export function nextPage(link: string | undefined, base: string): string | undefined {
+  if (!link) return undefined
+  try {
+    return `${base}${new URL(link).search}`
+  } catch {
+    return undefined
+  }
 }
 
 export function nextLink(header: string | null): string | undefined {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { parse } from 'yaml'
-import { github, nextLink, readWorkTable, rebase, type WorkItem } from '../src/connectors/github.js'
+import { github, nextLink, nextPage, readWorkTable, type WorkItem } from '../src/connectors/github.js'
 import type { ConnectorContext } from '../src/types.js'
 
 /** A fake GitHub REST API. Tests fill `repos[owner/repo]` with fixtures. */
@@ -253,26 +253,37 @@ test('github: pagination follows Link headers', async () => {
   assert.equal(nextLink(null), undefined)
 })
 
-test('github: Link "next" URLs from a proxy are re-rooted onto api_base', () => {
-  assert.equal(rebase('https://api.github.com/repositories/1/commits?page=2', 'https://github.int.exe.xyz/api/v3'), 'https://github.int.exe.xyz/api/v3/repositories/1/commits?page=2')
-  assert.equal(rebase('https://api.github.com/x?page=2', 'https://api.github.com'), 'https://api.github.com/x?page=2', 'no proxy → untouched')
-  assert.equal(rebase('https://elsewhere.example/x', 'https://github.int.exe.xyz/api/v3'), 'https://elsewhere.example/x', 'foreign hosts untouched')
-  assert.equal(rebase(undefined, 'https://github.int.exe.xyz/api/v3'), undefined)
+test('github: next page keeps our base + path and adopts only the link query', () => {
+  assert.equal(
+    nextPage('https://api.github.com/repositories/1314084084/issues?state=all&per_page=100&page=2', 'https://github.int.exe.xyz/api/v3/repos/acme/web/issues'),
+    'https://github.int.exe.xyz/api/v3/repos/acme/web/issues?state=all&per_page=100&page=2',
+  )
+  assert.equal(nextPage('https://api.github.com/repos/acme/web/issues?page=3', 'https://api.github.com/repos/acme/web/issues'), 'https://api.github.com/repos/acme/web/issues?page=3')
+  assert.equal(nextPage(undefined, 'x'), undefined)
+  assert.equal(nextPage('not a url', 'x'), undefined)
 })
 
 test('github: pagination through a proxy stays on the proxy', async () => {
   const g = fakeGithub()
   g.repos['acme/web'] = { issues: Array.from({ length: 150 }, (_, i) => issue(i + 1)) }
-  // The fake emits Link headers on its own host; emulate a proxy that rewrites
-  // them to api.github.com the way GitHub's real headers arrive.
+  // Emulate a proxy in front of GitHub: requests arrive on the proxy host;
+  // GitHub's Link headers come back pointing at api.github.com in the
+  // /repositories/<id> form, and the proxy rejects that form outright.
   const inner = globalThis.fetch
   const seen: string[] = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     seen.push(url)
+    if (url.includes('/repositories/')) return new Response('names no repository', { status: 403 })
     const real = url.replace('http://gh.int.exe.xyz', 'https://api.github.com')
     const res = await inner(real, { ...init, headers: { ...(init?.headers as Record<string, string>), Authorization: 'Bearer ghp_test' } })
-    return res
+    const link = res.headers.get('link')
+    if (!link) return res
+    const body = await res.text()
+    return new Response(body, {
+      status: res.status,
+      headers: { 'content-type': 'application/json', link: link.replace(/https:\/\/api\.github\.com\/repos\/acme\/web\//g, 'https://api.github.com/repositories/99/') },
+    })
   }) as typeof fetch
   const { docs } = await github.fetch(ctx({ config: { repos: ['acme/web'], api_base: 'http://gh.int.exe.xyz', include: ['issues'] } }))
   assert.equal(docs.length, 150)
