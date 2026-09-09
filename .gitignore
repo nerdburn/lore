@@ -3,3 +3,5 @@ dist/
 .lore/
 .env
 .DS_Store
+plugins/lore/evals/results/
+plugins/lore/evals/mocks/

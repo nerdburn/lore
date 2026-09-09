@@ -1,0 +1,27 @@
+schema_version: "1.0"
+name: explicit-pin
+description: An explicit "remember" instruction results in exactly one pin, confirmed with its id.
+tags: [remember]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  prompt: |
+    Remember that the smoke project's stakeholder demo is on 2026-10-01. Put it in the decisions category.
+  max_turns: 14
+  allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_remember]
+graders:
+  - name: pinned
+    type: tool_used
+    weight: 1
+    tool: mcp__plugin_lore_lore__lore_remember
+  - name: confirms
+    type: llm
+    weight: 1
+    criteria: |
+      PASS if the response states, in past tense, that the fact was pinned/stored in
+      project memory, and includes both the date 2026-10-01 and the category
+      "decisions". Quoting a pin id (e.g. pin-0001), the stored wording, or the
+      last-sync time is fine and does not count against it.
+      FAIL only if the response says it could not pin, asks for permission or
+      confirmation before pinning, stores it somewhere other than lore (a local
+      memory file), or leaves it unclear whether the pin happened.

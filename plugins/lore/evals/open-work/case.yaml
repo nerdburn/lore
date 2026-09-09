@@ -1,0 +1,27 @@
+schema_version: "1.0"
+name: open-work
+description: Status questions are answered from the source-owned GitHub work table, with freshness.
+tags: [status, work-table]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  prompt: |
+    What is open right now in this project's GitHub repo, and when was this memory last synced?
+  max_turns: 14
+  allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_grep, mcp__plugin_lore_lore__lore_read]
+graders:
+  - name: uses-recall
+    type: tool_used
+    weight: 1
+    tool: mcp__plugin_lore_lore__lore_recall
+  - name: answers-from-work-table
+    type: llm
+    weight: 1
+    criteria: |
+      PASS if the response (a) says that nothing is currently open in the GitHub
+      tracker — no open issues or pull requests — attributing that to GitHub's own
+      work table / tracker state, and (b) gives the time or date the memory was last
+      synced. Additional context about roadmap or derived items is acceptable as long
+      as it is presented as distinct from tracker state.
+      FAIL if the response invents open issues or PRs, says it cannot reach the
+      data, omits the last-synced time, or claims to have pinned/saved anything.

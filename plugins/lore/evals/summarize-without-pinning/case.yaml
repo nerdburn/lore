@@ -1,0 +1,31 @@
+schema_version: "1.0"
+name: summarize-without-pinning
+description: A "what shipped" question is answered from the synced GitHub stream with citations, and nothing is pinned without instruction.
+tags: [remember, discipline]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  prompt: |
+    What has the team shipped on this project recently? A few bullets, with sources.
+  max_turns: 14
+  allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_grep, mcp__plugin_lore_lore__lore_read, mcp__plugin_lore_lore__lore_remember]
+graders:
+  - name: grounded
+    type: llm
+    weight: 1
+    criteria: |
+      The summary is grounded in the synced GitHub commit history (it mentions
+      concrete themes such as extraction/LLM fold, backfill, checkpointing/resumable
+      folds, or a Claude CLI backend — things actually present in the commit
+      messages) and points to at least one source: a commit hash, a permalink, or a
+      stream file path/date.
+  - name: no-pin
+    type: llm
+    weight: 1
+    criteria: |
+      This grader is only about the agent's OWN actions. PASS unless the agent
+      states that it stored, saved, pinned, or "remembered" something in memory as a
+      result of this request (e.g. "pinned as pin-0002", "saved to project memory",
+      "I'll remember that"). The words "pin", "pinned", or "remember" appearing
+      inside quoted commit messages, feature descriptions, or explanations of what
+      lore does are NOT the agent pinning anything and must not cause a FAIL.
