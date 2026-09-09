@@ -9,7 +9,7 @@ the VM's disk.
 laptop / agent ── ssh clone/pull/push ──▶  VM  /srv/lore/repos/<client>.git   (bare, the origin)
                                             │   /srv/lore/work/<client>       (clone the timer syncs in)
                                             │   systemd: lore-sync.timer → lore run-all (hourly)
-                                            └── http://slack.int.exe.xyz, github.int…, granola.int…  (tokens injected)
+                                            └── https://slack.int.exe.xyz, github.int…, granola.int…  (tokens injected)
 ```
 
 ## 1. VM
@@ -38,7 +38,7 @@ ssh exe.dev integrations add http-proxy --name granola --target https://mcp.gran
 ssh exe.dev integrations add github --name lore-code --repository acme/web --readonly --attach tag:lore   # per client repo
 ```
 
-Inside the VM these become `http://slack.int.exe.xyz/api`, `http://granola.int.exe.xyz/mcp`
+Inside the VM these become `https://slack.int.exe.xyz/api`, `https://granola.int.exe.xyz/mcp`
 and `https://github.int.exe.xyz/acme/web`. The GitHub connector uses the REST
 API rather than git, so for it use an http-proxy to `https://api.github.com`
 with a fine-grained token: `--name github-api --target https://api.github.com --bearer github_pat_…`.
@@ -51,9 +51,9 @@ with a fine-grained token: `--name github-api --target https://api.github.com --
 {
   "remote": "exedev@lore-host.exe.xyz:/srv/lore/repos",
   "proxy": {
-    "slack":   "http://slack.int.exe.xyz/api",
-    "github":  "http://github-api.int.exe.xyz",
-    "granola": "http://granola.int.exe.xyz/mcp"
+    "slack":   "https://slack.int.exe.xyz/api",
+    "github":  "https://github-api.int.exe.xyz",
+    "granola": "https://granola.int.exe.xyz/mcp"
   }
 }
 ```
