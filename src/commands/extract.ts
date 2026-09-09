@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
@@ -10,7 +10,8 @@ import type { Pin } from '../types.js'
 /**
  * LLM extraction fold: streams/ + derived/ → updated derived/. (SPEC §5)
  *
- * - Input: current artifacts + only stream docs since state.lastExtract
+ * - Input: current artifacts + only stream files whose content changed since
+ *   they were last folded (state.extracted tracks path → length)
  * - Update, don't rewrite: item ids and wording are preserved unless
  *   evidence changes them
  * - Every new/changed item cites source permalinks
@@ -136,9 +137,11 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
   const reportDue =
     config.extract.includes('weekly-report') && (opts.report || isToday(config.report?.day ?? 'friday'))
 
-  // Day-granular incremental window: stream files are one file per day.
-  const sinceDay = state.lastExtract?.slice(0, 10) ?? ''
-  const newFiles = streamFiles(root).filter((f) => f.day >= sinceDay)
+  // New material = any stream file whose content changed since it was last
+  // folded. Day-files only ever grow (append-only streams), so length is a
+  // sufficient fingerprint and cheap to keep in state.json.
+  state.extracted ??= {}
+  const newFiles = streamFiles(root).filter((f) => state.extracted![f.path] !== f.text.length)
 
   if (wantArtifacts.length > 0 && newFiles.length > 0) {
     const artifacts: Record<string, unknown[]> = {}
@@ -161,24 +164,25 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       const user = `Today is ${today}.${clientNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
-      const result = llm === 'sdk' ? await sdkFold(user) : cliFold(user)
+      const result = await withRetry(() => (llm === 'sdk' ? sdkFold(user) : Promise.resolve(cliFold(user))), 2, (attempt, err) =>
+        console.warn(`  ⚠ batch ${i + 1} attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`),
+      )
       for (const name of wantArtifacts) {
         const merged = acceptFold(name, artifacts[name], (result as unknown as Record<string, unknown[]>)[name])
         if (merged.rejected) console.warn(`  ⚠ ${name}: model returned ${merged.rejected} — keeping the previous ${artifacts[name].length} item(s)`)
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
-      // Checkpoint after every batch — artifacts to disk, fold position to
-      // state.lastExtract — so a killed fold resumes at the next batch
-      // instead of refolding from the start. Batches hold whole day-files,
-      // so the batch's last day is a safe (inclusive) resume point.
+      // Checkpoint after every batch — artifacts to disk, consumed files to
+      // state.extracted — so a killed fold resumes at the next batch instead
+      // of refolding from the start.
       for (const name of wantArtifacts) {
         writeFileSync(
           join(root, `context/derived/${name}.yaml`),
           `# Derived by \`lore extract\` — regenerable; do not hand-edit.\n` + stringify(artifacts[name]),
         )
       }
-      state.lastExtract = batches[i].lastDay
+      for (const f of batches[i].files) state.extracted[f.path] = f.length
       saveState(root, state)
       console.log(
         `  batch ${i + 1}/${batches.length}: ${wantArtifacts.map((n) => `${artifacts[n].length} ${n}`).join(', ')}`,
@@ -263,6 +267,29 @@ function cliFold(user: string): FoldResult {
 }
 
 /**
+ * Retry transient LLM failures (dropped connections, 5xx, overload) with a
+ * short backoff. Refusals and truncation are deterministic and not retried.
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries: number,
+  onRetry: (attempt: number, err: unknown) => void = () => {},
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const permanent = /refused|truncated|no JSON|not valid JSON|missing array/i.test(message)
+      if (permanent || attempt > retries) throw err
+      onRetry(attempt, err)
+      await sleep(Math.min(5000 * 2 ** (attempt - 1), 30_000))
+    }
+  }
+}
+
+/**
  * The fold is update-only: items may be added or changed, never dropped.
  * A model that returns fewer items than it was given (or loses existing
  * ids) has failed the batch for that artifact — keep the previous list
@@ -326,36 +353,52 @@ function cliCall(system: string, user: string): string {
 
 // ---- shared helpers ----
 
+export interface StreamFile {
+  /** Relative to the context root, e.g. "context/streams/slack/#acme/2026-07-01.md". */
+  path: string
+  day: string
+  text: string
+}
+
 /** All stream files with their day, sorted ascending — the fold order. */
-function streamFiles(root: string): { day: string; text: string }[] {
-  const files: { day: string; text: string }[] = []
+export function streamFiles(root: string): StreamFile[] {
+  const files: StreamFile[] = []
   const base = join(root, 'context/streams')
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name)
       if (entry.isDirectory()) walk(path)
       else if (/^\d{4}-\d{2}-\d{2}\.md$/.test(entry.name)) {
-        files.push({ day: entry.name.slice(0, 10), text: readFileSync(path, 'utf8') })
+        files.push({ path: relative(root, path), day: entry.name.slice(0, 10), text: readFileSync(path, 'utf8') })
       }
     }
   }
   if (existsSync(base)) walk(base)
-  return files.sort((a, b) => a.day.localeCompare(b.day))
+  return files.sort((a, b) => a.day.localeCompare(b.day) || a.path.localeCompare(b.path))
 }
 
-export function pack(files: { day: string; text: string }[], budget: number): { text: string; lastDay: string }[] {
-  const batches: { text: string; lastDay: string }[] = []
+export interface Batch {
+  text: string
+  lastDay: string
+  files: { path: string; length: number }[]
+}
+
+export function pack(files: Pick<StreamFile, 'day' | 'text'>[] & Partial<StreamFile>[], budget: number): Batch[] {
+  const batches: Batch[] = []
   let current = ''
   let lastDay = ''
+  let members: Batch['files'] = []
   for (const f of files) {
     if (current && current.length + f.text.length > budget) {
-      batches.push({ text: current, lastDay })
+      batches.push({ text: current, lastDay, files: members })
       current = ''
+      members = []
     }
     current += f.text + '\n\n'
     lastDay = f.day
+    members.push({ path: f.path ?? '', length: f.text.length })
   }
-  if (current) batches.push({ text: current, lastDay })
+  if (current) batches.push({ text: current, lastDay, files: members })
   return batches
 }
 

@@ -113,7 +113,7 @@ test('run-all: syncs every active bare repo, commits and pushes; archived skippe
   assert.deepEqual(result.clients['lore-old'], { status: 'archived', committed: false })
   assert.equal(result.clients['lore-bad'].status, 'failed')
   assert.match(result.clients['lore-bad'].error!, /boom/)
-  assert.equal(result.clients['lore-bad'].committed, false, 'a failed sync is not committed')
+  assert.equal(result.clients['lore-bad'].committed, true, 'even a failed run commits the progress it made (state health, partial docs)')
   assert.match(out, /=== lore-acme/) // the repo from the earlier test is picked up too — the directory is the registry
   assert.match(out, /run-all summary/)
 
@@ -130,6 +130,32 @@ test('run-all: syncs every active bare repo, commits and pushes; archived skippe
   const again = await captureConsole(() => runAll({ repos, work }, registry))
   assert.deepEqual(again.result.clients['lore-good'], { status: 'synced', committed: true })
   assert.ok(!existsSync(join(work, 'lore-good/context/junk.md')))
+})
+
+test('run-all: progress is committed even when the run fails, so checkpoints survive the next reset', async () => {
+  const bareDir = mkdtempSync(join(tmpdir(), 'lore-repos3-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'lore-work3-'))
+  const bare = join(bareDir, 'lore-flaky.git')
+  mkdirSync(bare)
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', bare])
+  const src = makeContextRepo({}, { project: 'flaky', sources: { good: {}, bad: {} } })
+  g(src, 'init', '--quiet', '-b', 'main')
+  g(src, 'config', 'user.email', 't@t')
+  g(src, 'config', 'user.name', 't')
+  g(src, 'add', '-A')
+  g(src, 'commit', '--quiet', '-m', 'scaffold')
+  g(src, 'push', '--quiet', bare, 'main')
+  const registry: Record<string, Connector> = {
+    good: { name: 'good', fetch: async () => ({ docs: [doc('good-1')], nextCursor: { n: 1 } }) },
+    bad: { name: 'bad', fetch: async () => { throw new Error('boom') } },
+  }
+  const { result } = await captureConsole(() => runAll({ repos: bareDir, work: workDir }, registry))
+  assert.equal(result.clients['lore-flaky'].status, 'failed')
+  assert.equal(result.clients['lore-flaky'].committed, true, 'the good source\'s docs were committed despite the failure')
+  const check = mkdtempSync(join(tmpdir(), 'lore-check3-'))
+  execFileSync('git', ['clone', '--quiet', bare, check])
+  assert.ok(existsSync(join(check, 'context/streams/fake/#c/2026-09-01.md')))
+  assert.match(readFileSync(join(check, 'state.json'), 'utf8'), /"good"/)
 })
 
 test('run-all: no-change runs commit a state heartbeat only', async () => {

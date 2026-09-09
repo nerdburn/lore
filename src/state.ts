@@ -19,6 +19,13 @@ export interface LoreState {
   sources?: Record<string, SourceHealth>
   lastSync?: string
   lastExtract?: string
+  /**
+   * Stream files the fold has already consumed, by path relative to the
+   * context root → byte length when folded. A file whose length differs is
+   * new material (appended docs, a late thread reply, a source added with
+   * older dates). Replaces the old day-window, which missed all of those.
+   */
+  extracted?: Record<string, number>
 }
 
 export function loadState(root: string): LoreState {

@@ -58,15 +58,26 @@ export async function runAll(opts: RunAllOptions, registry: Record<string, Conne
         continue
       }
 
-      const s = await sync(root, registry)
-      if (opts.extract) await extract(root, { report: opts.report })
+      // sync and extract both checkpoint to disk as they go; whatever they
+      // managed must reach the bare repo even if a later step fails, or the
+      // next run's reset throws it away and repeats the work (and the cost).
+      let failure: Error | undefined
+      let s: Awaited<ReturnType<typeof sync>> | undefined
+      try {
+        s = await sync(root, registry)
+        if (opts.extract) await extract(root, { report: opts.report })
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err))
+      }
       const committed = commitAndPush(root, name)
-      if (!s.ok) throw new Error(`sync reported errors: ${Object.entries(s.sources).filter(([, v]) => v.status === 'failed').map(([k]) => k).join(', ')}`)
+      if (failure) throw failure
+      if (!s!.ok) throw new Error(`sync reported errors: ${Object.entries(s!.sources).filter(([, v]) => v.status === 'failed').map(([k]) => k).join(', ')}`)
       summary.clients[name] = { status: 'synced', committed }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`✗ ${name}: ${message}`)
-      summary.clients[name] = { status: 'failed', committed: false, error: message }
+      const committed = existsSync(join(root, '.git')) && git(root, 'log', '-1', '--format=%s').startsWith('chore(lore)') && git(root, 'status', '--porcelain', 'context', 'state.json') === ''
+      summary.clients[name] = { status: 'failed', committed, error: message }
       summary.ok = false
     }
   }
