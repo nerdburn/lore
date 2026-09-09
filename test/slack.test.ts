@@ -145,7 +145,7 @@ test('slack: a late reply to a thread whose parent left the window still syncs',
   assert.equal((first.nextCursor.C0ACME as { ts: string }).ts, daysAgo(10))
 
   // Time passes: a new channel message and a late reply to the old thread,
-  // whose parent (20d) is now outside the 7d overlap from the cursor (10d).
+  // whose parent (20d) is now outside the 1d overlap from the cursor (10d).
   s.history.C0ACME.push({ ts: daysAgo(1), user: 'U0PRIYA', text: 'new message' })
   s.replies[parent].push({ ts: daysAgo(0, '000900'), user: 'U0PRIYA', text: 'late reply' })
   s.calls.length = 0

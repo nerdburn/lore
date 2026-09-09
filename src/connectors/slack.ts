@@ -29,7 +29,13 @@ interface ChannelCursor {
 type SlackCursor = Record<string, string | ChannelCursor>
 
 const DEFAULT_API_BASE = 'https://slack.com/api'
-const DEFAULT_OVERLAP_DAYS = 7
+/**
+ * Top-level messages are re-read this far behind the cursor to catch late
+ * deliveries; dedupe makes the re-read free of duplicates but not of API
+ * calls. Thread replies are tracked separately (`thread_window_days`), so
+ * this does not need to cover late replies — 1 day is plenty.
+ */
+const DEFAULT_OVERLAP_DAYS = 1
 const DEFAULT_THREAD_WINDOW_DAYS = 30
 const DAY_S = 86_400
 
