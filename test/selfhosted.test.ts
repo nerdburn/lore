@@ -90,6 +90,7 @@ test('setup: buildSources writes proxy bases (no tokens) when proxies are config
     github: { repos: ['acme/web'], api_base: 'http://gh.int.exe.xyz' },
   })
   assert.deepEqual(buildSources(['#acme'], [], undefined), { slack: { channels: ['#acme'], token: 'env:SLACK_TOKEN' } })
+  assert.deepEqual(buildSources(['#acme'], [], undefined, ['Acme', 'Acme Ops']).granola, { folders: ['Acme', 'Acme Ops'] })
   assert.deepEqual(buildSources(['#acme'], ['a/b'], { slack: 'http://s' }), {
     slack: { channels: ['#acme'], api_base: 'http://s' },
     github: { repos: ['a/b'], token: 'env:LORE_GITHUB_TOKEN' },

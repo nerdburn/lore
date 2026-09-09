@@ -241,6 +241,16 @@ remembered, it's misplaced. Resolution order: `--context` flag → nearest
 `lore.json` walking up from cwd → `-p/--project` via the registry. The cache
 is disposable; delete `~/.lore/cache/` any time.
 
+### Onboarding the next client
+
+[docs/PLAYBOOK.md](docs/PLAYBOOK.md) is the step-by-step: five facts to
+gather, invite the bot, one GitHub integration per repo, one `lore setup`
+command, first sync, verify, point an agent at it. A self-hosted lore host
+serves the same playbook plus a live status table of every client at its
+HTTPS URL (`lore www`, installed by `deploy/exe/setup.sh`). The
+`lore-onboard` skill in the plugin walks an agent through it: say "set up
+lore for Acme".
+
 ### When an engagement ends
 
 ```sh
@@ -311,9 +321,10 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore run-all --repos d --work d [--extract] [--report]` | self-hosted scheduler: sync every bare repo under a dir, commit, push (from a timer on the host) |
+| `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
 | `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
 | `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |

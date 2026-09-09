@@ -104,8 +104,26 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
+# --- systemd: the host's page (playbook + live client status) on the exe.dev proxy port ---
+cat > /etc/systemd/system/lore-www.service <<UNIT
+[Unit]
+Description=lore: playbook + client status page
+After=network-online.target
+
+[Service]
+User=$LORE_USER
+ExecStart=$(command -v lore) www --repos /srv/lore/repos --port ${WWW_PORT:-8000}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 systemctl daemon-reload
+systemctl enable --now lore-www.service
+systemctl restart lore-www.service
 systemctl enable --now lore-sync.timer
+echo "www:   $(systemctl is-active lore-www.service) on port ${WWW_PORT:-8000} (https://<vm>.exe.xyz via the exe.dev proxy)"
 echo "timer: $(systemctl is-active lore-sync.timer); next runs:"
 systemctl list-timers lore-sync.timer --no-pager | head -3
 echo

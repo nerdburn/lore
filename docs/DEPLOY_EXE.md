@@ -24,8 +24,11 @@ ssh exedev@lore-host.exe.xyz sudo LORE_REF=/tmp/nerdburn-lore-0.3.0.tgz bash /tm
 (`LORE_REF` defaults to `github:nerdburn/lore`, which builds on the VM and
 needs the dev toolchain there; the tarball path needs nothing but Node.)
 
-`setup.sh` installs Node 22 and lore, creates `/srv/lore/{repos,work}`, and
-enables `lore-sync.timer` (hourly, `INTERVAL=30m` to change). Re-run it to
+`setup.sh` installs Node 22 and lore, creates `/srv/lore/{repos,work}`,
+enables `lore-sync.timer` (hourly, `INTERVAL=30m` to change), and starts
+`lore-www.service` on the exe.dev proxy port, so `https://lore-host.exe.xyz`
+shows the onboarding playbook and a live client status table (private to the
+account; `ssh exe.dev share` to open it to others). Re-run it to
 upgrade lore. Logs: `ssh lore-host.exe.xyz journalctl -u lore-sync -f`.
 
 ## 2. Secrets as integrations

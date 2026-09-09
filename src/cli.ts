@@ -16,6 +16,7 @@ import { remember } from './commands/remember.js'
 import { runAll } from './commands/run-all.js'
 import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
+import { www } from './commands/www.js'
 
 /** Options shared by every command that reads or writes a context repo. */
 function contextual(cmd: Command): Command {
@@ -48,6 +49,7 @@ program
   .argument('[repo]', 'context repo name or "owner/name" (derived from cwd/channels if omitted)')
   .option('--channels <list>', 'comma-separated Slack channels, e.g. "#acme,#acme-dev"')
   .option('--github <repos>', 'comma-separated GitHub repos to sync, e.g. "acme/web,acme/mobile"')
+  .option('--granola <folders>', 'comma-separated Granola folder titles holding this client\'s meetings, e.g. "Acme"')
   .option('--client <name>', 'client display name (default: project name)')
   .option('--domains <list>', 'comma-separated client email domains, e.g. "acme.com,acme.ca" — scopes Granola meetings and tells extract who the client is')
   .option('--backfill <months>', 'backfill window for the first sync (default 3)')
@@ -94,6 +96,14 @@ program
   .argument('<source>', 'granola')
   .option('--file <path>', 'token file (default ~/.lore/granola-auth.json)')
   .action((source, opts) => auth(source, opts))
+
+program
+  .command('www')
+  .description('serve the onboarding playbook + live client status for a self-hosted lore host')
+  .requiredOption('--repos <dir>', 'directory of bare context repos')
+  .option('--port <n>', 'port (default 8000)', '8000')
+  .option('--host <addr>', 'bind address (default 0.0.0.0)')
+  .action((opts) => www({ repos: opts.repos, port: Number(opts.port), host: opts.host }))
 
 program
   .command('manifest')

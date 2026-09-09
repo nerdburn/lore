@@ -11,6 +11,8 @@ export interface SetupFlags {
   channels?: string
   /** Comma-separated "owner/repo" list — adds a github source. */
   github?: string
+  /** Comma-separated Granola folder titles (or ids) holding this client's meetings — adds a granola source. */
+  granola?: string
   /** Client display name (defaults to the project name, capitalised). */
   client?: string
   /** Comma-separated client email domains, e.g. "acme.com,acme.ca". */
@@ -75,6 +77,10 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     for (const r of repos) {
       if (!/^[\w.-]+\/[\w.-]+$/.test(r)) throw new Error(`--github: "${r}" is not "owner/repo"`)
     }
+    const folders = (flags.granola ?? '')
+      .split(',')
+      .map((f) => f.trim())
+      .filter(Boolean)
 
     // Name: explicit arg > the project repo we're standing in > first channel.
     let name = repoArg?.includes('/') ? repoArg.split('/')[1] : repoArg
@@ -96,14 +102,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       project,
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined),
+      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -152,12 +158,17 @@ export function buildSources(
   channels: string[],
   repos: string[],
   proxy: GlobalConfig['proxy'],
+  granolaFolders: string[] = [],
 ): Record<string, Record<string, unknown>> {
   const sources: Record<string, Record<string, unknown>> = {
     slack: proxy?.slack ? { channels, api_base: proxy.slack } : { channels, token: 'env:SLACK_TOKEN' },
   }
   if (repos.length) {
     sources.github = proxy?.github ? { repos, api_base: proxy.github } : { repos, token: 'env:LORE_GITHUB_TOKEN' }
+  }
+  if (granolaFolders.length) {
+    // Auth comes from `lore auth granola` on the syncing host (token file); no token here.
+    sources.granola = proxy?.granola ? { folders: granolaFolders, endpoint: proxy.granola } : { folders: granolaFolders }
   }
   return sources
 }

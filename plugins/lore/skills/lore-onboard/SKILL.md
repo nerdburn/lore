@@ -1,110 +1,91 @@
 ---
 name: lore-onboard
-description: Set up lore project memory for a client or project — create the context repo, sync Slack history, link project repos. Use when asked to "set up lore", "add project memory", "onboard <client> to lore", or link a repo to existing project memory.
+description: Set up lore project memory for a client — gather the five facts, create the context repo, wire Slack/GitHub/Granola, verify, and point an agent at it. Use when asked to "set up lore for <client>", "onboard <client>", "add project memory", link a repo to existing memory, connect a Slack agent to lore, or archive a client.
 ---
 
-# Onboarding a project to lore
+# Onboarding a client to lore
 
-Lore is git-native project memory: Slack history synced daily into a private
-**context repo**, queried through the `lore` CLI (or its MCP server) from
-anywhere. Full docs: https://github.com/nerdburn/lore
+Lore is git-native project memory: Slack, GitHub and Granola meetings synced
+into a private **context repo** per client, queried through the `lore` CLI or
+its MCP server. This skill is the agent-run version of `docs/PLAYBOOK.md`
+(also served at the host's page, e.g. https://lore-host.exe.xyz). Walk the
+user through it interactively: ask for what only they know, run what you can,
+relay the human steps, and verify before declaring success.
 
-## Prerequisites — verify before starting
+## Prerequisites — check first
 
-1. `lore --version` works (else: `npm install -g github:nerdburn/lore`)
-2. `gh auth status` is logged in and can create repos in the target org
-3. `SLACK_TOKEN` is available (env or `.env` in cwd) — the lore Slack app's
-   `xoxb-` bot token for the workspace whose channels you're syncing
-
-## Hosting mode — check before anything else
-
-`cat ~/.lore/config.json`. If it has `remote` (e.g.
-`exedev@lore-host.exe.xyz:/srv/lore/repos`), context repos are **self-hosted**:
-`lore setup` creates a bare repo on that host over SSH, there is no GitHub
-repo, no Actions workflow and no secrets to set — the host's timer syncs it
-within the hour, and tokens come from the host's proxy integrations (see
-`docs/DEPLOY_EXE.md`). Pointers are bare names (`lore-acme`). Everything
-below about `gh`, `--org`, secrets and Actions applies only to GitHub mode.
+1. `lore --version` works (else `npm install -g github:nerdburn/lore`, or the
+   tarball path in `docs/DEPLOY_EXE.md`)
+2. `cat ~/.lore/config.json` — **hosting mode**: `remote` set means
+   self-hosted (bare repos on that host, tokens as host integrations, no
+   GitHub/Actions/secrets); otherwise GitHub mode. Everything below assumes
+   self-hosted; GitHub-mode differences are in the README.
+3. `ssh exe.dev integrations list` shows `slack` and a GitHub App connection;
+   the host has run `lore auth granola` once.
 
 ## Rules that are not yours to relax
 
-- **The context repo goes in the agency's org, never the client's.** Slack
-  history has a different audience than code. `lore setup` reads the default
-  from `~/.lore/config.json`; if it's unset and you aren't sure which org is
-  correct, ask the user — do not infer it from the project repo's remote.
-- **One lore Slack app per workspace.** If the workspace already has one,
-  reuse its token; never create a duplicate app.
-- **Never commit tokens.** `lore.json` carries `env:` references only.
+- **Context repos live in our infrastructure (our org / our host), never the client's.**
+- **One lore Slack app per workspace; never create a duplicate.**
+- **No tokens in lore.json** — `env:` refs or proxy `api_base`/`endpoint` only.
+- **Whatever lore syncs is readable by every agent pointed at that memory.**
+  If the client can talk to such an agent (a `-team` channel here), say so
+  before including internal channels or transcripts, and do not enable
+  `lore_remember` for a client-facing agent without the user's explicit ok.
 
 ## Procedure
 
-1. **Gather**: which Slack channels (exact names — hyphens matter), which
-   GitHub repos (`owner/repo`), which Granola folder(s) and/or client email
-   domain(s), how many months of backfill (default 3), and which project
-   repo(s) to link.
-2. **Run setup from inside the main project repo** so it derives the name and
-   links automatically. Use flags — the interactive wizard is for humans:
+1. **Gather** (ask, don't guess): client name + email domains; exact Slack
+   channel names (here `#<client>` is internal, `#<client>-team` has the client
+   in it); GitHub repos as `owner/repo`; Granola folder title; backfill months
+   (default 3); known contacts (name, email, role, client/team side).
+2. **Slack** — relay: `/invite @lore` in each channel. Confirm membership
+   before syncing: the bot's channel list is visible via the host's proxy
+   (`users.conversations`), or just watch the first sync for `✗ slack:` lines.
+3. **GitHub** — one integration per repo, read-only, exe.dev GitHub App:
+   `ssh exe.dev integrations add github --name <owner>-<repo> --repository <owner>/<repo> --readonly --attach tag:lore`.
+   If the repo isn't found, the app isn't installed on that org — relay
+   exe.dev → Integrations → GitHub. Verify:
+   `ssh exedev@lore-host.exe.xyz 'curl -s https://github.int.exe.xyz/api/v3/repos/<owner>/<repo> | head -c 200'`.
+4. **Create the context repo** — run from inside the client's code repo when
+   the user wants it linked (asks about committing the two pointer files:
+   keep them local via `.git/info/exclude` if the client can read that repo):
 
    ```sh
-   cd <project-repo>
-   lore setup --channels "#acme,#acme-team" --github "acme/web" --client "Acme" --domains "acme.com" --backfill 3 --yes
+   lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
+              --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```
 
-   `--client`/`--domains` write the `client` block (who the client is; email
-   domains identify their people). Add known contacts to it afterwards.
-   Granola is added by hand to the context repo's `lore.json` —
-   `"granola": { "folders": ["Acme"] }` — and needs `lore auth granola` run
-   once on the machine that syncs (self-hosted: the VM). GitHub in GitHub
-   mode needs a `LORE_GITHUB_TOKEN` secret; self-hosted uses the host's
-   GitHub App integration, one per client repo.
+   Then add `client.contacts` to the repo's `lore.json` (cache clone at
+   `~/.lore/cache/lore-<client>`), commit, push.
+5. **First sync** — don't wait for the timer:
+   `ssh exedev@lore-host.exe.xyz 'sudo systemctl start lore-sync.service; sudo journalctl -u lore-sync -o cat --since -30min | tail -40'`.
+   Every `✗` is a config problem to fix and re-run (channel not joined, repo
+   not integrated, folder title mismatch).
+6. **Verify end-to-end** with a real query for something only the client's
+   Slack would know: `lore grep -p <client> -i "<term>"`, then
+   `lore recall -p <client>` (client block, derived artifacts, open work,
+   freshness). Zero hits on a busy channel means the sync didn't ingest it —
+   investigate, don't hand off.
+7. **Point an agent at it** (optional, ask): Claude Code users get it from the
+   linked repo or `claude mcp add lore -- lore mcp -p <client>`; an enso
+   Slack agent VM needs the tag-scoped SSH key, `~/.lore/config.json` remote,
+   lore installed, a stdio `lore` server in the policy's `claude/mcp.json`,
+   `mcp__lore__*` allow rules, the `lore-mcp` skill in the workspace, and a
+   service restart — exact snippets in `docs/PLAYBOOK.md` §7.
+8. **Report** what was set up, what is still human, and the first real
+   answer you got from the memory.
 
-   This creates `<org>/lore-<project>` (private), scaffolds it, pushes, sets
-   the `SLACK_TOKEN` secret, verifies the workflow registered, dispatches the
-   first sync, and writes the `lore.json` pointer + `AGENTS.md` section in cwd.
-3. **Relay the human steps** to the user — you cannot do these:
-   - if the workspace has no lore Slack app: `lore manifest slack` and create
-     it at api.slack.com/apps ("From a manifest")
-   - `/invite @lore` in each channel (a bot can't invite itself — this is
-     lore's consent model, not an oversight)
-4. **After they confirm the invites**, re-run the sync and watch it:
+## Ending an engagement
 
-   ```sh
-   gh workflow run lore-sync.yml --repo <org>/lore-<project>
-   gh run watch --repo <org>/lore-<project> $(gh run list --repo <org>/lore-<project> --limit 1 --json databaseId --jq '.[0].databaseId')
-   ```
-
-   A `✗ slack: channel #x not found or bot not a member` line fails the run
-   (non-zero exit; the Actions job goes red and commits nothing) — it means a
-   missed invite or a misspelled channel; check exact names via the Slack
-   API before retrying. Other channels still synced.
-5. **Link any additional project repos**: `lore link <org>/lore-<project>` in
-   each, then commit the two changed files (PR if the repo requires review).
-6. **Verify end-to-end before declaring success** — run a real query for
-   something only Slack would know:
-
-   ```sh
-   lore grep -p <project> -i "<a term from the synced channels>"
-   ```
-
-   Zero matches on a channel you know has traffic means the sync didn't
-   actually ingest it — investigate, don't hand off.
-
-## When a client engagement ends
-
-`lore archive --context <org>/lore-<project>` — never delete the context repo,
-it is the only copy of the history and pins. Archiving flips the lifecycle
-flag, pushes, archives the GitHub repo, and cleans up locally; reads keep
-working and are labelled ARCHIVED. Relay the two manual steps it prints:
-unlink project repos, remove @lore from the Slack channels. `--restore`
-reopens.
+`lore archive --context lore-<client>` — sync stops, writes are refused,
+reads are labelled ARCHIVED, the repo stays. Never delete a context repo.
 
 ## Known issues
 
-- A workflow pushed in the repo-creating commit sometimes doesn't register;
-  `lore setup` nudges automatically, but if Actions shows nothing, push any
-  commit touching the workflow file.
-- The daily extract step (derived artifacts + weekly report) only runs when
-  the context repo has an `ANTHROPIC_API_KEY` Actions secret — `lore setup`
-  sets it from the environment when present; otherwise relay that step to the
-  user. The first extract over a full backfill costs real money (LLM fold over
-  months of history) — tell the user before triggering it.
+- The first extract over a full backfill takes minutes and can be dozens of
+  LLM batches; `⚠ … model omitted N existing item(s) — kept them` lines are
+  normal on commit-only batches.
+- `granola: no credentials` on the host → `lore auth granola` there (device
+  code; the user approves in a browser).
+- Reads on a laptop pull the cache first; `--no-pull` for offline.

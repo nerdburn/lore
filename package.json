@@ -8,7 +8,8 @@
   },
   "files": [
     "dist",
-    "manifests"
+    "manifests",
+    "docs/PLAYBOOK.md"
   ],
   "scripts": {
     "build": "tsc",
