@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { recallData } from '../recall.js'
 import { grepContext } from '../search.js'
+import { refresh } from './refresh.js'
 import { remember } from './remember.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -92,6 +93,23 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ category }) => {
       freshen()
       return text(recallData(ctx.root, ctx.config, category))
+    },
+  )
+
+  server.registerTool(
+    'lore_sync_now',
+    {
+      description:
+        'Refresh project memory. Pulls the latest synced data; with trigger=true also asks the lore host to run its sync + extract right now (Slack, GitHub, Granola) and waits for it — minutes, sometimes longer. Use only when the user asks for fresh data or the last sync is stale. Never run `lore sync` yourself: agents cannot sync, only the host can. Returns before/after freshness.',
+      inputSchema: {
+        trigger: z.boolean().optional().default(true).describe('ask the host to sync now (default true); false = just pull what the host already has'),
+        force: z.boolean().optional().default(false).describe('re-run even if the host synced within the last 10 minutes'),
+      },
+    },
+    async ({ trigger, force }) => {
+      lastPull = Date.now()
+      const r = refresh(rememberOpts.cwd, { ...rememberOpts.opts, trigger, force })
+      return text(r)
     },
   )
 

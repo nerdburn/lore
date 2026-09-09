@@ -12,6 +12,7 @@ import { link } from './commands/link.js'
 import { manifest } from './commands/manifest.js'
 import { mcp } from './commands/mcp.js'
 import { recall } from './commands/recall.js'
+import { refresh } from './commands/refresh.js'
 import { remember } from './commands/remember.js'
 import { runAll } from './commands/run-all.js'
 import { setup } from './commands/setup.js'
@@ -155,6 +156,18 @@ contextual(
     .option('--restore', 'reopen an archived client')
     .option('--keep-local', 'keep the ~/.lore cache clone and registry entry'),
 ).action((opts) => archive(root, opts))
+
+contextual(
+  program
+    .command('refresh')
+    .description('pull the latest synced memory; --trigger asks the self-hosted host to sync + extract now and waits')
+    .option('--trigger', 'run the host sync service now (SSH to the configured remote)')
+    .option('--force', 're-run even if the host synced within 10 minutes'),
+).action((opts) => {
+  const r = refresh(root, opts)
+  console.log(`host: ${r.host}${r.note ? ` — ${r.note}` : ''}`)
+  console.log(`synced: ${r.before.lastSync ?? 'never'} → ${r.after.lastSync ?? 'never'}; extracted: ${r.before.lastExtract ?? 'never'} → ${r.after.lastExtract ?? 'never'}`)
+})
 
 contextual(
   program

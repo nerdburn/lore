@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_remember) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -83,7 +83,12 @@ look for that in Slack or a pin before stating it as settled.
   and the permalink or stream path, so the user can check.
 - **Freshness.** `lore_recall` returns `synced.lastSync` and `lastExtract`.
   Say when the memory was last synced whenever recency matters; derived
-  artifacts can lag the streams until the next extract.
+  artifacts can lag the streams until the next extract. The host syncs on a
+  timer (hourly). **Never run `lore sync` yourself** — an agent has neither
+  the credentials nor the network for it. When the user asks for fresh data
+  or the last sync is stale, call `lore_sync_now` (it asks the host to sync +
+  extract and waits, which can take minutes) and tell the user what changed;
+  with `trigger: false` it only pulls what the host already has.
 - Zero grep hits ≠ "it never happened" — try synonyms and looser patterns;
   memory covers only the configured channels, repos, and meeting folders,
   since the backfill window.

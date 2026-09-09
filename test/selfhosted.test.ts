@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { before, test } from 'node:test'
 import { runAll } from '../src/commands/run-all.js'
 import { buildSources } from '../src/commands/setup.js'
+import { refresh, sshTargetFromRemote } from '../src/commands/refresh.js'
 import { configSchema } from '../src/config.js'
 import { cachePath, isRepoRef, readGlobalConfig, remoteUrl, resolveContext, writeGlobalConfig } from '../src/context.js'
 import type { Connector, Doc } from '../src/types.js'
@@ -183,4 +184,46 @@ test('run-all: no-change runs commit a state heartbeat only', async () => {
 
 test('run-all: missing repos dir is an error', async () => {
   await assert.rejects(runAll({ repos: '/nonexistent/lore-repos', work }), /repos dir not found/)
+})
+
+test('refresh: sshTargetFromRemote parses ssh remotes and rejects paths', () => {
+  assert.equal(sshTargetFromRemote('exedev@lore-host.exe.xyz:/srv/lore/repos'), 'exedev@lore-host.exe.xyz')
+  assert.equal(sshTargetFromRemote('ssh://exedev@lore-host.exe.xyz/srv/lore/repos'), 'exedev@lore-host.exe.xyz')
+  assert.equal(sshTargetFromRemote('/srv/lore/repos'), undefined)
+  assert.equal(sshTargetFromRemote(undefined), undefined)
+})
+
+test('refresh: with a path remote the host trigger is unavailable but the pull still reports freshness', () => {
+  seedBare('lore-fresh', { project: 'fresh' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z' }) })
+  const calls: string[] = []
+  const r = refresh(tmpdir(), { context: 'lore-fresh', trigger: true }, { ssh: (t, c) => { calls.push(`${t} ${c}`); return '' } })
+  assert.equal(r.host, 'unavailable')
+  assert.deepEqual(calls, [])
+  assert.equal(r.after.lastSync, '2026-09-09T10:00:00Z')
+})
+
+test('refresh: with an ssh remote it runs the host service unless the last sync is recent', () => {
+  seedBare('lore-ssh', { project: 'ssh' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z' }) })
+  // clone first so the cache exists, then swap the global remote to an ssh form for the trigger check
+  resolveContext(tmpdir(), { context: 'lore-ssh' })
+  const saved = readGlobalConfig()
+  writeGlobalConfig({ ...saved, remote: 'exedev@lore-host.example:/srv/lore/repos' })
+  try {
+    const calls: string[] = []
+    const ssh = (t: string, c: string) => { calls.push(`${t} ${c}`); return '' }
+    // The cache's origin is still the local bare path, so `git pull` after the trigger keeps working.
+    const recent = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
+    assert.equal(recent.host, 'skipped-recent')
+    assert.deepEqual(calls, [])
+    const stale = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
+    assert.equal(stale.host, 'ran')
+    assert.deepEqual(calls, ['exedev@lore-host.example sudo systemctl start lore-sync.service'])
+    const forced = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, force: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
+    assert.equal(forced.host, 'ran')
+    const noTrigger = refresh(tmpdir(), { context: 'lore-ssh', pull: false }, { ssh })
+    assert.equal(noTrigger.host, 'not-requested')
+    assert.equal(calls.length, 2)
+  } finally {
+    writeGlobalConfig(saved)
+  }
 })
