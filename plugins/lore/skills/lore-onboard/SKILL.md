@@ -39,7 +39,8 @@ relay the human steps, and verify before declaring success.
    channel names (here `#<client>` is internal, `#<client>-team` has the client
    in it); GitHub repos as `owner/repo`; Granola folder title; the client's
    top-level Notion page URL (relay: connect the `lore` integration to it via
-   `···` → Connections); backfill months
+   `···` → Connections); Jira project key + site if they track work there;
+   backfill months
    (default 3); known contacts (name, email, role, client/team side).
 2. **Slack** — relay: `/invite @lore` in each channel. Confirm membership
    before syncing: the bot's channel list is visible via the host's proxy
@@ -55,7 +56,8 @@ relay the human steps, and verify before declaring success.
 
    ```sh
    lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
-              --notion "<client's Notion page URL>" --client "Acme" --domains "acme.com" --backfill 3 --yes
+              --notion "<client's Notion page URL>" [--jira ACM --jira-site https://acme.atlassian.net] \
+              --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```
 
    Then add `client.contacts` to the repo's `lore.json` (cache clone at

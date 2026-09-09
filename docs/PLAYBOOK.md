@@ -14,6 +14,7 @@ to an agent with the lore plugin and it will walk you through this.
 | GitHub repos, `owner/repo` | `inputlogic/jointly` | `sources.github.repos` + one exe.dev integration each |
 | Granola folder title | `Jointly` | `sources.granola.folders` |
 | Notion root page(s) or database(s) | the client's top-level Notion page URL | `sources.notion.roots` |
+| Jira project key(s), if the client tracks work in Jira | `ACM` + `https://acme.atlassian.net` | `sources.jira.projects` |
 | Backfill window | 3 months | first sync only; after that everything is incremental |
 
 Convention in this workspace: `#<client>` is internal, `#<client>-team` has
@@ -54,6 +55,12 @@ proxy. Per client: open the client's top-level Notion page (or teamspace
 root) → `···` → Connections → add **lore**. Everything beneath it becomes
 readable. Copy that page's URL for `--notion` below.
 
+## 3c. Jira — nothing per project once the site is connected
+
+One Atlassian API token per Jira site lives as the `jira` exe.dev proxy
+(HTTP Basic, see `docs/DEPLOY_EXE.md`). The account behind it must be able to
+browse the client's project. Pass the project key(s) and site URL to setup.
+
 ## 4. Create the context repo — one command
 
 From inside the client's code repo (links it, derives the name):
@@ -62,6 +69,7 @@ From inside the client's code repo (links it, derives the name):
 cd ~/Sites/<client>
 lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
            --notion "https://www.notion.so/inputlogic/Acme-<id>" \
+           --jira "ACM" --jira-site https://acme.atlassian.net \
            --client "Acme" --domains "acme.com" --backfill 3 --yes
 ```
 
@@ -160,6 +168,7 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 - `✗ github: repo … not found or token lacks access` — add the exe.dev GitHub integration for that repo (step 2).
 - `✗ granola: folder "X" not found` — match the folder title exactly, or pass the folder id.
 - Notion pages missing — the integration hasn't been connected to that page (or an ancestor); Notion → page `···` → Connections.
+- `✗ jira: project X: jira 400 …` — wrong key, or the API token's account can't see that project.
 - `granola: no credentials — run lore auth granola` — the token file on the host is missing; run it there.
 - Sync ran but `lore recall` looks stale — reads pull the cache first; `--no-pull` skips that. The host syncs hourly; `systemctl start lore-sync.service` forces it.
 - Fold warnings `⚠ requests: model omitted N existing item(s) — kept them` are normal on commit-only batches; nothing was lost.
@@ -167,6 +176,6 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 ## One-time prerequisites (already done for this workspace)
 
 - `lore-host` VM with the timer (`deploy/exe/setup.sh`), LLM via `llm.int.exe.xyz`
-- exe.dev integrations on tag `lore`: `slack` (bot token), `notion` (internal integration token, proxy to https://api.notion.com), GitHub App connected to the org
+- exe.dev integrations on tag `lore`: `slack` (bot token), `notion` (internal integration token, proxy to https://api.notion.com), `jira` (Basic email:token, proxy to the Atlassian site — when a client uses Jira), GitHub App connected to the org
 - `lore auth granola` run once on the host
 - Laptop `~/.lore/config.json` with `remote` and `proxy` — see `docs/DEPLOY_EXE.md`

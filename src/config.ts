@@ -92,6 +92,24 @@ export const sourceSchemas = {
       settle_minutes: z.number().min(0).optional(),
     })
     .refine((n) => n.token || n.api_base, { message: 'notion needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
+  jira: baseSource
+    .extend({
+      /** Project keys, e.g. ["JNT"]. */
+      projects: z.array(z.string().regex(/^[A-Z][A-Z0-9_]+$/, 'Jira project keys are uppercase, e.g. JNT')).min(1),
+      /** https://<site>.atlassian.net — for the API (unless api_base) and for permalinks. */
+      site: z.string().url().optional(),
+      /** Atlassian account email + API token (HTTP Basic); optional when api_base is a proxy that injects the header. */
+      email: envRef.optional(),
+      token: envRef.optional(),
+      /** REST v3 base; a proxy URL when credentials live off-host, e.g. https://jira.int.exe.xyz/rest/api/3. */
+      api_base: z.string().url().optional(),
+      /** Default: issues + comments. */
+      include: z.array(z.enum(['issues', 'comments'])).optional(),
+      /** Days re-read on every sync (default 1). */
+      overlap_days: z.number().min(0).optional(),
+    })
+    .refine((j) => j.site || j.api_base, { message: 'jira needs site (https://x.atlassian.net) or api_base', path: ['site'] })
+    .refine((j) => (j.email && j.token) || j.api_base, { message: 'jira needs email + token (env:…) or an api_base proxy that injects them', path: ['token'] }),
 } as const
 
 export type SourceName = keyof typeof sourceSchemas

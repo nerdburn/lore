@@ -57,7 +57,7 @@ test('www: client statuses come from the bare repos at HEAD', () => {
   }
   seed(
     'lore-acme',
-    { project: 'acme', client: { name: 'Acme' }, sources: { slack: { channels: ['#a'], api_base: 'https://s/api' }, github: { repos: ['a/b'], api_base: 'https://g' }, jira: { disabled: true } } },
+    { project: 'acme', client: { name: 'Acme' }, sources: { slack: { channels: ['#a'], api_base: 'https://s/api' }, github: { repos: ['a/b'], api_base: 'https://g' }, linear: { disabled: true } } },
     { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z', lastExtract: '2026-09-09T10:05:00Z', sources: { slack: { lastAttempt: 'x', lastSuccess: '2026-09-09T10:00:00Z' }, github: { lastAttempt: 'x', lastError: { at: 'x', message: 'repo gone' } } } }) },
   )
   seed('lore-old', { project: 'old', lifecycle: 'archived', archived_at: '2026-09-01T00:00:00Z' })

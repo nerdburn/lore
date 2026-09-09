@@ -77,6 +77,9 @@ test('config: known sources are validated by their typed schema', () => {
   bad({ github: { repos: ['acme/web'], token: 'env:T', include: ['wiki'] } })
   bad({ granola: { token: 'env:T', folders: ['Acme'], endpoint: 'not a url' } })
   bad({ notion: { roots: ['abc'] } })
+  bad({ jira: { projects: ['acm'], site: 'https://x.atlassian.net', email: 'env:E', token: 'env:T' } })
+  bad({ jira: { projects: ['ACM'], email: 'env:E', token: 'env:T' } })
+  bad({ jira: { projects: ['ACM'], site: 'https://x.atlassian.net' } })
   bad({ notion: { token: 'literal', roots: ['abc'] } })
   bad({ granola: { token: 'literal-token', folders: ['Acme'] } })
 
@@ -90,6 +93,7 @@ test('config: known sources are validated by their typed schema', () => {
     },
   })
   assert.deepEqual(ok.sources.notion.roots?.length, 1)
+  assert.equal(configSchema.parse({ project: 'x', sources: { jira: { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.projects[0], 'ACM')
   assert.deepEqual(ok.sources.github.repos, ['acme/web', 'acme/mobile'])
 })
 
@@ -104,8 +108,8 @@ test('config: validation errors name the source and field', () => {
 })
 
 test('config: unknown sources are accepted structurally (connector may come later)', () => {
-  const cfg = configSchema.parse({ project: 'x', sources: { jira: { site: 'acme.atlassian.net', disabled: true } } })
-  assert.equal(cfg.sources.jira.disabled, true)
+  const cfg = configSchema.parse({ project: 'x', sources: { linear: { team: 'ACME', disabled: true } } })
+  assert.equal(cfg.sources.linear.disabled, true)
 })
 
 test('config: client block — domains normalised, contacts default to the client side', () => {

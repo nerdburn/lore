@@ -6,7 +6,7 @@ description: Query project memory through the lore MCP server (lore_grep, lore_r
 # Using lore over MCP
 
 Lore is git-native project memory for one client at a time: Slack history,
-GitHub activity, Granola meetings, and Notion pages synced into a private context repo,
+GitHub and Jira activity, Granola meetings, and Notion pages synced into a private context repo,
 plus LLM-derived artifacts and explicitly pinned facts. The MCP server
 exposes the query surface so you never touch the repo directly. Full docs:
 https://github.com/nerdburn/lore
@@ -38,8 +38,8 @@ history, say so, and never present it as current state.
 
 1. **Pinned facts** (`pins`) — a human explicitly stored these. They win over
    everything below on conflict.
-2. **Work tables** (`work`, e.g. `github/acme__web`) — the *source system's*
-   own record, written by sync, never by an LLM. For anything about delivery
+2. **Work tables** (`work`, e.g. `github/acme__web`, `jira/ACM`) — the
+   *source system's* own record, written by sync, never by an LLM. For anything about delivery
    state — what is open, closed, merged, assigned, labelled, in which
    milestone — this is the answer. Do not infer issue state from Slack or
    from `derived` when a work table covers the repo. Recall returns open
@@ -57,6 +57,8 @@ history, say so, and never present it as current state.
      opened and on each state change, comments, reviews, commits, releases
    - `context/streams/granola/<Folder>/YYYY-MM-DD.md` — meeting notes +
      AI summary, and the transcript as a threaded reply
+   - `context/streams/jira/<KEY>/YYYY-MM-DD.md` — issues when created and on
+     each status change, and comments (Jira's status names, e.g. "In Review")
    - `context/streams/notion/<Top-level page>/YYYY-MM-DD.md` — a Notion
      page rendered to markdown each time it was edited (documentation
      history; the newest snapshot is the current page)

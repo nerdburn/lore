@@ -111,6 +111,37 @@ function commitAndPush(root: string, name: string): boolean {
   const heartbeat = staged.split('\n').every((f) => f === 'state.json')
   const message = heartbeat ? `chore(lore): heartbeat ${name}` : `chore(lore): sync ${name}`
   git(root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', message)
-  git(root, 'push', '--quiet', 'origin', 'HEAD:main')
+  pushWithRebase(root)
   return true
+}
+
+/**
+ * A long run (a first fold can take an hour) races with pins and config
+ * pushes from laptops. If the push is rejected, replay our sync commit on top
+ * of the remote and push again. Our commit wins any conflict on the files it
+ * touched — streams, derived artifacts and state are regenerated from
+ * sources, so the fresher fold is the right one to keep — and everything
+ * else (lore.json, facts.yaml) comes through from the remote untouched.
+ */
+export function pushWithRebase(root: string, attempts = 3): void {
+  for (let i = 1; ; i++) {
+    try {
+      git(root, 'push', '--quiet', 'origin', 'HEAD:main')
+      return
+    } catch (err) {
+      if (i >= attempts) throw new Error(`push rejected ${attempts} times — ${err instanceof Error ? err.message.split('\n')[0] : err}`)
+      git(root, 'fetch', '--quiet', 'origin')
+      try {
+        // During a rebase "theirs" is the commit being replayed — ours.
+        git(root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'rebase', '--quiet', '-X', 'theirs', 'origin/main')
+      } catch (rebaseErr) {
+        try {
+          git(root, 'rebase', '--abort')
+        } catch {
+          /* nothing to abort */
+        }
+        throw new Error(`push rejected and rebase onto origin/main failed: ${rebaseErr instanceof Error ? rebaseErr.message.split('\n')[0] : rebaseErr}`)
+      }
+    }
+  }
 }

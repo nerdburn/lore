@@ -53,7 +53,7 @@ const NAME_RE = /^[\w.-]+$/
 export interface GlobalConfig {
   defaultOrg?: string
   remote?: string
-  proxy?: { slack?: string; github?: string; granola?: string; notion?: string }
+  proxy?: { slack?: string; github?: string; granola?: string; notion?: string; jira?: string }
 }
 
 export function readGlobalConfig(): GlobalConfig {

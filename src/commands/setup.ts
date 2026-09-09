@@ -15,6 +15,10 @@ export interface SetupFlags {
   granola?: string
   /** Comma-separated Notion page/database ids or URLs scoping this client's docs — adds a notion source. */
   notion?: string
+  /** Comma-separated Jira project keys — adds a jira source (site from --jira-site or the proxy). */
+  jira?: string
+  /** https://<site>.atlassian.net, for permalinks (and the API when no proxy). */
+  jiraSite?: string
   /** Client display name (defaults to the project name, capitalised). */
   client?: string
   /** Comma-separated client email domains, e.g. "acme.com,acme.ca". */
@@ -87,6 +91,10 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       .split(/[,\s]+/)
       .map((r) => r.trim())
       .filter(Boolean)
+    const jiraProjects = (flags.jira ?? '')
+      .split(/[,\s]+/)
+      .map((k) => k.trim().toUpperCase())
+      .filter(Boolean)
 
     // Name: explicit arg > the project repo we're standing in > first channel.
     let name = repoArg?.includes('/') ? repoArg.split('/')[1] : repoArg
@@ -108,14 +116,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       project,
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots),
+      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length ? ` · jira: ${jiraProjects.join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -166,6 +174,8 @@ export function buildSources(
   proxy: GlobalConfig['proxy'],
   granolaFolders: string[] = [],
   notionRoots: string[] = [],
+  jiraProjects: string[] = [],
+  jiraSite?: string,
 ): Record<string, Record<string, unknown>> {
   const sources: Record<string, Record<string, unknown>> = {
     slack: proxy?.slack ? { channels, api_base: proxy.slack } : { channels, token: 'env:SLACK_TOKEN' },
@@ -179,6 +189,11 @@ export function buildSources(
   }
   if (notionRoots.length) {
     sources.notion = proxy?.notion ? { roots: notionRoots, api_base: proxy.notion } : { roots: notionRoots, token: 'env:NOTION_TOKEN' }
+  }
+  if (jiraProjects.length) {
+    sources.jira = proxy?.jira
+      ? { projects: jiraProjects, api_base: proxy.jira, ...(jiraSite ? { site: jiraSite } : {}) }
+      : { projects: jiraProjects, site: jiraSite ?? 'https://CHANGE-ME.atlassian.net', email: 'env:JIRA_EMAIL', token: 'env:JIRA_TOKEN' }
   }
   return sources
 }

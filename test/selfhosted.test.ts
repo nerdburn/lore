@@ -94,6 +94,8 @@ test('setup: buildSources writes proxy bases (no tokens) when proxies are config
   assert.deepEqual(buildSources(['#acme'], [], undefined, ['Acme', 'Acme Ops']).granola, { folders: ['Acme', 'Acme Ops'] })
   assert.deepEqual(buildSources(['#acme'], [], undefined, [], ['abc']).notion, { roots: ['abc'], token: 'env:NOTION_TOKEN' })
   assert.deepEqual(buildSources(['#acme'], [], { notion: 'https://notion.int.exe.xyz/v1' }, [], ['abc']).notion, { roots: ['abc'], api_base: 'https://notion.int.exe.xyz/v1' })
+  assert.deepEqual(buildSources(['#acme'], [], { jira: 'https://jira.int.exe.xyz/rest/api/3' }, [], [], ['ACM'], 'https://acme.atlassian.net').jira, { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3', site: 'https://acme.atlassian.net' })
+  assert.deepEqual(buildSources(['#acme'], [], undefined, [], [], ['ACM']).jira, { projects: ['ACM'], site: 'https://CHANGE-ME.atlassian.net', email: 'env:JIRA_EMAIL', token: 'env:JIRA_TOKEN' })
   assert.deepEqual(buildSources(['#acme'], ['a/b'], { slack: 'http://s' }), {
     slack: { channels: ['#acme'], api_base: 'http://s' },
     github: { repos: ['a/b'], token: 'env:LORE_GITHUB_TOKEN' },
@@ -160,6 +162,46 @@ test('run-all: progress is committed even when the run fails, so checkpoints sur
   execFileSync('git', ['clone', '--quiet', bare, check])
   assert.ok(existsSync(join(check, 'context/streams/fake/#c/2026-09-01.md')))
   assert.match(readFileSync(join(check, 'state.json'), 'utf8'), /"good"/)
+})
+
+test('run-all: a commit pushed to the bare repo mid-run is absorbed — sync commit rebased and pushed', async () => {
+  const bareDir = mkdtempSync(join(tmpdir(), 'lore-repos4-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'lore-work4-'))
+  const bare = join(bareDir, 'lore-race.git')
+  mkdirSync(bare)
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', bare])
+  const src = makeContextRepo({}, { project: 'race', sources: { fake: {} } })
+  g(src, 'init', '--quiet', '-b', 'main')
+  g(src, 'config', 'user.email', 't@t')
+  g(src, 'config', 'user.name', 't')
+  g(src, 'add', '-A')
+  g(src, 'commit', '--quiet', '-m', 'scaffold')
+  g(src, 'push', '--quiet', bare, 'main')
+  // A laptop pins a fact while the host's sync is running (from inside fetch).
+  const laptop = mkdtempSync(join(tmpdir(), 'lore-laptop-'))
+  execFileSync('git', ['clone', '--quiet', bare, laptop])
+  const registry: Record<string, Connector> = {
+    fake: {
+      name: 'fake',
+      fetch: async () => {
+        writeFileSync(join(laptop, 'context/facts.yaml'), '- id: pin-0001\n  fact: pinned mid-run\n  category: general\n  authorized_by: t\n  date: 2026-09-09\n')
+        g(laptop, 'config', 'user.email', 't@t')
+        g(laptop, 'config', 'user.name', 't')
+        g(laptop, 'add', '-A')
+        g(laptop, 'commit', '--quiet', '-m', 'lore: remember pin-0001')
+        g(laptop, 'push', '--quiet', 'origin', 'main')
+        return { docs: [doc('race-1')], nextCursor: { n: 1 } }
+      },
+    },
+  }
+  const { result } = await captureConsole(() => runAll({ repos: bareDir, work: workDir }, registry))
+  assert.deepEqual(result.clients['lore-race'], { status: 'synced', committed: true })
+  const check = mkdtempSync(join(tmpdir(), 'lore-check4-'))
+  execFileSync('git', ['clone', '--quiet', bare, check])
+  assert.equal(g(check, 'log', '-1', '--format=%s'), 'chore(lore): sync lore-race', 'sync commit is on top')
+  assert.equal(g(check, 'log', '--format=%s', '-3').split('\n').length, 3, 'pin commit preserved underneath')
+  assert.match(readFileSync(join(check, 'context/facts.yaml'), 'utf8'), /pinned mid-run/, 'the laptop pin survived')
+  assert.ok(existsSync(join(check, 'context/streams/fake/#c/2026-09-01.md')), 'the sync output survived')
 })
 
 test('run-all: no-change runs commit a state heartbeat only', async () => {

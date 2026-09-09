@@ -1,6 +1,7 @@
 import type { Connector } from '../types.js'
 import { github } from './github.js'
 import { granola } from './granola.js'
+import { jira } from './jira.js'
 import { notion } from './notion.js'
 import { slack } from './slack.js'
 
@@ -10,11 +11,12 @@ import { slack } from './slack.js'
  * Connector interface, add its config schema to `sourceSchemas`, and
  * register it here under its lore.json key.
  *
- * Planned: jira (when a client needs it), email.
+ * Planned: email.
  */
 export const connectors: Record<string, Connector> = {
   slack,
   github,
   granola,
   notion,
+  jira,
 }

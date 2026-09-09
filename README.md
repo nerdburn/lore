@@ -1,6 +1,6 @@
 # lore
 
-**Git-native project memory for agents.** Everything is derived from sources of truth (Slack, GitHub, Granola meetings, Notion; Jira and email planned) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
+**Git-native project memory for agents.** Everything is derived from sources of truth (Slack, GitHub, Granola meetings, Notion, Jira; email planned) — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
 
 No server, no database service. Text in git is the source of truth; a GitHub Actions cron keeps it fresh; the CLI is the interface — the repo is just the database.
 
@@ -133,7 +133,16 @@ plus a secret on the repo. Every scope belongs to exactly one client repo.
   (default 30) wait for the next run. Token as `env:NOTION_TOKEN`, or an
   `api_base` proxy that injects it.
 
-`lore setup --github "acme/web,acme/mobile" --granola "Acme" --notion "<page url>" --client "Acme" --domains "acme.com"`
+- **Jira Cloud** syncs issues and comments per project key, rendering
+  Atlassian Document Format to markdown, and maintains
+  `context/work/jira/<KEY>.yaml` — the live issue table with Jira's status
+  and status category (`state: open` unless the category is Done), seeded
+  with every unresolved issue on the first sync. Credentials are HTTP Basic:
+  `email` + `token` as env refs, or an `api_base` proxy that injects the
+  header (`--header "Authorization: Basic <base64 email:token>"`). `site` is
+  the Atlassian URL for permalinks.
+
+`lore setup --github "acme/web" --granola "Acme" --notion "<page url>" --jira "ACM" --jira-site https://acme.atlassian.net --client "Acme" --domains "acme.com"`
 writes the sources and the client block (below).
 
 **Who the client is.** Every context repo can carry a `client` block — name,
@@ -331,7 +340,7 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys --jira-site url] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore run-all --repos d --work d [--extract] [--report]` | self-hosted scheduler: sync every bare repo under a dir, commit, push (from a timer on the host) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
@@ -382,7 +391,7 @@ resolution, archive, recall, every MCP tool over an in-memory transport,
 
 ## Status
 
-Connectors: Slack, GitHub (with the source-owned work table), Granola, Notion. `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit), the query surface — `grep`, `recall`, `remember`, `mcp` — with pointer resolution + `~/.lore/cache`, client lifecycle (`archive`), fail-safe sync with per-source health, secret scrubbing, and an audit log. Next (see [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): client/contact model, `work_tracking` modes, client-scoped MCP tools. Jira when a client needs it.
+Connectors: Slack, GitHub and Jira (each with a source-owned work table), Granola, Notion. `extract` (requests/decisions/roadmap fold + weekly report + pin-contradiction audit), the query surface — `grep`, `recall`, `remember`, `mcp` — with pointer resolution + `~/.lore/cache`, client lifecycle (`archive`), fail-safe sync with per-source health, secret scrubbing, and an audit log. Next (see [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): contact identity resolution, `work_tracking` modes, client-scoped MCP tools, remote MCP.
 
 ## Principles
 

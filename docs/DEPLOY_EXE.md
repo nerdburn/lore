@@ -38,6 +38,8 @@ Create once, attach to the `lore` tag so every future lore VM gets them:
 ```sh
 ssh exe.dev integrations add http-proxy --name slack  --target https://slack.com      --bearer xoxb-… --attach tag:lore
 ssh exe.dev integrations add http-proxy --name notion --target https://api.notion.com --bearer ntn_…  --attach tag:lore
+ssh exe.dev integrations add http-proxy --name jira   --target https://<site>.atlassian.net \
+    --header "Authorization: Basic $(printf '%s:%s' you@company.com ATLASSIAN_API_TOKEN | base64)" --attach tag:lore
 ssh exe.dev integrations add github --name lore-acme-web --repository acme/web --readonly --attach tag:lore   # per client repo
 ```
 
@@ -50,7 +52,7 @@ runner's home and refreshes in place:
 ssh exedev@lore-host.exe.xyz lore auth granola     # prints a URL + code; approve in a browser
 ```
 
-Inside the VM these become `https://slack.int.exe.xyz/api`, `https://notion.int.exe.xyz/v1`, and — for every GitHub repo integration
+Inside the VM these become `https://slack.int.exe.xyz/api`, `https://notion.int.exe.xyz/v1`, `https://jira.int.exe.xyz/rest/api/3`, and — for every GitHub repo integration
 together — `https://github.int.exe.xyz/api/v3` (GitHub Enterprise-style REST
 layout; git and `gh` work against the same host). The GitHub integrations use
 exe.dev's GitHub App: connect your account once at exe.dev/integrations, install
@@ -69,7 +71,8 @@ fine-grained tokens enabled and the token's resource owner is the org.
   "proxy": {
     "slack":   "https://slack.int.exe.xyz/api",
     "github":  "https://github.int.exe.xyz/api/v3",
-    "notion":  "https://notion.int.exe.xyz/v1"
+    "notion":  "https://notion.int.exe.xyz/v1",
+    "jira":    "https://jira.int.exe.xyz/rest/api/3"
   }
 }
 ```
