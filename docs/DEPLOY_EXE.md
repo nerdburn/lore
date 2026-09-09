@@ -98,7 +98,31 @@ speaks the Anthropic Messages API and holds the key off-VM — verified with
 `claude-opus-4-8`); or `CLAUDE_CODE_OAUTH_TOKEN` for the subscription
 backend via the preinstalled `claude` CLI.
 
-## 6. Archive, backup, access
+## 6. Giving another VM's agent access
+
+An agent on a different exe.dev VM (a Slack bot, a coding agent) reads lore
+by cloning from the host over SSH, so it needs a key that the exe.dev edge
+accepts — VM sshd `authorized_keys` files are ignored there:
+
+```sh
+ssh <agent-vm> 'ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519; cat ~/.ssh/id_ed25519.pub'
+ssh exe.dev ssh-key add --tag=lore "<that public key>"      # scoped to lore-tagged VMs only
+```
+
+Then on the agent VM: install lore (Node ≥ 20), write `~/.lore/config.json`
+with the same `remote`, and register the MCP server with an absolute command
+and explicit env, e.g. for a stdio MCP config:
+
+```json
+"lore": { "type": "stdio", "command": "/path/to/lore", "args": ["mcp", "--context", "lore-acme"],
+          "env": { "LORE_HOME": "/home/<user>/.lore", "HOME": "/home/<user>", "PATH": "/path/to/node/bin:/usr/bin:/bin" } }
+```
+
+Allow the four `mcp__lore__*` tools in the agent's permission rules and give
+it the `lore-mcp` skill from `plugins/lore/skills/`. The agent's first call
+clones the context repo into its own `~/.lore/cache`; reads pull, pins push.
+
+## 7. Archive, backup, access
 
 - `lore archive --context lore-acme` flips the lifecycle; `run-all` skips it.
   The bare repo stays.
