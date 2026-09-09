@@ -107,7 +107,7 @@ Rules:
 - Update, don't rewrite. Preserve existing item ids and wording unless the new material is evidence that they should change.
 - Only add items with real evidence in the material: a request is something someone asked for; a decision is something someone with authority declared; a roadmap item is planned work. Casual chatter is not an artifact.
 - Every new or changed item cites the most relevant source permalink from the material.
-- Never delete a request. When new evidence shows one was completed, mark it done. Requests older than ~30 days with no activity become "stale", never "open".
+- Never delete a request, decision, or roadmap item. Every existing item must appear in your output (updated if evidence changed it). When new evidence shows a request was completed, mark it done. Requests older than ~30 days with no activity become "stale", never "open".
 - New ids continue the existing sequence (req-0007 after req-0006).
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
 
@@ -162,7 +162,11 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = llm === 'sdk' ? await sdkFold(user) : cliFold(user)
-      for (const name of wantArtifacts) artifacts[name] = (result as unknown as Record<string, unknown[]>)[name]
+      for (const name of wantArtifacts) {
+        const merged = acceptFold(name, artifacts[name], (result as unknown as Record<string, unknown[]>)[name])
+        if (merged.rejected) console.warn(`  ⚠ ${name}: model returned ${merged.rejected} — keeping the previous ${artifacts[name].length} item(s)`)
+        artifacts[name] = merged.items
+      }
       contradictions = result.contradictions
       // Checkpoint after every batch — artifacts to disk, fold position to
       // state.lastExtract — so a killed fold resumes at the next batch
@@ -256,6 +260,33 @@ async function sdkText(system: string, user: string, schema?: Record<string, unk
 function cliFold(user: string): FoldResult {
   const instruction = `\n\nRespond with ONLY a JSON object matching this schema — no prose, no code fences:\n${JSON.stringify(FOLD_SCHEMA)}`
   return parseFoldOutput(cliCall(FOLD_SYSTEM + instruction, user))
+}
+
+/**
+ * The fold is update-only: items may be added or changed, never dropped.
+ * A model that returns fewer items than it was given (or loses existing
+ * ids) has failed the batch for that artifact — keep the previous list
+ * rather than commit data loss to git. Returns what to store and, when the
+ * new list was rejected, a short reason for the log.
+ */
+export function acceptFold(
+  name: string,
+  previous: unknown[],
+  proposed: unknown[] | undefined,
+): { items: unknown[]; rejected?: string } {
+  if (!Array.isArray(proposed)) return { items: previous, rejected: `no "${name}" array` }
+  if (previous.length === 0) return { items: proposed }
+  const ids = (list: unknown[]) => new Set(list.map((i) => (i as { id?: string }).id).filter(Boolean) as string[])
+  const before = ids(previous)
+  const after = ids(proposed)
+  const lost = [...before].filter((id) => !after.has(id))
+  if (proposed.length < previous.length || lost.length > 0) {
+    return {
+      items: previous,
+      rejected: `${proposed.length} item(s) for ${previous.length} existing${lost.length ? `, missing ${lost.slice(0, 5).join(', ')}${lost.length > 5 ? '…' : ''}` : ''}`,
+    }
+  }
+  return { items: proposed }
 }
 
 /**
