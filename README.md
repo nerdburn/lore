@@ -257,19 +257,36 @@ Any MCP client, pinned to a project:
 { "mcpServers": { "lore": { "command": "lore", "args": ["mcp", "-p", "acme"] } } }
 ```
 
-Two skills ship with the repo (Claude Code: copy each to `~/.claude/skills/<name>/`):
+### The Claude Code plugin — skills + server in one install
 
-[`skills/lore-mcp/SKILL.md`](skills/lore-mcp/SKILL.md) teaches an agent to
-*use* the memory well: recall the structured layers first, grep → read the
-raw streams for specifics, cite sources, and pin facts only on explicit user
-instruction — plus how to connect the server when it isn't already.
+This repo is a Claude Code plugin marketplace. One install gives an agent the
+`lore` MCP server and the two skills that teach it to use lore well:
 
-And [`skills/lore-onboard/SKILL.md`](skills/lore-onboard/SKILL.md) teaches an
-agent the whole onboarding:
-run `lore setup --yes` with flags, relay the human steps, re-sync after
-invites, verify with a real `lore grep` before declaring success — plus the
-rules an agent must not relax (context repos in *your* org, one Slack app per
-workspace, tokens never in git).
+```
+/plugin marketplace add nerdburn/lore
+/plugin install lore@lore
+```
+
+(`claude plugin install lore@lore --scope project` pins it for a whole team
+via `.claude/settings.json`.) The plugin lives in
+[`plugins/lore/`](plugins/lore/) and needs the `lore` CLI on the PATH.
+
+[`plugins/lore/skills/lore-mcp/SKILL.md`](plugins/lore/skills/lore-mcp/SKILL.md)
+teaches an agent to *use* the memory: the trust order (pins → work tables →
+derived → reports → raw streams), when to recall versus grep, that GitHub's
+work table is authoritative for delivery state and meetings are evidence
+rather than decisions, to cite sources and report freshness, and to pin facts
+only on explicit user instruction — plus how to connect the server when it
+isn't already.
+
+[`plugins/lore/skills/lore-onboard/SKILL.md`](plugins/lore/skills/lore-onboard/SKILL.md)
+teaches the whole onboarding: check the hosting mode, run `lore setup --yes`
+with flags, relay the human steps, verify with a real query before declaring
+success — plus the rules an agent must not relax.
+
+[`plugins/lore/evals/`](plugins/lore/evals/) holds behavioural evals for
+the skill (answers from the work table, cites sources, never pins uninvited);
+run them with `claude plugin eval ./plugins/lore` — see its README.
 
 ## Command reference
 

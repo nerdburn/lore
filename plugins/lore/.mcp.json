@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lore": {
+      "command": "lore",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

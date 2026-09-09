@@ -52,3 +52,16 @@ test('context: no lore.json anywhere is a clear error', () => {
 test('context: cache paths are namespaced by owner__repo under ~/.lore', () => {
   assert.match(cachePath('inputlogic/lore-acme'), /\.lore\/cache\/inputlogic__lore-acme$/)
 })
+
+test('context: LORE_CONTEXT env pins the context when no flag or lore.json does', () => {
+  const target = makeContextRepo({}, { project: 'from-env' })
+  const elsewhere = makeContextRepo({}, { project: 'cwd' })
+  process.env.LORE_CONTEXT = target
+  try {
+    assert.equal(resolveContext(elsewhere).config.project, 'cwd', 'a lore.json in cwd wins over the env')
+    assert.equal(resolveContext(elsewhere, { context: target }).config.project, 'from-env', 'an explicit flag wins over both')
+    assert.equal(resolveContext('/', {}).config.project, 'from-env', 'no lore.json anywhere → env fallback')
+  } finally {
+    delete process.env.LORE_CONTEXT
+  }
+})

@@ -1,0 +1,11 @@
+{
+  "name": "lore",
+  "owner": { "name": "Shawn Adrian", "url": "https://github.com/nerdburn" },
+  "plugins": [
+    {
+      "name": "lore",
+      "source": "./plugins/lore",
+      "description": "Project memory for agents: lore MCP server + the skills that teach an agent to use and onboard it."
+    }
+  ]
+}

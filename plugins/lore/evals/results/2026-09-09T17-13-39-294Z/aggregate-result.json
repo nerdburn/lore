@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "claudeVersion": "2.1.266",
+  "startedAt": "2026-09-09T17:13:39.294Z",
+  "durationSeconds": 0,
+  "costUsd": 0,
+  "partial": false,
+  "suite": {
+    "root": "/Users/nerdburn/Sites/lore/plugins/lore",
+    "ablation": "with-without",
+    "threshold": 0.5,
+    "plugins": [
+      {
+        "name": "lore",
+        "version": "0.4.0",
+        "path": "/Users/nerdburn/Sites/lore/plugins/lore"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "cite-source",
+      "dir": "evals/cite-source",
+      "source": "prose",
+      "promptMarkdown": "When was the \"resumable folds\" change committed, and by whom? Cite your source.",
+      "runsPerCase": 3,
+      "timeoutSeconds": 300,
+      "maxTurns": 10,
+      "graders": [
+        {
+          "name": "citation",
+          "type": "llm",
+          "weight": 1,
+          "graderMarkdown": "The answer identifies the commit (hash beginning 6b24470 and/or the message\n\"fix(extract): resumable folds — checkpoint fold position in state.json\"),\ngives the date 2026-07-23 and the author nerdburn, and cites a checkable\nsource: a GitHub permalink or the stream path\ncontext/streams/github/nerdburn_lore/2026-07-23.md.",
+          "config": {
+            "criteria": "The answer identifies the commit (hash beginning 6b24470 and/or the message\n\"fix(extract): resumable folds — checkpoint fold position in state.json\"),\ngives the date 2026-07-23 and the author nerdburn, and cites a checkable\nsource: a GitHub permalink or the stream path\ncontext/streams/github/nerdburn_lore/2026-07-23.md.",
+            "focus": "last_message"
+          }
+        },
+        {
+          "name": "facts",
+          "type": "regex",
+          "weight": 1,
+          "config": {
+            "target": "last_message",
+            "pattern": "pattern: '(?i)(2026-07-23|July 23,? 2026).*nerdburn|nerdburn.*(2026-07-23|July 23,? 2026)'",
+            "flags": "",
+            "match": "contains"
+          }
+        }
+      ],
+      "arms": {
+        "with": [
+          {
+            "score": 0,
+            "passed": false,
+            "turns": 0,
+            "costUsd": 0,
+            "judgeCostUsd": 0,
+            "durationSeconds": 0,
+            "startedAt": "2026-09-09T17:13:39.306Z",
+            "error": "case \"cite-source\" execution.env key \"LORE_CONTEXT\" is not allowed — only EVAL_* keys can be set from case.yaml. Anything else must come from the operator's shell.",
+            "tracePath": "",
+            "skippedPaidGraders": false,
+            "graders": []
+          }
+        ],
+        "without": [
+          {
+            "score": 0,
+            "passed": false,
+            "turns": 0,
+            "costUsd": 0,
+            "judgeCostUsd": 0,
+            "durationSeconds": 0,
+            "startedAt": "2026-09-09T17:13:39.336Z",
+            "error": "case \"cite-source\" execution.env key \"LORE_CONTEXT\" is not allowed — only EVAL_* keys can be set from case.yaml. Anything else must come from the operator's shell.",
+            "tracePath": "",
+            "skippedPaidGraders": false,
+            "graders": []
+          }
+        ]
+      },
+      "aggregates": {
+        "score": 0,
+        "passRate": 0,
+        "scoreWithout": 0,
+        "passRateWithout": 0,
+        "delta": 0
+      }
+    },
+    {
+      "name": "summarize-without-pinning",
+      "dir": "evals/summarize-without-pinning",
+      "source": "prose",
+      "promptMarkdown": "Give me a short summary of what the recent commits in this project were about. Keep it to a few bullets.",
+      "runsPerCase": 3,
+      "timeoutSeconds": 300,
+      "maxTurns": 8,
+      "graders": [
+        {
+          "name": "grounded",
+          "type": "llm",
+          "weight": 1,
+          "graderMarkdown": "The summary is grounded in the synced GitHub commit history (it mentions\nconcrete themes such as extraction/LLM fold, backfill, checkpointing/resumable\nfolds, or a Claude CLI backend — things actually present in the commit\nmessages) and points to at least one source: a commit hash, a permalink, or a\nstream file path/date.",
+          "config": {
+            "criteria": "The summary is grounded in the synced GitHub commit history (it mentions\nconcrete themes such as extraction/LLM fold, backfill, checkpointing/resumable\nfolds, or a Claude CLI backend — things actually present in the commit\nmessages) and points to at least one source: a commit hash, a permalink, or a\nstream file path/date.",
+            "focus": "last_message"
+          }
+        },
+        {
+          "name": "no-pin",
+          "type": "llm",
+          "weight": 1,
+          "graderMarkdown": "The agent did NOT store, pin, or \"remember\" anything: the response contains no\nclaim like \"pinned\", \"saved to memory\", or \"I'll remember that\". The user only\nasked for a summary; pinning without explicit instruction is a failure.",
+          "config": {
+            "criteria": "The agent did NOT store, pin, or \"remember\" anything: the response contains no\nclaim like \"pinned\", \"saved to memory\", or \"I'll remember that\". The user only\nasked for a summary; pinning without explicit instruction is a failure.",
+            "focus": "last_message"
+          }
+        }
+      ],
+      "arms": {
+        "with": [
+          {
+            "score": 0,
+            "passed": false,
+            "turns": 0,
+            "costUsd": 0,
+            "judgeCostUsd": 0,
+            "durationSeconds": 0,
+            "startedAt": "2026-09-09T17:13:39.377Z",
+            "error": "case \"summarize-without-pinning\" execution.env key \"LORE_CONTEXT\" is not allowed — only EVAL_* keys can be set from case.yaml. Anything else must come from the operator's shell.",
+            "tracePath": "",
+            "skippedPaidGraders": false,
+            "graders": []
+          }
+        ],
+        "without": [
+          {
+            "score": 0,
+            "passed": false,
+            "turns": 0,
+            "costUsd": 0,
+            "judgeCostUsd": 0,
+            "durationSeconds": 0,
+            "startedAt": "2026-09-09T17:13:39.404Z",
+            "error": "case \"summarize-without-pinning\" execution.env key \"LORE_CONTEXT\" is not allowed — only EVAL_* keys can be set from case.yaml. Anything else must come from the operator's shell.",
+            "tracePath": "",
+            "skippedPaidGraders": false,
+            "graders": []
+          }
+        ]
+      },
+      "aggregates": {
+        "score": 0,
+        "passRate": 0,
+        "scoreWithout": 0,
+        "passRateWithout": 0,
+        "delta": 0
+      }
+    }
+  ],
+  "aggregates": {
+    "casesTotal": 2,
+    "casesPassed": 0,
+    "overallScore": 0,
+    "overallPassRate": 0,
+    "meanDelta": 0
+  }
+}

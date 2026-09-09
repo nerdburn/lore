@@ -107,6 +107,12 @@ export function resolveContext(cwd: string, opts: ResolveOptions = {}): Resolved
     return fromLocalDir(found)
   }
 
+  // Environment fallbacks let an MCP client config or a harness pin the
+  // project without flags or a lore.json: LORE_CONTEXT (repo ref or path)
+  // or LORE_PROJECT (registry name). Below flags and a cwd lore.json.
+  if (!opts.project && process.env.LORE_CONTEXT) return resolveContext(cwd, { ...opts, context: process.env.LORE_CONTEXT })
+  if (!opts.project && process.env.LORE_PROJECT) opts = { ...opts, project: process.env.LORE_PROJECT }
+
   if (opts.project) {
     const repo = readRegistry()[opts.project]
     if (!repo) {

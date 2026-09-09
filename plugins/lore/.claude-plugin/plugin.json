@@ -1,0 +1,22 @@
+{
+  "name": "lore",
+  "displayName": "lore \u2014 project memory",
+  "version": "0.4.0",
+  "description": "Query and maintain git-native project memory (Slack, GitHub, Granola) through the lore MCP server; onboard clients; archive engagements.",
+  "author": {
+    "name": "Shawn Adrian",
+    "url": "https://github.com/nerdburn"
+  },
+  "homepage": "https://github.com/nerdburn/lore",
+  "repository": "https://github.com/nerdburn/lore",
+  "license": "MIT",
+  "keywords": [
+    "project-memory",
+    "slack",
+    "github",
+    "granola",
+    "mcp",
+    "agency"
+  ],
+  "skills": "./skills/"
+}
