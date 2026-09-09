@@ -48,6 +48,10 @@ install -d -m 750 /etc/lore
 #   ANTHROPIC_BASE_URL=https://llm.int.exe.xyz   # exe.dev LLM integration (+ any ANTHROPIC_API_KEY value)
 #   CLAUDE_CODE_OAUTH_TOKEN=...                  # Claude subscription via the claude CLI (`claude setup-token`)
 LORE_EXTRACT=0
+# Fold models: LORE_MODEL for a first fold / multi-batch re-fold (default
+# claude-opus-4-8), LORE_MODEL_INCREMENTAL for the hourly one-batch delta
+# (default claude-sonnet-5). Set both to the same id to use one model.
+# LORE_CONCURRENCY=3   clients synced at once
 ENV
 chmod 640 /etc/lore/env
 chown root:"$LORE_USER" /etc/lore/env
@@ -67,9 +71,13 @@ fi
 cat > /usr/local/bin/lore-run-all <<'RUN'
 #!/usr/bin/env bash
 # Wrapper so the extract flag follows /etc/lore/env without editing the unit.
+#   lore-run-all              hourly: sync every client, then fold if LORE_EXTRACT=1
+#   lore-run-all --sync-only  on demand (lore refresh / lore_sync_now): sync only, never fold
 set -euo pipefail
-args=(run-all --repos /srv/lore/repos --work /srv/lore/work)
-[ "${LORE_EXTRACT:-0}" = "1" ] && args+=(--extract)
+args=(run-all --repos /srv/lore/repos --work /srv/lore/work --concurrency "${LORE_CONCURRENCY:-3}")
+if [ "${1:-}" != "--sync-only" ] && [ "${LORE_EXTRACT:-0}" = "1" ]; then
+  args+=(--extract)
+fi
 exec lore "${args[@]}"
 RUN
 chmod 755 /usr/local/bin/lore-run-all
@@ -87,6 +95,26 @@ EnvironmentFile=/etc/lore/env
 WorkingDirectory=/srv/lore
 ExecStart=/usr/local/bin/lore-run-all
 TimeoutStartSec=5h
+Nice=5
+UNIT
+
+# Sync-only twin for on-demand refreshes: `lore refresh --trigger` (and the
+# lore_sync_now MCP tool) start this unit and wait for it. It shares the work
+# clones with lore-sync.service under run-all's per-client locks, so it can
+# run while the hourly fold is still going.
+cat > /etc/systemd/system/lore-sync-now.service <<UNIT
+[Unit]
+Description=lore: sync every context repo now (no fold)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$LORE_USER
+EnvironmentFile=/etc/lore/env
+WorkingDirectory=/srv/lore
+ExecStart=/usr/local/bin/lore-run-all --sync-only
+TimeoutStartSec=30min
 Nice=5
 UNIT
 

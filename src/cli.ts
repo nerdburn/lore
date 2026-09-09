@@ -89,8 +89,9 @@ program
   .requiredOption('--work <dir>', 'directory for working clones')
   .option('--extract', 'run extract after sync (needs LLM credentials in the environment)')
   .option('--report', 'force the weekly report')
+  .option('--concurrency <n>', 'clients to run at once (default 3)', '3')
   .action(async (opts) => {
-    const summary = await runAll(opts)
+    const summary = await runAll({ ...opts, concurrency: Number(opts.concurrency) })
     if (!summary.ok) process.exitCode = 1
   })
 
@@ -163,7 +164,7 @@ contextual(
 contextual(
   program
     .command('refresh')
-    .description('pull the latest synced memory; --trigger asks the self-hosted host to sync + extract now and waits (or waits out a run already in flight)')
+    .description('pull the latest synced memory; --trigger asks the self-hosted host to sync now and waits (~a minute; the fold stays on the hourly timer), or waits out a run already in flight')
     .option('--trigger', 'run the host sync service now (SSH to the configured remote)')
     .option('--force', 're-run even if the host synced within 10 minutes'),
 ).action((opts) => {

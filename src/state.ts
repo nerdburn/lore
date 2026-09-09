@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tryLock } from './lock.js'
 import type { Cursor } from './types.js'
 
 export const STATE_FILE = 'state.json'
@@ -35,5 +36,37 @@ export function loadState(root: string): LoreState {
 }
 
 export function saveState(root: string, state: LoreState): void {
-  writeFileSync(join(root, STATE_FILE), JSON.stringify(state, null, 2) + '\n')
+  const path = join(root, STATE_FILE)
+  writeFileSync(`${path}.tmp`, JSON.stringify(state, null, 2) + '\n')
+  renameSync(`${path}.tmp`, path)
+}
+
+/**
+ * Write only the keys this caller owns, re-reading the file first so a
+ * concurrent writer's keys survive. sync owns cursors/sources/lastSync and
+ * extract owns extracted/lastExtract; run-all lets a sync-now run overlap an
+ * in-flight fold on the same clone, and this is what keeps them from
+ * clobbering each other's half of state.json. A short lock serialises the
+ * read-modify-write itself. Returns the merged state.
+ */
+export function updateState(root: string, patch: Partial<LoreState>): LoreState {
+  const lockPath = join(root, `${STATE_FILE}.lock`)
+  const deadline = Date.now() + 10_000
+  let lock = tryLock(lockPath)
+  while (!lock) {
+    if (Date.now() > deadline) throw new Error(`state.json is locked (${lockPath})`)
+    spin(50)
+    lock = tryLock(lockPath)
+  }
+  try {
+    const merged = { ...loadState(root), ...patch }
+    saveState(root, merged)
+    return merged
+  } finally {
+    lock.release()
+  }
+}
+
+function spin(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }

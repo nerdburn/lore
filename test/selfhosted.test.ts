@@ -8,11 +8,14 @@ import { join } from 'node:path'
 import { before, test } from 'node:test'
 import { runAll } from '../src/commands/run-all.js'
 import { buildSources } from '../src/commands/setup.js'
-import { refresh, sshTargetFromRemote, START_CMD, STATE_CMD, unitOutcome, WAIT_CMD } from '../src/commands/refresh.js'
+import { refresh, sshTargetFromRemote, START_CMD, STATE_CMD, UNIT_PRELUDE, unitOutcome, WAIT_CMD } from '../src/commands/refresh.js'
 import { configSchema } from '../src/config.js'
 import { cachePath, isRepoRef, readGlobalConfig, remoteUrl, resolveContext, writeGlobalConfig } from '../src/context.js'
 import type { Connector, Doc } from '../src/types.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
+import { acquireLock, lockHolder, tryLock } from '../src/lock.js'
+import { loadState, updateState } from '../src/state.js'
+import { rmSync } from 'node:fs'
 
 const home = mkdtempSync(join(tmpdir(), 'lore-home-'))
 const repos = mkdtempSync(join(tmpdir(), 'lore-repos-'))
@@ -275,7 +278,9 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
     assert.equal(stale.host, 'ran')
     assert.equal(stale.outcome, 'success')
     assert.deepEqual(calls, [`${target} ${STATE_CMD}`, `${target} ${START_CMD}`])
-    assert.match(START_CMD, /^sudo systemctl start lore-sync\.service; systemctl show/, 'start is not the last command, so its exit code never fails the ssh')
+    assert.match(START_CMD, /; sudo systemctl start \$U; systemctl show/, 'start is not the last command, so its exit code never fails the ssh')
+    assert.ok(START_CMD.startsWith(UNIT_PRELUDE) && STATE_CMD.startsWith(UNIT_PRELUDE) && WAIT_CMD.startsWith(UNIT_PRELUDE), 'every command resolves the unit first')
+    assert.match(UNIT_PRELUDE, /lore-sync-now\.service.*\|\| echo lore-sync\.service/, 'prefers the sync-only unit, falls back to the hourly one on an un-upgraded host')
 
     calls.length = 0
     const forced = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, force: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
@@ -317,4 +322,119 @@ test('refresh: unitOutcome reads systemd Result/ExecMainStatus', () => {
   assert.equal(unitOutcome('Result=exit-code\nExecMainStatus=2\n').outcome, 'failed')
   assert.match(unitOutcome('Result=timeout\nExecMainStatus=0\n').note ?? '', /failed \(timeout\)/)
   assert.match(unitOutcome('').note ?? '', /could not read/)
+})
+
+test('lock: tryLock is exclusive, reclaims a lock whose owner died, and acquireLock waits', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lore-lock-'))
+  const path = join(dir, 'client.sync')
+  const a = tryLock(path)
+  assert.ok(a)
+  assert.equal(tryLock(path), undefined, 'held by us (alive)')
+  assert.equal(lockHolder(path), process.pid)
+  a!.release()
+  assert.equal(lockHolder(path), undefined)
+
+  // A lock left by a dead process is stale: fake one with an impossible pid.
+  mkdirSync(path)
+  writeFileSync(join(path, 'pid'), '2147483646')
+  assert.equal(lockHolder(path), undefined)
+  const b = tryLock(path)
+  assert.ok(b, 'reclaimed')
+
+  // acquireLock polls until the holder releases.
+  let acquired = false
+  const waiter = acquireLock(path, 5000, 20).then((l) => { acquired = true; l.release() })
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal(acquired, false, 'still held')
+  b!.release()
+  await waiter
+  assert.equal(acquired, true)
+  await assert.rejects(async () => { const c = tryLock(path)!; try { await acquireLock(path, 30, 10) } finally { c.release() } }, /timed out/)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('state: updateState merges only the caller\'s keys so sync and a fold checkpoint do not clobber each other', () => {
+  const root = makeContextRepo({}, { project: 'st' })
+  updateState(root, { cursors: { slack: { C1: '1' } }, lastSync: '2026-09-09T10:00:00Z' })
+  updateState(root, { extracted: { 'context/streams/a.md': 42 }, lastExtract: '2026-09-09T10:05:00Z' })
+  updateState(root, { cursors: { slack: { C1: '2' } }, lastSync: '2026-09-09T11:00:00Z' })
+  assert.deepEqual(loadState(root), {
+    cursors: { slack: { C1: '2' } },
+    lastSync: '2026-09-09T11:00:00Z',
+    extracted: { 'context/streams/a.md': 42 },
+    lastExtract: '2026-09-09T10:05:00Z',
+  })
+  assert.ok(!existsSync(join(root, 'state.json.lock')), 'lock released')
+  assert.ok(!existsSync(join(root, 'state.json.tmp')), 'atomic rename')
+})
+
+test('run-all: clients run concurrently with per-client log prefixes, and a sync-only run overlaps an in-flight fold on the same clone', async () => {
+  const bareDir = mkdtempSync(join(tmpdir(), 'lore-repos5-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'lore-work5-'))
+  for (const name of ['lore-p1', 'lore-p2']) {
+    const bare = join(bareDir, `${name}.git`)
+    mkdirSync(bare)
+    execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', bare])
+    const src = makeContextRepo({}, { project: name, sources: { fake: {} } })
+    g(src, 'init', '--quiet', '-b', 'main')
+    g(src, 'config', 'user.email', 't@t')
+    g(src, 'config', 'user.name', 't')
+    g(src, 'add', '-A')
+    g(src, 'commit', '--quiet', '-m', 'scaffold')
+    g(src, 'push', '--quiet', bare, 'main')
+  }
+  // Both fetches must be in flight at once for the run to be concurrent.
+  let inFlight = 0
+  let maxInFlight = 0
+  let n = 0
+  const registry: Record<string, Connector> = {
+    fake: {
+      name: 'fake',
+      fetch: async () => {
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((r) => setTimeout(r, 80))
+        inFlight--
+        return { docs: [doc(`c-${++n}`)], nextCursor: { n } }
+      },
+    },
+  }
+  const { result, out } = await captureConsole(() => runAll({ repos: bareDir, work: workDir, concurrency: 2 }, registry))
+  assert.equal(result.ok, true)
+  assert.equal(maxInFlight, 2, 'two clients synced at the same time')
+  assert.match(out, /\[lore-p1\] fake: 1 new docs/)
+  assert.match(out, /\[lore-p2\] fake: 1 new docs/)
+  assert.ok(!/\[lore-p\d\] --- run-all summary/.test(out), 'the summary is not attributed to a client')
+  assert.equal(typeof console.log, 'function')
+
+  // Simulate the hourly run mid-fold on p1: it holds the extract lock and has
+  // an uncommitted derived checkpoint in the clone. A sync-only run must not
+  // reset that away, must sync, commit and push, and must leave the fold's
+  // half of state.json alone.
+  const root = join(workDir, 'lore-p1')
+  const foldLock = tryLock(join(workDir, '.locks', 'lore-p1.extract'))!
+  mkdirSync(join(root, 'context/derived'), { recursive: true })
+  writeFileSync(join(root, 'context/derived/requests.yaml'), '- id: req-0001\n  request: checkpoint\n')
+  updateState(root, { extracted: { 'context/streams/fake/#c/2026-09-01.md': 7 } })
+  try {
+    const again = await captureConsole(() => runAll({ repos: bareDir, work: workDir, concurrency: 1 }, registry))
+    assert.equal(again.result.clients['lore-p1'].status, 'synced')
+    assert.equal(again.result.clients['lore-p1'].committed, true)
+    assert.match(again.result.clients['lore-p1'].note ?? '', /fold in flight/)
+    assert.ok(existsSync(join(root, 'context/derived/requests.yaml')), 'the in-flight fold\'s checkpoint survived (no reset)')
+    const st = loadState(root)
+    assert.deepEqual(st.extracted, { 'context/streams/fake/#c/2026-09-01.md': 7 }, 'fold\'s half of state.json kept')
+    assert.deepEqual(st.cursors.fake, { n: 3 }, 'sync\'s half advanced (p1 is synced first in this run, so its doc is the third overall)')
+    const check = mkdtempSync(join(tmpdir(), 'lore-check5-'))
+    execFileSync('git', ['clone', '--quiet', join(bareDir, 'lore-p1.git'), check])
+    assert.equal(g(check, 'log', '-1', '--format=%s'), 'chore(lore): sync lore-p1', 'raw streams pushed without waiting for the fold')
+
+    // And an extracting run arriving while the fold lock is held skips its own fold instead of doubling up.
+    const skip = await captureConsole(() => runAll({ repos: bareDir, work: workDir, concurrency: 1, extract: true }, registry))
+    assert.equal(skip.result.clients['lore-p1'].status, 'synced')
+    assert.match(skip.result.clients['lore-p1'].note ?? '', /fold skipped/)
+    assert.match(skip.out, /fold skipped — another run is already folding/)
+  } finally {
+    foldLock.release()
+  }
 })

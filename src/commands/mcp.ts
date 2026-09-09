@@ -100,7 +100,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     'lore_sync_now',
     {
       description:
-        'Refresh project memory. Pulls the latest synced data; with trigger=true also asks the lore host to run its sync + extract right now (Slack, GitHub, Granola) and waits for it — minutes, sometimes longer. If a host run is already in flight it waits for that one instead of starting another (host: "waited"). Use only when the user asks for fresh data or the last sync is stale. Never run `lore sync` yourself: agents cannot sync, only the host can. Returns before/after freshness plus host/outcome; a failed host run is reported in outcome, not thrown.',
+        'Refresh project memory. Pulls the latest synced data; with trigger=true also asks the lore host to sync right now (Slack, GitHub, Granola, Notion, Jira) and waits for it — about a minute. Raw streams (lore_grep/lore_read) are then current; derived artifacts (lore_recall: requests/decisions/roadmap) are refreshed by the hourly fold, so lastExtract may lag lastSync. If a host run is already in flight it waits for that one instead of starting another (host: "waited"). Use only when the user asks for fresh data or the last sync is stale. Never run `lore sync` yourself: agents cannot sync, only the host can. Returns before/after freshness plus host/outcome; a failed host run is reported in outcome, not thrown.',
       inputSchema: {
         trigger: z.boolean().optional().default(true).describe('ask the host to sync now (default true); false = just pull what the host already has'),
         force: z.boolean().optional().default(false).describe('re-run even if the host synced within the last 10 minutes'),

@@ -218,17 +218,21 @@ Optional `"write": { "allow": ["shawn", "priya"] }` restricts who may
 never name one). It is an honesty check, not authentication — anyone who can
 push to the context repo can bypass it.
 
-Slack sync re-reads a rolling `overlap_days` window (default 7) on every run
-and tracks replies per thread for `thread_window_days` (default 30), so late
-replies to old threads and edits within the window are picked up. Both are
-per-source settings under `sources.slack`.
+Slack sync re-reads a rolling `overlap_days` window (default 1) on every run
+for late deliveries, and tracks replies per thread for `thread_window_days`
+(default 30), so late replies to old threads are picked up regardless of the
+overlap. Both are per-source settings under `sources.slack`.
 
 `extract` picks its LLM backend automatically: with `ANTHROPIC_API_KEY` (or
 `ANTHROPIC_AUTH_TOKEN`) set it calls the Claude API, billed per token;
 otherwise it shells out to a logged-in `claude` CLI, which runs on your
 Claude subscription — in CI, set a `CLAUDE_CODE_OAUTH_TOKEN` secret instead
 of an API key (Max plans: `claude setup-token`). Override with
-`LORE_LLM=sdk|cli`.
+`LORE_LLM=sdk|cli`. The fold returns a delta (new or changed items only;
+everything else is kept verbatim), so an incremental fold is small. A first
+fold or multi-batch re-fold uses `LORE_MODEL` (default `claude-opus-4-8`);
+the routine one-batch fold onto existing artifacts uses
+`LORE_MODEL_INCREMENTAL` (default `claude-sonnet-5`).
 `backfill` seeds the first sync N months back (per-source overrides
 supported); everything after is forward-incremental.
 
@@ -342,7 +346,7 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 |---|---|
 | `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys --jira-site url] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
-| `lore run-all --repos d --work d [--extract] [--report]` | self-hosted scheduler: sync every bare repo under a dir, commit, push (from a timer on the host) |
+| `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
 | `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
 | `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |

@@ -106,6 +106,32 @@ speaks the Anthropic Messages API and holds the key off-VM — verified with
 `claude-opus-4-8`); or `CLAUDE_CODE_OAUTH_TOKEN` for the subscription
 backend via the preinstalled `claude` CLI.
 
+The fold is a delta — the model returns only new or changed items, and the
+runner keeps everything else — so the hourly fold costs what happened this
+hour, not the size of the project's memory. Two models: `LORE_MODEL`
+(default `claude-opus-4-8`) for a first fold or a multi-batch re-fold, and
+`LORE_MODEL_INCREMENTAL` (default `claude-sonnet-5`) for the one-batch hourly
+delta. Set both to the same id to use one model everywhere. Check the
+incremental model is reachable through the LLM integration before relying on
+it: `journalctl -u lore-sync` shows `[sdk:<model>]` on the extracting line.
+
+## 5a. What runs when
+
+| Unit | Started by | Does | Typical time |
+|---|---|---|---|
+| `lore-sync.service` | `lore-sync.timer`, hourly | every client: sync → commit → push → fold → commit → push | minutes (the fold) |
+| `lore-sync-now.service` | `lore refresh --trigger`, `lore_sync_now` | every client: sync → commit → push. Never folds | under a minute |
+
+Both run `lore run-all` on the same work clones and may overlap: per-client
+locks under `/srv/lore/work/.locks/` serialise syncs and git operations, and
+a sync-only run that arrives mid-fold syncs around it (no reset, its own
+half of `state.json`). An extracting run that finds a fold already in
+flight skips its own fold. Raw streams therefore reach the bare repo within
+a minute of any run starting; derived artifacts follow when the fold lands,
+so `recall` can show `lastExtract` behind `lastSync`. Clients are processed
+`LORE_CONCURRENCY` (default 3) at a time; journal lines are prefixed
+`[lore-<client>]`.
+
 ## 6. Giving another VM's agent access
 
 An agent on a different exe.dev VM (a Slack bot, a coding agent) reads lore

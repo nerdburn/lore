@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, normalize } from 'node:path'
 import { backfillSince, loadConfig, resolveEnvRefs } from '../config.js'
 import { connectors } from '../connectors/index.js'
-import { loadState, saveState, type SourceHealth } from '../state.js'
+import { loadState, updateState, type SourceHealth } from '../state.js'
 import { writeDocs } from '../streams.js'
 import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
@@ -108,8 +108,9 @@ export async function sync(root: string, registry: Record<string, Connector> = c
     state.sources[name] = health
   }
 
-  state.lastSync = new Date().toISOString()
-  saveState(root, state)
+  // Only sync's half of state.json — a fold may be checkpointing its own
+  // half (`extracted`) on this clone at the same time.
+  updateState(root, { cursors: state.cursors, sources: state.sources, lastSync: new Date().toISOString() })
 
   if (!summary.ok) {
     const failed = Object.entries(summary.sources)

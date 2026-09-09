@@ -26,22 +26,30 @@ const MIN_INTERVAL_MS = 10 * 60_000
 const HOST_TIMEOUT_MS = 45 * 60_000
 const STATUS_TIMEOUT_MS = 60_000
 
-export const UNIT = 'lore-sync.service'
+/**
+ * Which unit "sync now" means on the host. Newer hosts have a sync-only
+ * unit (`lore-sync-now.service`, seconds) beside the hourly sync+fold unit
+ * (`lore-sync.service`, minutes); older hosts only the latter. Every command
+ * below resolves `$U` first so a laptop on the new CLI still works against a
+ * host that has not been re-provisioned.
+ */
+export const UNIT_PRELUDE = 'U=$(systemctl cat lore-sync-now.service >/dev/null 2>&1 && echo lore-sync-now.service || echo lore-sync.service)'
 /** Prints the unit's ActiveState; `is-active` exits non-zero for anything but `active`, so swallow that. */
-export const STATE_CMD = `systemctl is-active ${UNIT} || true`
-const SHOW_CMD = `systemctl show -p Result,ExecMainStatus ${UNIT}`
+export const STATE_CMD = `${UNIT_PRELUDE}; systemctl is-active $U || true`
+const SHOW_CMD = 'systemctl show -p Result,ExecMainStatus $U'
 /** Block until the in-flight run finishes (a oneshot is `activating` while ExecStart runs), then report how it ended. */
-export const WAIT_CMD = `while case "$(systemctl is-active ${UNIT})" in activating|active|deactivating) true;; *) false;; esac; do sleep 5; done; ${SHOW_CMD}`
+export const WAIT_CMD = `${UNIT_PRELUDE}; while case "$(systemctl is-active $U)" in activating|active|deactivating) true;; *) false;; esac; do sleep 5; done; ${SHOW_CMD}`
 /** `systemctl start` on a oneshot blocks until it exits; its exit code is not the signal, the unit's Result is. */
-export const START_CMD = `sudo systemctl start ${UNIT}; ${SHOW_CMD}`
+export const START_CMD = `${UNIT_PRELUDE}; sudo systemctl start $U; ${SHOW_CMD}`
 
 const IN_FLIGHT = new Set(['activating', 'active', 'deactivating'])
 
 /**
  * "Sync now" for agents and humans who don't sit on the host. Pulls the cache
  * clone so reads see everything the host has committed; with `trigger`, first
- * asks the host to run its sync service (the same unit the hourly timer
- * runs) and waits for it. Only possible when the remote is an SSH target the
+ * asks the host to run its sync-only service and waits for it — raw streams
+ * land in about a minute; the LLM fold that updates derived artifacts stays
+ * on the hourly timer, so `lastExtract` may lag `lastSync`. Only possible when the remote is an SSH target the
  * caller can reach — that is how self-hosted lore is wired. A run already in
  * flight (the timer fired, or another caller triggered) is waited out rather
  * than re-triggered; a sync that finished within the last 10 minutes is not

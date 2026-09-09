@@ -91,12 +91,15 @@ look for that in Slack or a pin before stating it as settled.
   artifacts can lag the streams until the next extract. The host syncs on a
   timer (hourly). **Never run `lore sync` yourself** — an agent has neither
   the credentials nor the network for it. When the user asks for fresh data
-  or the last sync is stale, call `lore_sync_now` (it asks the host to sync +
-  extract and waits, which can take minutes; if a run is already in flight it
-  waits for that one) and tell the user what changed. Check `outcome`: a
-  `failed` host run comes back in the result rather than as an error — say so
-  instead of presenting the data as fresh. With `trigger: false` it only pulls
-  what the host already has.
+  or the last sync is stale, call `lore_sync_now` (it asks the host to sync
+  now and waits — about a minute; if a run is already in flight it waits for
+  that one) and tell the user what changed. Fresh raw material is then in
+  `lore_grep`/`lore_read`; the derived lists behind `lore_recall` (requests,
+  decisions, roadmap) are updated by the hourly fold, so after a sync-now
+  check the streams for anything newer than `lastExtract` before answering
+  from recall. Check `outcome`: a `failed` host run comes back in the result
+  rather than as an error — say so instead of presenting the data as fresh.
+  With `trigger: false` it only pulls what the host already has.
 - Zero grep hits ≠ "it never happened" — try synonyms and looser patterns;
   memory covers only the configured channels, repos, and meeting folders,
   since the backfill window.
