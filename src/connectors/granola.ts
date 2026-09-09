@@ -25,7 +25,7 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
  * threaded reply. Attendee emails are kept in `meta` so a later contact
  * model can resolve identities without re-querying.
  *
- * Meetings are synced only once they are `settle_hours` old (default 3) so
+ * Meetings are synced only once they are `settle_hours` old (default 1) so
  * Granola has finished the summary; each sync re-lists `overlap_days`
  * (default 2) and stream dedup absorbs the repeats.
  *
@@ -45,7 +45,7 @@ interface GranolaCursor {
 
 const DEFAULT_ENDPOINT = 'https://mcp.granola.ai/mcp'
 const DEFAULT_OVERLAP_DAYS = 2
-const DEFAULT_SETTLE_HOURS = 3
+const DEFAULT_SETTLE_HOURS = 1
 const DAY_MS = 86_400_000
 const LIST_WINDOW_DAYS = 30
 const GET_BATCH = 10

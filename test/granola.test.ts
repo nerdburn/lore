@@ -214,7 +214,7 @@ test('granola: folder scope → notes + transcript docs, attendee emails kept as
 test('granola: settle window skips meetings that just ended; transcripts can be disabled', async () => {
   const s = scripted()
   const realNow = Date.now
-  Date.now = () => Date.parse('2026-09-08T19:00:00Z') // 1h after the Sep 8 meeting
+  Date.now = () => Date.parse('2026-09-08T18:30:00Z') // 30 min after the Sep 8 meeting — inside the 1h settle window
   try {
     const { docs, nextCursor } = await s.connector.fetch(ctx({ config: { token: 't', folders: ['Jointly'], transcripts: false } }))
     assert.deepEqual(docs.map((d) => d.id), ['granola-22222222-2222-4222-8222-222222222222'])

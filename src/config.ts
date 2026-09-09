@@ -71,7 +71,7 @@ export const sourceSchemas = {
       transcripts: z.boolean().optional(),
       /** Days re-read on every sync (default 2). */
       overlap_days: z.number().min(0).optional(),
-      /** Hours a meeting must be over before it is synced, so Granola has finished the summary (default 3). */
+      /** Hours a meeting must be over before it is synced, so Granola has finished the summary (default 1). */
       settle_hours: z.number().min(0).optional(),
     })
     // Scope (folders / attendee_domains / the repo's `client` block) and auth

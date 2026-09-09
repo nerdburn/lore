@@ -119,7 +119,7 @@ plus a secret on the repo. Every scope belongs to exactly one client repo.
   client-side contact marks a meeting; the union is synced.
   Each meeting becomes a notes doc (title, attendees with emails, private
   notes, AI summary) plus a threaded transcript (`"transcripts": false` to
-  skip). Meetings sync once they are `settle_hours` old (default 3) so the
+  skip). Meetings sync once they are `settle_hours` old (default 1) so the
   summary exists. Meeting content is evidence for extraction, never
   authoritative work or facts.
 
