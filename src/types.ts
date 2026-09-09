@@ -31,6 +31,12 @@ export interface ConnectorContext {
   cursor: Cursor
   /** Earliest timestamp to fetch, ms epoch. Set from backfill on first sync. */
   since: number
+  /**
+   * Who the client is (lore.json `client`), when configured. Connectors use
+   * it to scope material to this client — Granola matches meetings on the
+   * domains and contact emails — without repeating the list per source.
+   */
+  client?: { name: string; domains: string[]; contacts: { name: string; email: string; role?: string; side: string }[] }
   log: (msg: string) => void
   /**
    * Read a file this connector previously emitted via `FetchResult.files`

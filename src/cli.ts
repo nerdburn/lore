@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { archive } from './commands/archive.js'
+import { auth } from './commands/auth.js'
 import { check } from './commands/check.js'
 import { extract } from './commands/extract.js'
 import { grep } from './commands/grep.js'
@@ -47,6 +48,8 @@ program
   .argument('[repo]', 'context repo name or "owner/name" (derived from cwd/channels if omitted)')
   .option('--channels <list>', 'comma-separated Slack channels, e.g. "#acme,#acme-dev"')
   .option('--github <repos>', 'comma-separated GitHub repos to sync, e.g. "acme/web,acme/mobile"')
+  .option('--client <name>', 'client display name (default: project name)')
+  .option('--domains <list>', 'comma-separated client email domains, e.g. "acme.com,acme.ca" — scopes Granola meetings and tells extract who the client is')
   .option('--backfill <months>', 'backfill window for the first sync (default 3)')
   .option('--org <org>', 'GitHub org for context repos (asked once and saved to ~/.lore/config.json)')
   .option('-y, --yes', 'no prompts: accept derived defaults (for agents and scripts)')
@@ -84,6 +87,13 @@ program
     const summary = await runAll(opts)
     if (!summary.ok) process.exitCode = 1
   })
+
+program
+  .command('auth')
+  .description('authorise a source that needs OAuth (granola): device-code flow, tokens saved to a file the connector refreshes')
+  .argument('<source>', 'granola')
+  .option('--file <path>', 'token file (default ~/.lore/granola-auth.json)')
+  .action((source, opts) => auth(source, opts))
 
 program
   .command('manifest')

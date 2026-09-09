@@ -47,13 +47,16 @@ below about `gh`, `--org`, secrets and Actions applies only to GitHub mode.
 
    ```sh
    cd <project-repo>
-   lore setup --channels "#acme,#acme-team" --github "acme/web" --backfill 3 --yes
+   lore setup --channels "#acme,#acme-team" --github "acme/web" --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```
 
-   Granola is added by hand to the context repo's `lore.json` afterwards —
-   `"granola": { "token": "env:GRANOLA_TOKEN", "folders": ["Acme"] }` — plus a
-   `GRANOLA_TOKEN` repo secret. GitHub needs a `LORE_GITHUB_TOKEN` secret: a
-   fine-grained token scoped to those repos, never someone's broad PAT.
+   `--client`/`--domains` write the `client` block (who the client is; email
+   domains identify their people). Add known contacts to it afterwards.
+   Granola is added by hand to the context repo's `lore.json` —
+   `"granola": { "folders": ["Acme"] }` — and needs `lore auth granola` run
+   once on the machine that syncs (self-hosted: the VM). GitHub in GitHub
+   mode needs a `LORE_GITHUB_TOKEN` secret; self-hosted uses the host's
+   GitHub App integration, one per client repo.
 
    This creates `<org>/lore-<project>` (private), scaffolds it, pushes, sets
    the `SLACK_TOKEN` secret, verifies the workflow registered, dispatches the

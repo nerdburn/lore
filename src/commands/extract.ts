@@ -150,8 +150,15 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
 
     let contradictions: FoldResult['contradictions'] = []
     mkdirSync(join(root, 'context/derived'), { recursive: true })
+    const clientNote = config.client
+      ? `\n\n# Client\n${config.client.name}${config.client.domains.length ? ` — people with emails at ${config.client.domains.join(', ')} are the client` : ''}${
+          config.client.contacts.length
+            ? `\nKnown people: ${config.client.contacts.map((c) => `${c.name} <${c.email}>${c.role ? ` (${c.role})` : ''} [${c.side}]`).join('; ')}`
+            : ''
+        }\nAttribute requests and decisions to the client side vs the team accordingly.`
+      : ''
     for (let i = 0; i < batches.length; i++) {
-      const user = `Today is ${today}.\n\n# Current artifacts\n${Object.entries(artifacts)
+      const user = `Today is ${today}.${clientNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = llm === 'sdk' ? await sdkFold(user) : cliFold(user)

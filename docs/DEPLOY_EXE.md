@@ -33,13 +33,20 @@ upgrade lore. Logs: `ssh lore-host.exe.xyz journalctl -u lore-sync -f`.
 Create once, attach to the `lore` tag so every future lore VM gets them:
 
 ```sh
-ssh exe.dev integrations add http-proxy --name slack   --target https://slack.com      --bearer xoxb-… --attach tag:lore
-ssh exe.dev integrations add http-proxy --name granola --target https://mcp.granola.ai --bearer …      --attach tag:lore
+ssh exe.dev integrations add http-proxy --name slack --target https://slack.com --bearer xoxb-… --attach tag:lore
 ssh exe.dev integrations add github --name lore-acme-web --repository acme/web --readonly --attach tag:lore   # per client repo
 ```
 
-Inside the VM these become `https://slack.int.exe.xyz/api`,
-`https://granola.int.exe.xyz/mcp`, and — for every GitHub repo integration
+Granola is the exception: its MCP server uses OAuth with short-lived access
+tokens, which a header-injecting proxy can't refresh. Authorise it once on
+the VM as the runner user — the grant (with refresh token) lives in the
+runner's home and refreshes in place:
+
+```sh
+ssh exedev@lore-host.exe.xyz lore auth granola     # prints a URL + code; approve in a browser
+```
+
+Inside the VM these become `https://slack.int.exe.xyz/api` and — for every GitHub repo integration
 together — `https://github.int.exe.xyz/api/v3` (GitHub Enterprise-style REST
 layout; git and `gh` work against the same host). The GitHub integrations use
 exe.dev's GitHub App: connect your account once at exe.dev/integrations, install
@@ -57,8 +64,7 @@ fine-grained tokens enabled and the token's resource owner is the org.
   "remote": "exedev@lore-host.exe.xyz:/srv/lore/repos",
   "proxy": {
     "slack":   "https://slack.int.exe.xyz/api",
-    "github":  "https://github.int.exe.xyz/api/v3",
-    "granola": "https://granola.int.exe.xyz/mcp"
+    "github":  "https://github.int.exe.xyz/api/v3"
   }
 }
 ```
@@ -72,8 +78,12 @@ fine-grained tokens enabled and the token's resource owner is the org.
 
 ```sh
 cd ~/code/acme
-lore setup --channels "#acme,#acme-dev" --github "acme/web" --backfill 3 --yes
+lore setup --channels "#acme,#acme-dev" --github "acme/web" --client "Acme" --domains "acme.com" --backfill 3 --yes
 ```
+
+Then add `"granola": { "folders": ["Acme"] }` under `sources` in the new
+repo's `lore.json` (the client block's domains scope meetings too), commit,
+push.
 
 Creates `/srv/lore/repos/lore-acme.git` over SSH, scaffolds (no workflow
 file), pushes, links the repo you're in. The next timer run syncs it.

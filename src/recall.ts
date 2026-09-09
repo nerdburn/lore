@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
-import type { Lifecycle, LoreConfig } from './config.js'
+import type { Client, Lifecycle, LoreConfig } from './config.js'
 import type { Pin } from './types.js'
 
 /** Everything `recall` knows, in trust order: pins first, then derived. */
@@ -10,6 +10,8 @@ export interface Recalled {
   /** "archived" clients are read-only history; answers from them are not current. */
   lifecycle: Lifecycle
   archived_at?: string
+  /** Who the client is — name, email domains, known contacts. */
+  client?: Client
   /** ISO timestamps from state.json — lets a caller say how fresh this is. */
   synced: { lastSync?: string; lastExtract?: string }
   pins: Pin[]
@@ -48,7 +50,7 @@ const DEFAULT_REPORT_LIMIT = 3
  */
 export function recallData(
   root: string,
-  config: Pick<LoreConfig, 'project' | 'lifecycle' | 'archived_at'>,
+  config: Pick<LoreConfig, 'project' | 'lifecycle' | 'archived_at' | 'client'>,
   category?: string,
   opts: { reportLimit?: number } = {},
 ): Recalled {
@@ -115,6 +117,7 @@ export function recallData(
     project: config.project,
     lifecycle: config.lifecycle,
     ...(config.archived_at ? { archived_at: config.archived_at } : {}),
+    ...(config.client ? { client: config.client } : {}),
     synced,
     pins,
     derived,

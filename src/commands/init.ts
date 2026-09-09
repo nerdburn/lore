@@ -6,12 +6,14 @@ import { CONFIG_FILE } from '../config.js'
 const TEMPLATE_CONFIG: {
   project: string
   lifecycle: 'active'
+  client?: { name: string; domains: string[]; contacts: { name: string; email: string; role?: string }[] }
   sources: Record<string, Record<string, unknown>>
   backfill: { months: number }
   extract: string[]
 } = {
   project: 'my-project',
   lifecycle: 'active',
+  client: { name: 'My Client', domains: ['myclient.com'], contacts: [] },
   sources: {
     slack: { channels: ['#my-project'], token: 'env:SLACK_TOKEN' },
   },

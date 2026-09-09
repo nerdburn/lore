@@ -56,8 +56,11 @@ export const sourceSchemas = {
     .refine((g) => g.token || g.api_base, { message: 'github needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
   granola: baseSource
     .extend({
-      /** Bearer token for Granola's MCP endpoint; optional when `endpoint` is a proxy that injects it. */
+      /** Bearer token for Granola's MCP endpoint. Usually omitted: `lore auth granola`
+       *  stores an OAuth grant in a token file and the connector refreshes it. */
       token: envRef.optional(),
+      /** Path of the OAuth token file written by `lore auth granola` (default ~/.lore/granola-auth.json). */
+      auth_file: z.string().optional(),
       /** MCP endpoint (default https://mcp.granola.ai/mcp); a proxy URL when the token lives off-host. */
       endpoint: z.string().url().optional(),
       /** Folder titles or ids whose meetings belong to this client. */
@@ -71,10 +74,10 @@ export const sourceSchemas = {
       /** Hours a meeting must be over before it is synced, so Granola has finished the summary (default 3). */
       settle_hours: z.number().min(0).optional(),
     })
-    .refine((g) => (g.folders?.length ?? 0) > 0 || (g.attendee_domains?.length ?? 0) > 0, {
-      message: 'granola needs folders and/or attendee_domains to scope meetings to this client',
-    })
-    .refine((g) => g.token || g.endpoint, { message: 'granola needs a token (env:…) or an endpoint proxy that injects one', path: ['token'] }),
+    // Scope (folders / attendee_domains / the repo's `client` block) and auth
+    // (token, proxy endpoint, or a device-flow token file) are checked at
+    // sync time by the connector: both can come from outside this block.
+    ,
 } as const
 
 export type SourceName = keyof typeof sourceSchemas
@@ -100,8 +103,31 @@ const sourcesSchema = z.record(z.string(), sourceSchema).superRefine((sources, c
 export const LIFECYCLES = ['active', 'archived'] as const
 export type Lifecycle = (typeof LIFECYCLES)[number]
 
+/** Who the client is (backlog §6/§7, first slice). Email is the identity key
+ *  that connectors can match on; names are display fields. */
+export const contactSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  role: z.string().optional(),
+  /** "client" (default) — the customer side; "team" — your own people; "vendor". */
+  side: z.enum(['client', 'team', 'vendor']).default('client'),
+})
+export type Contact = z.infer<typeof contactSchema>
+
+export const clientSchema = z.object({
+  /** Display name, e.g. "Jointly". */
+  name: z.string().min(1),
+  /** Email domains that identify the client's people: a meeting with any attendee at one belongs to this client. */
+  domains: z.array(z.string().min(1).transform((d) => d.toLowerCase().replace(/^@/, ''))).default([]),
+  contacts: z.array(contactSchema).default([]),
+  /** Who owns the relationship on your side. */
+  owner: z.string().optional(),
+})
+export type Client = z.infer<typeof clientSchema>
+
 export const configSchema = z.object({
   project: z.string().min(1),
+  client: clientSchema.optional(),
   /**
    * Client lifecycle. `archived` = the engagement ended: sync and extract
    * become no-ops, writes are refused, reads still work but are labelled.

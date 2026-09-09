@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { recall } from '../src/commands/recall.js'
+import { resolveContext } from '../src/context.js'
 import { isEmpty, recallData } from '../src/recall.js'
 import { ACME, captureConsole, fullFixtureRepo, makeContextRepo } from './helpers.js'
 
@@ -94,4 +95,12 @@ test('recall: work tables are summarised — open items in full, the rest as cou
   assert.deepEqual(w.open.map((i) => (i as { number: number }).number), [3])
   assert.deepEqual(Object.keys(recallData(root, ACME, 'work').work), ['github/acme__web'])
   assert.deepEqual(recallData(root, ACME, 'requests').work, {})
+})
+
+test('recall: carries the client block when configured', () => {
+  const root = makeContextRepo({}, { project: 'x', client: { name: 'Acme', domains: ['acme.com'], contacts: [] } })
+  const r = recallData(root, resolveContext(root).config)
+  assert.equal(r.client?.name, 'Acme')
+  assert.deepEqual(r.client?.domains, ['acme.com'])
+  assert.equal(recallData(root, ACME).client, undefined)
 })

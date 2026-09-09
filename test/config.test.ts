@@ -75,9 +75,8 @@ test('config: known sources are validated by their typed schema', () => {
   bad({ github: { repos: ['not-a-repo'], token: 'env:T' } })
   bad({ github: { repos: ['acme/web'] } })
   bad({ github: { repos: ['acme/web'], token: 'env:T', include: ['wiki'] } })
-  bad({ granola: { token: 'env:T' } })
-  bad({ granola: { token: 'env:T', folders: [], attendee_domains: [] } })
   bad({ granola: { token: 'env:T', folders: ['Acme'], endpoint: 'not a url' } })
+  bad({ granola: { token: 'literal-token', folders: ['Acme'] } })
 
   const ok = configSchema.parse({
     project: 'x',
@@ -103,4 +102,20 @@ test('config: validation errors name the source and field', () => {
 test('config: unknown sources are accepted structurally (connector may come later)', () => {
   const cfg = configSchema.parse({ project: 'x', sources: { jira: { site: 'acme.atlassian.net', disabled: true } } })
   assert.equal(cfg.sources.jira.disabled, true)
+})
+
+test('config: client block — domains normalised, contacts default to the client side', () => {
+  const cfg = configSchema.parse({
+    project: 'jointly',
+    client: {
+      name: 'Jointly',
+      domains: ['@Jointly.ca', 'getjointly.ca'],
+      contacts: [{ name: 'Aimee Schalles', email: 'aimee@jointly.ca', role: 'Founder' }, { name: 'Kaity', email: 'kaity@inputlogic.ca', side: 'team' }],
+    },
+  })
+  assert.deepEqual(cfg.client?.domains, ['jointly.ca', 'getjointly.ca'])
+  assert.equal(cfg.client?.contacts[0].side, 'client')
+  assert.equal(cfg.client?.contacts[1].side, 'team')
+  assert.throws(() => configSchema.parse({ project: 'x', client: { name: 'X', contacts: [{ name: 'A', email: 'not-an-email' }] } }))
+  assert.equal(configSchema.parse({ project: 'x' }).client, undefined)
 })

@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { accessToken, defaultAuthFile, readAuthFile } from '../granola-auth.js'
 import type { Connector, ConnectorContext, Doc } from '../types.js'
 
 /**
@@ -28,8 +29,11 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
  * Granola has finished the summary; each sync re-lists `overlap_days`
  * (default 2) and stream dedup absorbs the repeats.
  *
- * Auth: a bearer token for the MCP endpoint (`env:GRANOLA_TOKEN`). Meeting
- * content is evidence, never authoritative work or facts (§12).
+ * Auth, in order: a static `token` (env ref); a proxy `endpoint` that injects
+ * one; otherwise the OAuth token file from `lore auth granola` (`auth_file`,
+ * default ~/.lore/granola-auth.json), refreshed automatically and retried
+ * once on 401. Meeting content is evidence, never authoritative work or
+ * facts (§12).
  */
 
 /** The four Granola tools, as a function — injectable so tests never hit the network. */
@@ -46,18 +50,36 @@ const DAY_MS = 86_400_000
 const LIST_WINDOW_DAYS = 30
 const GET_BATCH = 10
 
+/** How the connector obtains a bearer for each connection attempt. */
+export interface TokenSource {
+  /** `force` after a 401: refresh even if the cached token looks valid. */
+  get(force: boolean): Promise<string | undefined>
+}
+
 export function makeGranola(
-  connect: (endpoint: string, token: string | undefined) => Promise<{ call: GranolaCall; close: () => Promise<void> }>,
+  connect: (endpoint: string, tokens: TokenSource) => Promise<{ call: GranolaCall; close: () => Promise<void> }>,
 ): Connector {
   return {
     name: 'granola',
     async fetch(ctx: ConnectorContext) {
-      const token = ctx.config.token as string | undefined
+      const staticToken = ctx.config.token as string | undefined
       const endpoint = (ctx.config.endpoint as string | undefined) ?? DEFAULT_ENDPOINT
-      if (!token && ctx.config.endpoint === undefined) throw new Error('granola: no token resolved (set token, or endpoint to a proxy that injects one)')
+      const authFile = (ctx.config.auth_file as string | undefined) ?? defaultAuthFile()
+      let tokens: TokenSource
+      if (staticToken) tokens = { get: async () => staticToken }
+      else if (ctx.config.endpoint !== undefined && !readAuthFile(authFile)) tokens = { get: async () => undefined } // proxy injects it
+      else if (readAuthFile(authFile)) tokens = { get: (force) => accessToken(authFile, { force }) }
+      else throw new Error(`granola: no credentials — run \`lore auth granola\` on this machine (writes ${authFile}), or set token / a proxy endpoint`)
       const folders = (ctx.config.folders as string[] | undefined) ?? []
-      const domains = ((ctx.config.attendee_domains as string[] | undefined) ?? []).map((d) => d.toLowerCase().replace(/^@/, ''))
-      if (folders.length === 0 && domains.length === 0) throw new Error('granola: no folders or attendee_domains configured')
+      // Scope = this source's own lists ∪ the repo's client block: any attendee
+      // at a client domain, or any known client-side contact, marks a meeting.
+      const domains = new Set(
+        [...((ctx.config.attendee_domains as string[] | undefined) ?? []), ...(ctx.client?.domains ?? [])].map((d) => d.toLowerCase().replace(/^@/, '')),
+      )
+      const emails = new Set((ctx.client?.contacts ?? []).filter((c) => c.side !== 'team').map((c) => c.email.toLowerCase()))
+      if (folders.length === 0 && domains.size === 0 && emails.size === 0) {
+        throw new Error('granola: nothing scopes meetings to this client — set folders/attendee_domains on the source, or client.domains/contacts in lore.json')
+      }
       const withTranscripts = ctx.config.transcripts !== false
       const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
       const settleMs = numberOr(ctx.config.settle_hours, DEFAULT_SETTLE_HOURS) * 3_600_000
@@ -67,7 +89,7 @@ export function makeGranola(
       const startMs = prev.since ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
       const cutoff = now - settleMs
 
-      const { call, close } = await connect(endpoint, token)
+      const { call, close } = await connect(endpoint, tokens)
       const docs: Doc[] = []
       const errors: string[] = []
       try {
@@ -87,9 +109,9 @@ export function makeGranola(
         for (const [id, title] of folderIds) {
           for (const m of await listRange(call, startMs, now, id)) candidates.set(m.id, { ...m, folder: title })
         }
-        if (domains.length > 0) {
+        if (domains.size > 0 || emails.size > 0) {
           for (const m of await listRange(call, startMs, now)) {
-            const matches = m.participants.some((p) => domains.includes(p.email.split('@')[1]?.toLowerCase()))
+            const matches = m.participants.some((p) => emails.has(p.email) || domains.has(p.email.split('@')[1] ?? ''))
             if (matches && !candidates.has(m.id)) candidates.set(m.id, m)
           }
         }
@@ -119,13 +141,26 @@ export function makeGranola(
   }
 }
 
-/** Default transport: MCP over streamable HTTP with a bearer token. */
-export const granola = makeGranola(async (endpoint, token) => {
-  const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
-    requestInit: { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-  })
-  const client = new Client({ name: 'lore', version: '0.3.0' })
-  await client.connect(transport)
+/** Default transport: MCP over streamable HTTP with a bearer token; one
+ * forced refresh + reconnect if the first connection is rejected as
+ * unauthorised (an access token that expired between checks). */
+export const granola = makeGranola(async (endpoint, tokens) => {
+  const open = async (force: boolean) => {
+    const token = await tokens.get(force)
+    const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
+      requestInit: { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    })
+    const client = new Client({ name: 'lore', version: '0.3.0' })
+    await client.connect(transport)
+    return client
+  }
+  let client: Client
+  try {
+    client = await open(false)
+  } catch (err) {
+    if (!/401|unauthori[sz]ed/i.test(String(err))) throw err
+    client = await open(true)
+  }
   return {
     call: async (tool, args) => {
       const res = await client.callTool({ name: tool, arguments: args })

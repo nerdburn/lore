@@ -81,7 +81,7 @@ test('config: proxy api_base makes the token optional; without either it is an e
   assert.equal(ok.sources.slack.token, undefined)
   assert.throws(() => configSchema.parse({ project: 'x', sources: { slack: { channels: ['#a'] } } }), /token/)
   assert.throws(() => configSchema.parse({ project: 'x', sources: { github: { repos: ['a/b'] } } }), /token/)
-  assert.throws(() => configSchema.parse({ project: 'x', sources: { granola: { folders: ['A'] } } }), /token/)
+  assert.equal(configSchema.parse({ project: 'x', sources: { granola: { folders: ['A'] } } }).sources.granola.token, undefined, 'granola auth comes from a token file by default')
 })
 
 test('setup: buildSources writes proxy bases (no tokens) when proxies are configured, env refs otherwise', () => {

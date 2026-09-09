@@ -70,6 +70,7 @@ export async function sync(root: string, registry: Record<string, Connector> = c
           config: resolved,
           cursor: state.cursors[name] ?? {},
           since,
+          ...(config.client ? { client: config.client } : {}),
           log: (msg) => console.log(`  ${msg}`),
           readFile: (rel) => {
             const path = join(root, safeRel(rel))

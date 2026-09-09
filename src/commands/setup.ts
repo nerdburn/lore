@@ -11,6 +11,10 @@ export interface SetupFlags {
   channels?: string
   /** Comma-separated "owner/repo" list — adds a github source. */
   github?: string
+  /** Client display name (defaults to the project name, capitalised). */
+  client?: string
+  /** Comma-separated client email domains, e.g. "acme.com,acme.ca". */
+  domains?: string
   backfill?: string
   org?: string
   yes?: boolean
@@ -84,9 +88,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
 
     const months = Number(flags.backfill ?? (await ask('Backfill window in months (first sync)', '3')))
 
+    const domains = (flags.domains ?? '')
+      .split(/[,\s]+/)
+      .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+      .filter(Boolean)
     const config: ScaffoldConfig = {
       project,
       lifecycle: 'active',
+      client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
       sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],

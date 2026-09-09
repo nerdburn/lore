@@ -110,16 +110,35 @@ plus a secret on the repo. Every scope belongs to exactly one client repo.
   repo. `include` narrows the kinds (`issues`, `comments`, `reviews`,
   `commits`, `releases`); `overlap_days` defaults to 1.
 - **Granola** talks to Granola's MCP server as a client, so it sees exactly
-  what a Granola-connected agent sees. Scope a client's meetings by
-  `folders` (titles or ids) and/or `attendee_domains`; the union is synced.
+  what a Granola-connected agent sees. Auth is OAuth: run `lore auth granola`
+  once on the machine that syncs — it prints a URL and a code, you approve in
+  a browser, and the grant is saved to `~/.lore/granola-auth.json` and
+  refreshed automatically (a static `token` or a proxy `endpoint` also work).
+  Meetings are scoped by `folders` (titles or ids), `attendee_domains`, and
+  the repo's `client` block — any attendee at a client domain or any listed
+  client-side contact marks a meeting; the union is synced.
   Each meeting becomes a notes doc (title, attendees with emails, private
   notes, AI summary) plus a threaded transcript (`"transcripts": false` to
   skip). Meetings sync once they are `settle_hours` old (default 3) so the
   summary exists. Meeting content is evidence for extraction, never
   authoritative work or facts.
 
-`lore setup --github "acme/web,acme/mobile"` writes the GitHub source and
-sets `LORE_GITHUB_TOKEN` from your environment when present.
+`lore setup --github "acme/web,acme/mobile" --client "Acme" --domains "acme.com"`
+writes the GitHub source and the client block (below).
+
+**Who the client is.** Every context repo can carry a `client` block — name,
+email domains, known contacts with `side: client|team|vendor`. Email is the
+identity key; names are display. Connectors use it to scope material (Granola
+matches attendees), extract uses it to tell client asks from team decisions,
+and `recall` returns it so an agent knows who it is talking about.
+
+```json
+"client": {
+  "name": "Acme",
+  "domains": ["acme.com"],
+  "contacts": [{ "name": "Priya Patel", "email": "priya@acme.com", "role": "Product owner" }]
+}
+```
 
 ### 3. Invite the bot — the one step that stays human
 
@@ -292,9 +311,10 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore run-all --repos d --work d [--extract] [--report]` | self-hosted scheduler: sync every bare repo under a dir, commit, push (from a timer on the host) |
+| `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
 | `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts |
