@@ -35,13 +35,18 @@ Create once, attach to the `lore` tag so every future lore VM gets them:
 ```sh
 ssh exe.dev integrations add http-proxy --name slack   --target https://slack.com      --bearer xoxb-… --attach tag:lore
 ssh exe.dev integrations add http-proxy --name granola --target https://mcp.granola.ai --bearer …      --attach tag:lore
-ssh exe.dev integrations add github --name lore-code --repository acme/web --readonly --attach tag:lore   # per client repo
+ssh exe.dev integrations add github --name lore-acme-web --repository acme/web --readonly --attach tag:lore   # per client repo
 ```
 
-Inside the VM these become `https://slack.int.exe.xyz/api`, `https://granola.int.exe.xyz/mcp`
-and `https://github.int.exe.xyz/acme/web`. The GitHub connector uses the REST
-API rather than git, so for it use an http-proxy to `https://api.github.com`
-with a fine-grained token: `--name github-api --target https://api.github.com --bearer github_pat_…`.
+Inside the VM these become `https://slack.int.exe.xyz/api`,
+`https://granola.int.exe.xyz/mcp`, and — for every GitHub repo integration
+together — `https://github.int.exe.xyz/api/v3` (GitHub Enterprise-style REST
+layout; git and `gh` work against the same host). The GitHub integrations use
+exe.dev's GitHub App: connect your account once at exe.dev/integrations, install
+the app on the org, then one read-only integration per client repo. No personal
+token anywhere; the app's 12,500 req/h limit applies. A fine-grained PAT behind
+an http-proxy to `https://api.github.com` also works, but only if the org has
+fine-grained tokens enabled and the token's resource owner is the org.
 
 ## 3. Laptop config
 
@@ -52,7 +57,7 @@ with a fine-grained token: `--name github-api --target https://api.github.com --
   "remote": "exedev@lore-host.exe.xyz:/srv/lore/repos",
   "proxy": {
     "slack":   "https://slack.int.exe.xyz/api",
-    "github":  "https://github-api.int.exe.xyz",
+    "github":  "https://github.int.exe.xyz/api/v3",
     "granola": "https://granola.int.exe.xyz/mcp"
   }
 }
