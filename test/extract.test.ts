@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { acceptFold, pack, parseFoldOutput, streamFiles, withRetry } from '../src/commands/extract.js'
+import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, streamFiles, withRetry } from '../src/commands/extract.js'
 import { makeContextRepo } from './helpers.js'
 
 const VALID = { requests: [], decisions: [{ id: 'dec-0001' }], roadmap: [], contradictions: [] }
@@ -41,27 +41,41 @@ test('extract: pack never splits a single oversized file', () => {
   assert.equal(batches[0].lastDay, '2026-08-01')
 })
 
-test('extract: acceptFold merges — existing items survive omission, proposed items add or update by id', () => {
+test('extract: acceptFold applies a delta — omitted items are kept silently, returned ids update, new ids append', () => {
   const prev = [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0002', decision: 'b' }]
   const empty = acceptFold('decisions', prev, [])
-  assert.deepEqual(empty.items, prev)
-  assert.match(empty.rejected!, /omitted 2 existing item\(s\) \(dec-0001, dec-0002\) — kept them/)
+  assert.deepEqual(empty, { items: prev, added: 0, updated: 0 }, 'an empty delta is the normal "nothing new" case, not a defect')
 
   const partial = acceptFold('decisions', prev, [{ id: 'dec-0002', decision: 'b (updated)' }, { id: 'dec-0003', decision: 'c' }])
   assert.deepEqual(partial.items, [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0002', decision: 'b (updated)' }, { id: 'dec-0003', decision: 'c' }])
-  assert.match(partial.rejected!, /omitted 1 existing item\(s\) \(dec-0001\)/)
+  assert.equal(partial.added, 1)
+  assert.equal(partial.updated, 1)
+  assert.equal(partial.rejected, undefined)
 
-  const full = acceptFold('decisions', prev, [{ id: 'dec-0001', decision: 'a' }, { id: 'dec-0002', decision: 'b' }, { id: 'dec-0003', decision: 'c' }])
-  assert.equal(full.rejected, undefined)
-  assert.equal(full.items.length, 3)
+  const same = acceptFold('decisions', prev, [{ id: 'dec-0001', decision: 'a' }])
+  assert.equal(same.updated, 0, 'returning an unchanged item is not counted as an update')
   assert.equal(acceptFold('decisions', prev, undefined).rejected, 'no "decisions" array')
+  assert.deepEqual(acceptFold('decisions', prev, undefined).items, prev)
 })
 
 test('extract: acceptFold starting from empty takes the proposal as-is; id-less items are appended', () => {
   const proposed = [{ id: 'req-0001', status: 'open' }, { status: 'open', request: 'no id' }]
-  assert.deepEqual(acceptFold('requests', [], proposed), { items: proposed })
-  assert.deepEqual(acceptFold('requests', [], []), { items: [] })
+  assert.deepEqual(acceptFold('requests', [], proposed), { items: proposed, added: 2, updated: 0 })
+  assert.deepEqual(acceptFold('requests', [], []), { items: [], added: 0, updated: 0 })
   assert.deepEqual(acceptFold('requests', [{ id: 'req-0001', status: 'open' }], [{ status: 'x' }]).items.length, 2)
+})
+
+test('extract: pickModel — one batch onto existing artifacts is incremental, anything else is the full model', () => {
+  const env = { LORE_MODEL: 'full-model', LORE_MODEL_INCREMENTAL: 'delta-model' }
+  assert.equal(pickModel(1, 120, env), 'delta-model')
+  assert.equal(pickModel(1, 0, env), 'full-model', 'a first fold, even if it fits one batch')
+  assert.equal(pickModel(24, 120, env), 'full-model', 'a multi-batch re-fold')
+  assert.equal(pickModel(1, 120, {}), 'claude-sonnet-5')
+  assert.equal(pickModel(3, 0, {}), 'claude-opus-4-8')
+  assert.equal(pickModel(1, 5, { LORE_MODEL: 'x', LORE_MODEL_INCREMENTAL: 'x' }), 'x', 'same id on both sides opts out')
+  assert.equal(cliModelAlias('claude-sonnet-5'), 'sonnet')
+  assert.equal(cliModelAlias('claude-opus-4-8'), 'opus')
+  assert.equal(cliModelAlias('claude-haiku-4-5'), 'haiku')
 })
 
 test('extract: streamFiles lists every source in day order with root-relative paths', () => {

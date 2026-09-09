@@ -4,7 +4,7 @@ import { join, relative } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
-import { loadState, saveState } from '../state.js'
+import { loadState, updateState } from '../state.js'
 import type { Pin } from '../types.js'
 
 /**
@@ -31,9 +31,22 @@ import type { Pin } from '../types.js'
  * Large backfills are folded in batches: each call sees the current
  * artifacts plus one slice of new material and returns the updated
  * artifacts, which feed the next batch.
+ *
+ * The fold is a delta: the model returns only items that are new or whose
+ * fields changed, and `acceptFold` keeps every omitted item verbatim. Output
+ * size therefore tracks what happened, not how much the project remembers —
+ * the steady-state hourly fold of a few new messages is a few items, not the
+ * whole artifact set re-emitted.
+ *
+ * Two models: a full fold (first backfill, or a re-fold after deleting
+ * state.extracted — many batches, empty or thin artifacts) uses LORE_MODEL;
+ * an incremental fold (one batch of new material onto existing artifacts)
+ * uses LORE_MODEL_INCREMENTAL, cheaper and faster. Set both to the same id
+ * to opt out.
  */
 
 const MODEL = process.env.LORE_MODEL ?? 'claude-opus-4-8'
+const MODEL_INCREMENTAL = process.env.LORE_MODEL_INCREMENTAL ?? 'claude-sonnet-5'
 const BATCH_CHARS = 300_000
 const ARTIFACTS = ['requests', 'decisions', 'roadmap'] as const
 
@@ -102,14 +115,15 @@ const FOLD_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 }
 
-const FOLD_SYSTEM = `You maintain the derived-artifact layer of a project's memory. Input: the current artifacts (YAML), the pinned facts, and a batch of newly synced raw material (Slack messages with permalinks). Output: the updated artifacts.
+const FOLD_SYSTEM = `You maintain the derived-artifact layer of a project's memory. Input: the current artifacts (YAML), the pinned facts, and a batch of newly synced raw material (Slack messages with permalinks). Output: only the items that are new or changed — the caller merges them into the artifacts.
 
 Rules:
+- Output is a delta. Return only items that are new, or existing items whose fields the material changed (return the whole item, same id). Every existing item you leave out is kept exactly as it is — do not repeat unchanged items. Empty arrays are the normal result for a batch with nothing new.
 - Update, don't rewrite. Preserve existing item ids and wording unless the new material is evidence that they should change.
 - Only add items with real evidence in the material: a request is something someone asked for; a decision is something someone with authority declared; a roadmap item is planned work. Casual chatter is not an artifact.
 - Every new or changed item cites the most relevant source permalink from the material.
-- Never delete a request, decision, or roadmap item. Every existing item must appear in your output (updated if evidence changed it). When new evidence shows a request was completed, mark it done. Requests older than ~30 days with no activity become "stale", never "open".
-- New ids continue the existing sequence (req-0007 after req-0006).
+- Never delete a request, decision, or roadmap item; items are only ever added or updated. When new evidence shows a request was completed, return it with status done. A request older than ~30 days with no activity is returned once with status "stale", never left "open".
+- New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
 
 const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced Slack history and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
@@ -149,7 +163,8 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
 
     const batches = pack(newFiles, BATCH_CHARS)
-    console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${MODEL}]…`)
+    const model = pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0))
+    console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${model}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
     mkdirSync(join(root, 'context/derived'), { recursive: true })
@@ -164,12 +179,14 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       const user = `Today is ${today}.${clientNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
-      const result = await withRetry(() => (llm === 'sdk' ? sdkFold(user) : Promise.resolve(cliFold(user))), 2, (attempt, err) =>
+      const result = await withRetry(() => (llm === 'sdk' ? sdkFold(model, user) : Promise.resolve(cliFold(model, user))), 2, (attempt, err) =>
         console.warn(`  ⚠ batch ${i + 1} attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`),
       )
+      const changes: string[] = []
       for (const name of wantArtifacts) {
         const merged = acceptFold(name, artifacts[name], (result as unknown as Record<string, unknown[]>)[name])
         if (merged.rejected) console.warn(`  ⚠ ${name}: model ${merged.rejected}`)
+        if (merged.added || merged.updated) changes.push(`${name} +${merged.added}/~${merged.updated}`)
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
@@ -183,9 +200,9 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
         )
       }
       for (const f of batches[i].files) state.extracted[f.path] = f.length
-      saveState(root, state)
+      updateState(root, { extracted: state.extracted })
       console.log(
-        `  batch ${i + 1}/${batches.length}: ${wantArtifacts.map((n) => `${artifacts[n].length} ${n}`).join(', ')}`,
+        `  batch ${i + 1}/${batches.length}: ${wantArtifacts.map((n) => `${artifacts[n].length} ${n}`).join(', ')}${changes.length ? ` (${changes.join(', ')})` : ' (no changes)'}`,
       )
     }
 
@@ -209,15 +226,14 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       const user = `Today is ${today}.\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
         .map((f) => f.text)
         .join('\n\n')}`
-      const report = llm === 'sdk' ? await sdkText(REPORT_SYSTEM, user) : cliCall(REPORT_SYSTEM, user)
+      const report = llm === 'sdk' ? await sdkText(MODEL, REPORT_SYSTEM, user) : cliCall(MODEL, REPORT_SYSTEM, user)
       mkdirSync(join(root, 'context/derived/reports'), { recursive: true })
       writeFileSync(join(root, `context/derived/reports/${today}.md`), report.trim() + '\n')
       console.log(`wrote derived/reports/${today}.md`)
     }
   }
 
-  state.lastExtract = new Date().toISOString()
-  saveState(root, state)
+  updateState(root, { extracted: state.extracted, lastExtract: new Date().toISOString() })
 }
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
@@ -233,17 +249,36 @@ function pickBackend(): Backend {
   }
 }
 
+/**
+ * Which model folds this run. Incremental = one batch of new material onto
+ * artifacts that already exist; everything else (a first fold, a multi-batch
+ * backfill or re-fold) is the full model. Exported for tests; env-overridable
+ * so a host can pin either side.
+ */
+export function pickModel(batchCount: number, existingItems: number, env: NodeJS.ProcessEnv = process.env): string {
+  const full = env.LORE_MODEL ?? MODEL
+  const incremental = env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
+  return batchCount === 1 && existingItems > 0 ? incremental : full
+}
+
+/** `claude -p --model` takes a family alias; map a model id onto one. */
+export function cliModelAlias(model: string): string {
+  if (/haiku/.test(model)) return 'haiku'
+  if (/sonnet/.test(model)) return 'sonnet'
+  return 'opus'
+}
+
 // ---- sdk backend: Claude API with structured outputs ----
 
-async function sdkFold(user: string): Promise<FoldResult> {
-  const text = await sdkText(FOLD_SYSTEM, user, FOLD_SCHEMA)
+async function sdkFold(model: string, user: string): Promise<FoldResult> {
+  const text = await sdkText(model, FOLD_SYSTEM, user, FOLD_SCHEMA)
   return JSON.parse(text) as FoldResult
 }
 
-async function sdkText(system: string, user: string, schema?: Record<string, unknown>): Promise<string> {
+async function sdkText(model: string, system: string, user: string, schema?: Record<string, unknown>): Promise<string> {
   const client = new Anthropic()
   const stream = client.messages.stream({
-    model: MODEL,
+    model,
     max_tokens: 64000,
     thinking: { type: 'adaptive' },
     system,
@@ -261,9 +296,9 @@ async function sdkText(system: string, user: string, schema?: Record<string, unk
 
 // ---- cli backend: headless Claude Code on a subscription ----
 
-function cliFold(user: string): FoldResult {
+function cliFold(model: string, user: string): FoldResult {
   const instruction = `\n\nRespond with ONLY a JSON object matching this schema — no prose, no code fences:\n${JSON.stringify(FOLD_SCHEMA)}`
-  return parseFoldOutput(cliCall(FOLD_SYSTEM + instruction, user))
+  return parseFoldOutput(cliCall(model, FOLD_SYSTEM + instruction, user))
 }
 
 /**
@@ -290,20 +325,19 @@ export async function withRetry<T>(
 }
 
 /**
- * The fold is update-only: items may be added or changed, never dropped.
- * Models do drop them — a batch of pure commit history often comes back
- * with `requests: []` — so merge instead of trusting the returned list:
- * every existing item survives (replaced by the proposed version when the
- * same id is returned), and proposed items with new ids are appended.
- * Returns what to store and, when existing items were omitted, a short
- * note for the log.
+ * Merge a fold delta into the artifacts. The model returns only new or
+ * changed items; every existing item it omits is kept verbatim, an existing
+ * id it returns is replaced by the returned version, and new ids are
+ * appended. Omission is therefore the normal case, not a defect — only a
+ * missing or malformed array is reported. Returns what to store plus counts
+ * for the log.
  */
 export function acceptFold(
   name: string,
   previous: unknown[],
   proposed: unknown[] | undefined,
-): { items: unknown[]; rejected?: string } {
-  if (!Array.isArray(proposed)) return { items: previous, rejected: `no "${name}" array` }
+): { items: unknown[]; added: number; updated: number; rejected?: string } {
+  if (!Array.isArray(proposed)) return { items: previous, added: 0, updated: 0, rejected: `no "${name}" array` }
   const idOf = (i: unknown) => (i as { id?: string }).id
   const proposedById = new Map<string, unknown>()
   for (const item of proposed) {
@@ -312,27 +346,28 @@ export function acceptFold(
   }
   const merged: unknown[] = []
   const seen = new Set<string>()
-  const omitted: string[] = []
+  let updated = 0
   for (const item of previous) {
     const id = idOf(item)
     if (id && proposedById.has(id)) {
-      merged.push(proposedById.get(id))
+      const next = proposedById.get(id)
+      if (JSON.stringify(next) !== JSON.stringify(item)) updated++
+      merged.push(next)
       seen.add(id)
     } else {
       merged.push(item)
-      if (id) omitted.push(id)
     }
   }
+  let added = 0
   for (const item of proposed) {
     const id = idOf(item)
     if (!id || !seen.has(id)) {
       merged.push(item)
+      added++
       if (id) seen.add(id)
     }
   }
-  return omitted.length
-    ? { items: merged, rejected: `omitted ${omitted.length} existing item(s) (${omitted.slice(0, 4).join(', ')}${omitted.length > 4 ? '…' : ''}) — kept them` }
-    : { items: merged }
+  return { items: merged, added, updated }
 }
 
 /**
@@ -356,9 +391,9 @@ export function parseFoldOutput(text: string): FoldResult {
   return obj as unknown as FoldResult
 }
 
-function cliCall(system: string, user: string): string {
+function cliCall(model: string, system: string, user: string): string {
   // Prompt over stdin: batches are far larger than argv allows.
-  const out = execFileSync('claude', ['-p', '--output-format', 'json', '--model', 'opus'], {
+  const out = execFileSync('claude', ['-p', '--output-format', 'json', '--model', cliModelAlias(model)], {
     input: `${system}\n\n${user}`,
     maxBuffer: 256 * 1024 * 1024,
     stdio: ['pipe', 'pipe', 'pipe'],
