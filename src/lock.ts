@@ -6,7 +6,7 @@ import { join } from 'node:path'
  * filesystem we run on, so the lock is the directory; a `pid` file inside
  * names the owner so a lock left by a killed process is reclaimed instead of
  * wedging every later run. Good for one host with a few cooperating
- * processes (the hourly run-all and on-demand sync-now runs), not for
+ * processes (the timer's run-all and on-demand sync-now runs), not for
  * anything networked.
  */
 export interface Lock {

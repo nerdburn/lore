@@ -45,7 +45,7 @@ const GIT_LOCK_WAIT_MS = 5 * 60_000
  *   <work>/lore-acme        clone of it — where sync writes
  *   <work>/.locks/          per-client locks (sync, extract, git)
  *
- * Two kinds of run share a clone: the hourly timer (sync + fold) and
+ * Two kinds of run share a clone: the timer (sync + fold) and
  * on-demand sync-only runs triggered by `lore refresh` / `lore_sync_now`.
  * The fold can take many minutes, and an agent asking for fresh data must
  * not wait for it, so the two overlap under three per-client locks:

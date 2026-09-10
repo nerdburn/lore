@@ -20,7 +20,7 @@ set -euo pipefail
 
 LORE_USER="${LORE_USER:-exedev}"
 LORE_REF="${LORE_REF:-github:nerdburn/lore}"
-INTERVAL="${INTERVAL:-1h}"
+INTERVAL="${INTERVAL:-15m}"
 
 if [ "$(id -u)" -ne 0 ]; then echo "run as root (sudo)"; exit 1; fi
 id "$LORE_USER" >/dev/null 2>&1 || { echo "user $LORE_USER not found"; exit 1; }
@@ -49,7 +49,7 @@ install -d -m 750 /etc/lore
 #   CLAUDE_CODE_OAUTH_TOKEN=...                  # Claude subscription via the claude CLI (`claude setup-token`)
 LORE_EXTRACT=0
 # Fold models: LORE_MODEL for a first fold / multi-batch re-fold (default
-# claude-opus-4-8), LORE_MODEL_INCREMENTAL for the hourly one-batch delta
+# claude-opus-4-8), LORE_MODEL_INCREMENTAL for the routine one-batch delta
 # (default claude-sonnet-5). Set both to the same id to use one model.
 # LORE_CONCURRENCY=3   clients synced at once
 ENV
@@ -71,7 +71,7 @@ fi
 cat > /usr/local/bin/lore-run-all <<'RUN'
 #!/usr/bin/env bash
 # Wrapper so the extract flag follows /etc/lore/env without editing the unit.
-#   lore-run-all              hourly: sync every client, then fold if LORE_EXTRACT=1
+#   lore-run-all              timer (every INTERVAL): sync every client, then fold if LORE_EXTRACT=1
 #   lore-run-all --sync-only  on demand (lore refresh / lore_sync_now): sync only, never fold
 set -euo pipefail
 args=(run-all --repos /srv/lore/repos --work /srv/lore/work --concurrency "${LORE_CONCURRENCY:-3}")
@@ -101,7 +101,7 @@ UNIT
 # Sync-only twin for on-demand refreshes: `lore refresh --trigger` (and the
 # lore_sync_now MCP tool) start this unit and wait for it. It shares the work
 # clones with lore-sync.service under run-all's per-client locks, so it can
-# run while the hourly fold is still going.
+# run while the timer's fold is still going.
 cat > /etc/systemd/system/lore-sync-now.service <<UNIT
 [Unit]
 Description=lore: sync every context repo now (no fold)

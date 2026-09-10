@@ -13,7 +13,7 @@ export interface RefreshResult {
   host: 'ran' | 'waited' | 'skipped-recent' | 'unavailable' | 'not-requested'
   /** How the host run ended, when host is 'ran' or 'waited'. A failed run is a result, not an error. */
   outcome?: 'success' | 'failed'
-  /** True when the trigger asked for sync + fold (the hourly unit) rather than sync only. */
+  /** True when the trigger asked for sync + fold (the timer's unit) rather than sync only. */
   fold?: true
   note?: string
 }
@@ -24,13 +24,13 @@ export interface RefreshDeps {
   now?: () => number
 }
 
-const MIN_INTERVAL_MS = 10 * 60_000
+const MIN_INTERVAL_MS = 5 * 60_000
 const HOST_TIMEOUT_MS = 45 * 60_000
 const STATUS_TIMEOUT_MS = 60_000
 
 /**
  * Which unit a trigger means on the host. Newer hosts have a sync-only unit
- * (`lore-sync-now.service`, seconds) beside the hourly sync+fold unit
+ * (`lore-sync-now.service`, seconds) beside the timer's sync+fold unit
  * (`lore-sync.service`, minutes); older hosts only the latter. `--fold` asks
  * for the sync+fold unit outright. Every command resolves `$U` first so a
  * laptop on the new CLI still works against a host that has not been
@@ -68,13 +68,13 @@ const IN_FLIGHT = new Set(['activating', 'active', 'deactivating'])
  * clone so reads see everything the host has committed; with `trigger`, first
  * asks the host to run its sync-only service and waits for it — raw streams
  * land in about a minute; the LLM fold that updates derived artifacts stays
- * on the hourly timer, so `lastExtract` may lag `lastSync`. With `fold` it
- * starts the hourly sync+fold unit instead and waits for that (a minute or
+ * on the timer (every 15 min on the exe.dev host), so `lastExtract` may lag
+ * `lastSync`. With `fold` it starts the timer's sync+fold unit instead and waits for that (a minute or
  * two for a routine delta). Only possible when the remote is an SSH target
  * the caller can reach — that is how self-hosted lore is wired. A run of
  * that unit already in flight (the timer fired, or another caller
  * triggered) is waited out rather than re-triggered; a sync (or, with fold,
- * a fold) that finished within the last 10 minutes is not re-run unless
+ * a fold) that finished within the last 5 minutes is not re-run unless
  * forced. The run's outcome comes back in the result — only failing to
  * reach the host throws.
  */

@@ -35,7 +35,7 @@ import type { Pin } from '../types.js'
  * The fold is a delta: the model returns only items that are new or whose
  * fields changed, and `acceptFold` keeps every omitted item verbatim. Output
  * size therefore tracks what happened, not how much the project remembers —
- * the steady-state hourly fold of a few new messages is a few items, not the
+ * the steady-state timer fold of a few new messages is a few items, not the
  * whole artifact set re-emitted.
  *
  * Two models: a full fold (first backfill, or a re-fold after deleting

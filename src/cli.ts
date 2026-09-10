@@ -164,10 +164,10 @@ contextual(
 contextual(
   program
     .command('refresh')
-    .description('pull the latest synced memory; --trigger asks the self-hosted host to sync now and waits (~a minute; the fold stays on the hourly timer), or waits out a run already in flight')
+    .description('pull the latest synced memory; --trigger asks the self-hosted host to sync now and waits (~a minute; the fold stays on the timer), or waits out a run already in flight')
     .option('--trigger', 'run the host sync service now (SSH to the configured remote)')
-    .option('--fold', 'with --trigger: run sync + the LLM fold (the hourly unit) so derived artifacts update too; a minute or two')
-    .option('--force', 're-run even if the host synced (or, with --fold, folded) within 10 minutes'),
+    .option('--fold', 'with --trigger: run sync + the LLM fold (the timer unit) so derived artifacts update too; a minute or two')
+    .option('--force', 're-run even if the host synced (or, with --fold, folded) within 5 minutes'),
 ).action((opts) => {
   const r = refresh(root, opts)
   console.log(`host: ${r.host}${r.fold ? ' [sync + fold]' : ''}${r.outcome ? ` (${r.outcome})` : ''}${r.note ? ` — ${r.note}` : ''}`)

@@ -268,7 +268,7 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
       throw new Error(`unexpected ssh command: ${c}`)
     }
     const target = 'exedev@lore-host.example'
-    const recent = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
+    const recent = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:03:00Z') })
     assert.equal(recent.host, 'skipped-recent')
     assert.equal(recent.outcome, undefined)
     assert.deepEqual(calls, [`${target} ${STATE_CMD}`], 'idle + recent: only the state probe, no start')
@@ -316,7 +316,7 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
   }
 })
 
-test('refresh: --fold targets the hourly sync+fold unit and rate-limits on the last fold, not the last sync', () => {
+test('refresh: --fold targets the timer sync+fold unit and rate-limits on the last fold, not the last sync', () => {
   seedBare('lore-fold', { project: 'fold' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z', lastExtract: '2026-09-09T09:00:00Z' }) })
   resolveContext(tmpdir(), { context: 'lore-fold' })
   const saved = readGlobalConfig()
@@ -324,7 +324,7 @@ test('refresh: --fold targets the hourly sync+fold unit and rate-limits on the l
   try {
     const fold = hostCommands(true)
     assert.ok(fold.state.startsWith(FOLD_UNIT_PRELUDE) && fold.start.startsWith(FOLD_UNIT_PRELUDE) && fold.wait.startsWith(FOLD_UNIT_PRELUDE))
-    assert.equal(FOLD_UNIT_PRELUDE, 'U=lore-sync.service', 'the fold unit is the hourly one — no fallback needed')
+    assert.equal(FOLD_UNIT_PRELUDE, 'U=lore-sync.service', 'the fold unit is the timer one — no fallback needed')
     assert.notEqual(fold.start, START_CMD)
     const calls: string[] = []
     let state = 'inactive'
@@ -343,9 +343,9 @@ test('refresh: --fold targets the hourly sync+fold unit and rate-limits on the l
     assert.deepEqual(calls, [fold.state, fold.start])
 
     calls.length = 0
-    const recent = refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T09:05:00Z') })
+    const recent = refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T09:03:00Z') })
     assert.equal(recent.host, 'skipped-recent')
-    assert.match(recent.note ?? '', /folded 5 min ago/)
+    assert.match(recent.note ?? '', /folded 3 min ago/)
     assert.deepEqual(calls, [fold.state])
 
     calls.length = 0

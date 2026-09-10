@@ -348,7 +348,7 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
-| `lore refresh [--trigger] [--fold] [--force]` | pull the latest memory; `--trigger` asks the self-hosted host to sync now and waits (~1 min); `--fold` also runs the LLM fold so derived artifacts update (1–2 min more); `--force` overrides the 10-minute rate limit |
+| `lore refresh [--trigger] [--fold] [--force]` | pull the latest memory; `--trigger` asks the self-hosted host to sync now and waits (~1 min); `--fold` also runs the LLM fold so derived artifacts update (1–2 min more); `--force` overrides the 5-minute rate limit |
 | `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
 | `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
