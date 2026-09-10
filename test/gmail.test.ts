@@ -12,6 +12,7 @@ const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 20
 const SA = { client_email: 'lore@lore-sync.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) as string }
 const TOKEN_URL = 'https://oauth2.test/token'
 const API = 'https://gmail.test'
+const DIRECTORY = 'https://directory.test'
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 
@@ -38,6 +39,11 @@ function fakeGoogle() {
     mailboxes: {} as Record<string, GmailMessage[]>,
     /** mailboxes the admin has NOT delegated */
     undelegated: new Set<string>(),
+    /** whether the directory scope is delegated at all */
+    directoryDelegated: true,
+    /** users allowed to list the directory */
+    admins: new Set<string>(['shawn@inputlogic.ca']),
+    directory: [] as { primaryEmail: string; suspended?: boolean; archived?: boolean }[],
     calls: [] as string[],
     queries: [] as string[],
     tokensMinted: [] as string[],
@@ -59,12 +65,23 @@ function fakeGoogle() {
       assert.ok(v.verify(publicKey, Buffer.from(sig, 'base64url')), 'JWT signed by the service account key')
       assert.equal(claims.iss, SA.client_email)
       assert.equal(claims.aud, TOKEN_URL)
-      assert.equal(claims.scope, 'https://www.googleapis.com/auth/gmail.readonly')
-      if (state.undelegated.has(claims.sub)) return json({ error: 'unauthorized_client', error_description: 'Client is unauthorized to retrieve access tokens using this method' }, { status: 401 })
-      state.tokensMinted.push(claims.sub)
-      return json({ access_token: `tok-${claims.sub}`, expires_in: 3600, token_type: 'Bearer' })
+      assert.ok(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/admin.directory.user.readonly'].includes(claims.scope), `known scope: ${claims.scope}`)
+      const directory = claims.scope.includes('admin.directory')
+      if (state.undelegated.has(claims.sub) || (directory && !state.directoryDelegated)) return json({ error: 'unauthorized_client', error_description: 'Client is unauthorized to retrieve access tokens using this method' }, { status: 401 })
+      state.tokensMinted.push(`${directory ? 'dir:' : ''}${claims.sub}`)
+      return json({ access_token: `${directory ? 'dirtok' : 'tok'}-${claims.sub}`, expires_in: 3600, token_type: 'Bearer' })
     }
     const auth = (init?.headers as Record<string, string>)?.Authorization ?? ''
+    if (url.origin === DIRECTORY) {
+      const admin = /^Bearer dirtok-(.+)$/.exec(auth)?.[1]
+      if (!admin) return json({ error: { code: 401, message: 'Invalid Credentials' } }, { status: 401 })
+      if (!state.admins.has(admin)) return json({ error: { code: 403, message: 'Not Authorized to access this resource/api' } }, { status: 403 })
+      assert.equal(url.pathname, '/admin/directory/v1/users')
+      assert.equal(url.searchParams.get('customer'), 'my_customer')
+      const page = Number(url.searchParams.get('pageToken') ?? 0)
+      const slice = state.directory.slice(page * 2, page * 2 + 2)
+      return json({ users: slice, ...(state.directory.length > (page + 1) * 2 ? { nextPageToken: String(page + 1) } : {}) })
+    }
     const user = /^Bearer tok-(.+)$/.exec(auth)?.[1]
     if (!user) return json({ error: { code: 401, message: 'Invalid Credentials' } }, { status: 401 })
     if (state.rateLimitOnce) {
@@ -98,7 +115,7 @@ afterEach(() => {
 
 function ctx(over: Partial<ConnectorContext> = {}): ConnectorContext {
   return {
-    config: { key: JSON.stringify(SA), api_base: API, token_url: TOKEN_URL },
+    config: { key: JSON.stringify(SA), api_base: API, token_url: TOKEN_URL, directory_base: DIRECTORY },
     cursor: {},
     since: Date.parse('2026-07-01T00:00:00Z'),
     client: {
@@ -109,6 +126,7 @@ function ctx(over: Partial<ConnectorContext> = {}): ConnectorContext {
         { name: 'Shawn Adrian', email: 'shawn@inputlogic.ca', role: 'Account lead', side: 'team' },
         { name: 'Kaity', email: 'kaity@inputlogic.ca', role: 'PM', side: 'team' },
       ],
+      owner: 'shawn@inputlogic.ca',
     },
     log: () => {},
     readFile: () => undefined,
@@ -220,6 +238,45 @@ test('gmail: incremental — after: comes from the cursor minus overlap; 429 is 
   assert.deepEqual(r.docs.map((d) => d.meta?.message_id).sort(), ['m1@mail.acme.com', 'm2@mail.acme.com', 'm3@mail.acme.com', 'm4@mail.acme.com', 'm5@mail.acme.com'])
   assert.ok(g.calls.filter((c) => c.endsWith('/gmail/v1/users/me/messages')).length >= 3, 'followed nextPageToken')
   assert.equal((r.nextCursor as { since: string }).since, '2026-08-15T10:00:00.000Z')
+})
+
+test('gmail: users "all" lists every active Workspace mailbox as the admin (default client.owner), skipping suspended/archived and exclude', async () => {
+  const g = fakeGoogle()
+  g.directory = [
+    { primaryEmail: 'shawn@inputlogic.ca' },
+    { primaryEmail: 'kaity@inputlogic.ca' },
+    { primaryEmail: 'julie@inputlogic.ca' },
+    { primaryEmail: 'former@inputlogic.ca', suspended: true },
+    { primaryEmail: 'archived@inputlogic.ca', archived: true },
+    { primaryEmail: 'optout@inputlogic.ca' },
+  ]
+  g.mailboxes['julie@inputlogic.ca'] = [msg('j1', { to: 'julie@inputlogic.ca', messageId: '<j1@mail.acme.com>' })]
+  g.mailboxes['optout@inputlogic.ca'] = [msg('o1', { to: 'optout@inputlogic.ca', messageId: '<o1@mail.acme.com>' })]
+  const logs: string[] = []
+  const r = await gmail.fetch(ctx({ config: { ...ctx().config, users: 'all', exclude: ['optout@inputlogic.ca'] }, log: (m) => logs.push(m) }))
+  assert.equal(r.errors, undefined)
+  assert.ok(g.tokensMinted.includes('dir:shawn@inputlogic.ca'), 'directory listed as client.owner with the directory scope')
+  assert.deepEqual(
+    g.queries.map((q) => q.split(':')[0]).sort(),
+    ['julie@inputlogic.ca', 'kaity@inputlogic.ca', 'shawn@inputlogic.ca'],
+    'active users only, minus exclude; pagination followed',
+  )
+  assert.deepEqual(r.docs.map((d) => d.meta?.message_id), ['j1@mail.acme.com'], 'a teammate not in contacts is covered')
+  assert.match(logs[0], /3 mailbox\(es\) from the directory/)
+
+  // explicit admin; directory scope not delegated → one clear error naming the scope
+  g.directoryDelegated = false
+  await assert.rejects(
+    gmail.fetch(ctx({ config: { ...ctx().config, users: 'all', admin: 'shawn@inputlogic.ca' } })),
+    /listing Workspace users as shawn@inputlogic\.ca failed — token for shawn@inputlogic\.ca: unauthorized_client .*add https:\/\/www\.googleapis\.com\/auth\/admin\.directory\.user\.readonly/,
+  )
+  g.directoryDelegated = true
+  // admin without directory rights
+  await assert.rejects(gmail.fetch(ctx({ config: { ...ctx().config, users: 'all', admin: 'kaity@inputlogic.ca' } })), /listing Workspace users as kaity@inputlogic\.ca failed — gmail 403/)
+  // no admin anywhere
+  const noOwner = ctx({ config: { ...ctx().config, users: 'all' } })
+  delete noOwner.client!.owner
+  await assert.rejects(gmail.fetch(noOwner), /users "all" needs `admin`/)
 })
 
 test('gmail: key_file on disk works; missing key, no mailboxes, and no scope are clear errors', async () => {

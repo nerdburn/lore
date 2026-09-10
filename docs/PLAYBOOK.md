@@ -15,7 +15,7 @@ to an agent with the lore plugin and it will walk you through this.
 | Granola folder title | `Jointly` | `sources.granola.folders` |
 | Notion root page(s) or database(s) | the client's top-level Notion page URL | `sources.notion.roots` |
 | Jira project key(s), if the client tracks work in Jira | `ACM` + `https://acme.atlassian.net` | `sources.jira.projects` |
-| Email — whose inboxes, if the client works by email (no Slack) | `kaity@inputlogic.ca, shawn@inputlogic.ca` (default: team-side contacts) | `sources.gmail.users` |
+| Email — whose inboxes, if the client works by email (no Slack) | `all` (every Workspace mailbox), or `kaity@…, shawn@…` (default: team-side contacts) | `sources.gmail.users` |
 | Backfill window | 3 months | first sync only; after that everything is incremental |
 
 Convention in this workspace: `#<client>` is internal, `#<client>-team` has
@@ -68,11 +68,14 @@ One-time (already done once the service account exists, see prerequisites):
 a Google Cloud service account with domain-wide delegation for
 `https://www.googleapis.com/auth/gmail.readonly`, its key JSON at
 `~/.lore/gmail-sa.json` on the host. Per client: nothing to authorise.
-Decide whose inboxes to read — by default every `team`-side contact in the
-client block — and tell those teammates. Only mail from/to/cc the client's
-domains or contacts is synced; a thread seen in several inboxes is stored
-once. Pass `--gmail` (team contacts) or `--gmail "a@…,b@…"` to setup, and
-make sure `--domains` is right: it is the whole search.
+Decide whose inboxes to read — `--gmail all` for every mailbox in the
+Workspace (so whoever the client emails is covered; needs the directory
+scope, see prerequisites), `--gmail "a@…,b@…"` for a list, or `--gmail` for
+the `team`-side contacts — and tell those teammates. Only mail from/to/cc
+the client's domains or contacts is synced; a thread seen in several inboxes
+is stored once. Make sure `--domains` is right: it is the whole search.
+Calendar noise: add `"query": "-subject:\"Invitation:\" -subject:\"Accepted:\""`
+to the gmail block when invites match.
 
 ## 4. Create the context repo — one command
 
@@ -195,5 +198,5 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 - `lore-host` VM with the timer (`deploy/exe/setup.sh`), LLM via `llm.int.exe.xyz`
 - exe.dev integrations on tag `lore`: `slack` (bot token), `notion` (internal integration token, proxy to https://api.notion.com), `jira` (Basic email:token, proxy to the Atlassian site — when a client uses Jira), GitHub App connected to the org
 - `lore auth granola` run once on the host
-- For email: a Google Cloud service account (Gmail API enabled) with domain-wide delegation for `gmail.readonly` granted in the Workspace Admin console, its key JSON at `~/.lore/gmail-sa.json` on the host — see `docs/DEPLOY_EXE.md`
+- For email: a Google Cloud service account (Gmail API enabled) with domain-wide delegation for `gmail.readonly` (plus `admin.directory.user.readonly` for `users: "all"`) granted in the Workspace Admin console, its key JSON at `~/.lore/gmail-sa.json` on the host — see `docs/DEPLOY_EXE.md`
 - Laptop `~/.lore/config.json` with `remote` and `proxy` — see `docs/DEPLOY_EXE.md`

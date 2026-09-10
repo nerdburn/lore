@@ -54,7 +54,7 @@ program
   .option('--notion <roots>', 'comma-separated Notion page/database ids or URLs scoping this client\'s docs')
   .option('--jira <scopes>', 'comma-separated Jira project keys and/or board:<id> entries, e.g. "JNT" or "board:293"')
   .option('--jira-site <url>', 'https://<site>.atlassian.net (permalinks; the API too when no proxy)')
-  .option('--gmail [mailboxes]', 'sync client email from the team\'s Gmail inboxes: comma-separated teammate addresses, or no value for the team-side contacts')
+  .option('--gmail [mailboxes]', 'sync client email from the team\'s Gmail inboxes: comma-separated teammate addresses, "all" for every Workspace mailbox, or no value for the team-side contacts')
   .option('--client <name>', 'client display name (default: project name)')
   .option('--domains <list>', 'comma-separated client email domains, e.g. "acme.com,acme.ca" — scopes Granola meetings and tells extract who the client is')
   .option('--backfill <months>', 'backfill window for the first sync (default 3)')

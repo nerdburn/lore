@@ -23,10 +23,14 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
  * had it. Replies chain on the first `References` id, so a thread stays one
  * thread whoever it was found in.
  *
- * Mailboxes default to the `team`-side contacts in lore.json (`users` to
- * override, `exclude` for a teammate who opts out). Whatever is synced is
- * readable by every agent pointed at the memory — pick mailboxes with that in
- * mind.
+ * Mailboxes default to the `team`-side contacts in lore.json; `users` names
+ * them, or `users: "all"` reads every active mailbox in the Workspace (listed
+ * through the Directory API as `admin`, default `client.owner` — needs the
+ * `admin.directory.user.readonly` scope delegated too), so a teammate the
+ * client emails for the first time is covered without a config change.
+ * `exclude` is a teammate's opt-out either way. Whatever is synced is
+ * readable by every agent pointed at the memory — pick mailboxes with that
+ * in mind.
  *
  * Auth: the service account key JSON, from `key` (an env ref holding the
  * JSON) or `key_file` (default ~/.lore/gmail-sa.json on the syncing host).
@@ -47,8 +51,11 @@ interface ServiceAccountKey {
 }
 
 const API = 'https://gmail.googleapis.com'
+const DIRECTORY_API = 'https://admin.googleapis.com'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
+export const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
+/** Only used with `users: "all"` — to list the Workspace's mailboxes. */
+export const DIRECTORY_SCOPE = 'https://www.googleapis.com/auth/admin.directory.user.readonly'
 const DEFAULT_OVERLAP_DAYS = 2
 const DAY_MS = 86_400_000
 const LIST_PAGE = 500
@@ -69,13 +76,26 @@ export const gmail: Connector = {
     const tokenUrl = (ctx.config.token_url as string | undefined) ?? key.token_uri ?? TOKEN_URL
     const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
 
-    // Mailboxes: explicit `users`, else the team side of the client block.
+    const api = gmailClient(apiBase, tokenUrl, key, ((ctx.config.directory_base as string | undefined) ?? DIRECTORY_API).replace(/\/$/, ''))
+
+    // Mailboxes: explicit `users`; "all" = every active user in the Workspace
+    // (so a teammate the client emails for the first time is covered without
+    // a config change); else the team side of the client block.
     const exclude = new Set(((ctx.config.exclude as string[] | undefined) ?? []).map(lower))
-    const users = (((ctx.config.users as string[] | undefined) ?? ctx.client?.contacts.filter((c) => c.side === 'team').map((c) => c.email)) ?? [])
-      .map(lower)
-      .filter((u) => u && !exclude.has(u))
+    let users: string[]
+    let how: string
+    if (ctx.config.users === 'all') {
+      const admin = (ctx.config.admin as string | undefined) ?? ctx.client?.owner
+      if (!admin) throw new Error('gmail: users "all" needs `admin` (a Workspace admin to list users as) on the source, or client.owner in lore.json')
+      users = await api.listDomainUsers(lower(admin))
+      how = 'from the directory'
+    } else {
+      users = ((ctx.config.users as string[] | undefined) ?? ctx.client?.contacts.filter((c) => c.side === 'team').map((c) => c.email)) ?? []
+      how = ctx.config.users ? 'configured' : 'team contacts'
+    }
+    users = uniq(users.map(lower).filter((u) => u && !exclude.has(u)))
     if (users.length === 0) {
-      throw new Error('gmail: no mailboxes to read — set `users` on the source, or add team-side contacts to client.contacts in lore.json')
+      throw new Error('gmail: no mailboxes to read — set `users` on the source ("all", or a list), or add team-side contacts to client.contacts in lore.json')
     }
 
     // Scope: the client's domains and people.
@@ -90,7 +110,6 @@ export const gmail: Connector = {
     const sinceMs = prev.since ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
     const query = buildQuery(scopeTerms, sinceMs, ctx.config.query as string | undefined)
 
-    const api = gmailClient(apiBase, tokenUrl, key)
     const byMessageId = new Map<string, { msg: GmailMessage; mailboxes: string[] }>()
     const errors: string[] = []
     let listed = 0
@@ -123,7 +142,7 @@ export const gmail: Connector = {
       if (ms > newest) newest = ms
     }
 
-    ctx.log(`gmail: ${users.length} mailbox(es), ${listed} message(s) matched, ${byMessageId.size} unique → ${docs.length} docs`)
+    ctx.log(`gmail: ${users.length} mailbox(es) ${how}, ${listed} message(s) matched, ${byMessageId.size} unique → ${docs.length} docs`)
     return {
       docs,
       nextCursor: { since: new Date(newest || sinceMs).toISOString() } as Record<string, unknown>,
@@ -358,15 +377,18 @@ export interface GmailPart {
 interface Api {
   listMessageIds(user: string, query: string): Promise<string[]>
   getMessage(user: string, id: string): Promise<GmailMessage | undefined>
+  /** Every active, non-archived user's primary address, listed as `admin`. */
+  listDomainUsers(admin: string): Promise<string[]>
 }
 
-function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey): Api {
+function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey, directoryBase: string = DIRECTORY_API): Api {
   const tokens = new Map<string, { token: string; expiresAt: number }>()
 
-  async function tokenFor(user: string): Promise<string> {
-    const cached = tokens.get(user)
+  async function tokenFor(user: string, scope: string = SCOPE): Promise<string> {
+    const cacheKey = `${scope} ${user}`
+    const cached = tokens.get(cacheKey)
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
-    const assertion = signJwt(key, user, tokenUrl)
+    const assertion = signJwt(key, user, tokenUrl, Date.now(), scope)
     const res = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -376,20 +398,21 @@ function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey):
     if (!res.ok || !body.access_token) {
       const hint =
         body.error === 'unauthorized_client'
-          ? ' — domain-wide delegation is not granted for this service account (Workspace Admin → Security → API controls → Domain-wide delegation, scope gmail.readonly)'
+          ? ` — domain-wide delegation is not granted for this service account and scope (Workspace Admin → Security → API controls → Domain-wide delegation: add ${scope})`
           : body.error === 'invalid_grant'
             ? ' — is this a real mailbox in the Workspace domain?'
             : ''
       throw new Error(`token for ${user}: ${body.error ?? res.status} ${body.error_description ?? ''}${hint}`.trim())
     }
-    tokens.set(user, { token: body.access_token, expiresAt: Date.now() + (body.expires_in ?? 3600) * 1000 })
+    tokens.set(cacheKey, { token: body.access_token, expiresAt: Date.now() + (body.expires_in ?? 3600) * 1000 })
     return body.access_token
   }
 
-  async function request<T>(user: string, path: string): Promise<T> {
+  async function request<T>(user: string, path: string, opts: { base?: string; scope?: string } = {}): Promise<T> {
+    const base = opts.base ?? apiBase
     for (let attempt = 1; ; attempt++) {
-      const token = await tokenFor(user)
-      const res = await fetch(`${apiBase}${path}`, { headers: { Authorization: `Bearer ${token}` } })
+      const token = await tokenFor(user, opts.scope)
+      const res = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}` } })
       if (res.status === 429 || res.status >= 500 || (res.status === 403 && /rateLimit|userRateLimit/i.test(await res.clone().text()))) {
         if (attempt >= MAX_ATTEMPTS) throw new Error(`gmail ${res.status} ${path} after ${attempt} attempts`)
         const retryAfter = Number(res.headers.get('retry-after'))
@@ -398,7 +421,7 @@ function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey):
         continue
       }
       if (res.status === 401 && attempt === 1) {
-        tokens.delete(user)
+        tokens.delete(`${opts.scope ?? SCOPE} ${user}`)
         continue
       }
       if (!res.ok) throw new Error(`gmail ${res.status} ${path}: ${(await res.text()).slice(0, 200)}`)
@@ -426,14 +449,29 @@ function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey):
         throw err
       }
     },
+    async listDomainUsers(admin) {
+      const out: string[] = []
+      let pageToken: string | undefined
+      try {
+        do {
+          const qs = new URLSearchParams({ customer: 'my_customer', maxResults: '500', query: 'isSuspended=false', fields: 'users(primaryEmail,suspended,archived),nextPageToken', ...(pageToken ? { pageToken } : {}) })
+          const page = await request<{ users?: { primaryEmail: string; suspended?: boolean; archived?: boolean }[]; nextPageToken?: string }>(admin, `/admin/directory/v1/users?${qs}`, { base: directoryBase, scope: DIRECTORY_SCOPE })
+          out.push(...(page.users ?? []).filter((u) => !u.suspended && !u.archived).map((u) => u.primaryEmail))
+          pageToken = page.nextPageToken
+        } while (pageToken)
+      } catch (err) {
+        throw new Error(`gmail: listing Workspace users as ${admin} failed — ${err instanceof Error ? err.message : err}`)
+      }
+      return out
+    },
   }
 }
 
 /** RS256 JWT for the OAuth 2.0 JWT-bearer grant, impersonating `sub`. */
-export function signJwt(key: ServiceAccountKey, sub: string, aud: string, now = Date.now()): string {
+export function signJwt(key: ServiceAccountKey, sub: string, aud: string, now = Date.now(), scope: string = SCOPE): string {
   const iat = Math.floor(now / 1000)
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const claims = b64url(JSON.stringify({ iss: key.client_email, sub, scope: SCOPE, aud, iat, exp: iat + 3600 }))
+  const claims = b64url(JSON.stringify({ iss: key.client_email, sub, scope, aud, iat, exp: iat + 3600 }))
   const signer = createSign('RSA-SHA256')
   signer.update(`${header}.${claims}`)
   return `${header}.${claims}.${b64url(signer.sign(key.private_key))}`

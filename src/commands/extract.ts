@@ -40,13 +40,17 @@ import type { Pin } from '../types.js'
  *
  * Two models: a full fold (first backfill, or a re-fold after deleting
  * state.extracted — many batches, empty or thin artifacts) uses LORE_MODEL;
- * an incremental fold (one batch of new material onto existing artifacts)
- * uses LORE_MODEL_INCREMENTAL, cheaper and faster. Set both to the same id
- * to opt out.
+ * an incremental fold (one small batch of new material onto existing
+ * artifacts) uses LORE_MODEL_INCREMENTAL, cheaper and faster. A single batch
+ * bigger than INCREMENTAL_MAX_CHARS — a new source's first backfill — is a
+ * full fold too: on 200k chars of email the small model returned nothing.
+ * Set both to the same id to opt out.
  */
 
 const MODEL = process.env.LORE_MODEL ?? 'claude-opus-4-8'
 const MODEL_INCREMENTAL = process.env.LORE_MODEL_INCREMENTAL ?? 'claude-sonnet-5'
+/** Above this much new material a "one batch" fold is a backfill (a new source, a re-fold), not an hourly delta — the full model handles it. */
+const INCREMENTAL_MAX_CHARS = 60_000
 const BATCH_CHARS = 300_000
 const ARTIFACTS = ['requests', 'decisions', 'roadmap'] as const
 
@@ -115,7 +119,9 @@ const FOLD_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 }
 
-const FOLD_SYSTEM = `You maintain the derived-artifact layer of a project's memory. Input: the current artifacts (YAML), the pinned facts, and a batch of newly synced raw material (Slack messages with permalinks). Output: only the items that are new or changed — the caller merges them into the artifacts.
+const FOLD_SYSTEM = `You maintain the derived-artifact layer of a project's memory. Input: the current artifacts (YAML), the pinned facts, and a batch of newly synced raw material — Slack messages, emails, meeting notes and transcripts, documentation pages, issues and pull requests — each with a permalink. Output: only the items that are new or changed — the caller merges them into the artifacts.
+
+Email is a first-class source: a client asking for something in an email is a request; a client or lead confirming a plan in an email is a decision; scheduled work described in an email is roadmap. Treat every source the same way — what matters is who said it and whether it is an ask, a call, or a plan.
 
 Rules:
 - Output is a delta. Return only items that are new, or existing items whose fields the material changed (return the whole item, same id). Every existing item you leave out is kept exactly as it is — do not repeat unchanged items. Empty arrays are the normal result for a batch with nothing new.
@@ -126,7 +132,7 @@ Rules:
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
 
-const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced Slack history and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
+const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, docs, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
 
 interface FoldResult {
   requests: unknown[]
@@ -163,7 +169,8 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
 
     const batches = pack(newFiles, BATCH_CHARS)
-    const model = pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0))
+    const newChars = newFiles.reduce((n, f) => n + f.text.length, 0)
+    const model = pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0), process.env, newChars)
     console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${model}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
@@ -255,10 +262,10 @@ function pickBackend(): Backend {
  * backfill or re-fold) is the full model. Exported for tests; env-overridable
  * so a host can pin either side.
  */
-export function pickModel(batchCount: number, existingItems: number, env: NodeJS.ProcessEnv = process.env): string {
+export function pickModel(batchCount: number, existingItems: number, env: NodeJS.ProcessEnv = process.env, newChars = 0): string {
   const full = env.LORE_MODEL ?? MODEL
   const incremental = env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
-  return batchCount === 1 && existingItems > 0 ? incremental : full
+  return batchCount === 1 && existingItems > 0 && newChars <= INCREMENTAL_MAX_CHARS ? incremental : full
 }
 
 /** `claude -p --model` takes a family alias; map a model id onto one. */

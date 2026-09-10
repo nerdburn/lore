@@ -118,8 +118,11 @@ export const sourceSchemas = {
     key: envRef.optional(),
     /** Path of the service account key JSON on the syncing host (default ~/.lore/gmail-sa.json). */
     key_file: z.string().optional(),
-    /** Mailboxes to read (Workspace users). Default: the team-side contacts in `client.contacts`. */
-    users: z.array(z.string().email()).optional(),
+    /** Mailboxes to read: a list of Workspace users, or "all" for every active user in the Workspace
+     *  (listed via the Directory API — delegate admin.directory.user.readonly too). Default: the team-side contacts in `client.contacts`. */
+    users: z.union([z.literal('all'), z.array(z.string().email())]).optional(),
+    /** With users "all": the Workspace admin to list users as (default `client.owner`). */
+    admin: z.string().email().optional(),
     /** Mailboxes never read, whoever is in `users`/contacts — a teammate's opt-out. */
     exclude: z.array(z.string().email()).optional(),
     /** Extra client domains to match, on top of `client.domains`. */
@@ -128,8 +131,9 @@ export const sourceSchemas = {
     query: z.string().optional(),
     /** Days re-read on every sync (default 2). */
     overlap_days: z.number().min(0).optional(),
-    /** Gmail REST base (default https://gmail.googleapis.com) and OAuth token endpoint — for tests and proxies. */
+    /** Gmail REST base (default https://gmail.googleapis.com), Directory base (https://admin.googleapis.com) and OAuth token endpoint — for tests and proxies. */
     api_base: z.string().url().optional(),
+    directory_base: z.string().url().optional(),
     token_url: z.string().url().optional(),
   }),
 } as const

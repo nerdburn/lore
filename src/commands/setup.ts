@@ -15,7 +15,7 @@ export interface SetupFlags {
   granola?: string
   /** Comma-separated Notion page/database ids or URLs scoping this client's docs — adds a notion source. */
   notion?: string
-  /** Adds a gmail source: `true` reads the team-side contacts' mailboxes, a comma-separated list names them. */
+  /** Adds a gmail source: `true` reads the team-side contacts' mailboxes, "all" every Workspace mailbox, a comma-separated list names them. */
   gmail?: string | boolean
   /** Comma-separated Jira project keys and/or "board:<id>" entries — adds a jira source. */
   jira?: string
@@ -99,9 +99,16 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     const jiraProjects = jiraEntries.filter((e) => !/^board:/i.test(e)).map((k) => k.toUpperCase())
     const jiraBoards = jiraEntries.filter((e) => /^board:/i.test(e)).map((e) => Number(e.split(':')[1]))
     if (jiraBoards.some((b) => !Number.isInteger(b) || b <= 0)) throw new Error('--jira: board entries look like "board:293"')
-    const gmailUsers = flags.gmail === undefined || flags.gmail === false ? undefined : typeof flags.gmail === 'string' ? flags.gmail.split(/[,\s]+/).map((u) => u.trim().toLowerCase()).filter(Boolean) : []
-    for (const u of gmailUsers ?? []) {
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u)) throw new Error(`--gmail: "${u}" is not an email address`)
+    const gmailUsers: string[] | 'all' | undefined =
+      flags.gmail === undefined || flags.gmail === false
+        ? undefined
+        : flags.gmail === 'all'
+          ? 'all'
+          : typeof flags.gmail === 'string'
+            ? flags.gmail.split(/[,\s]+/).map((u) => u.trim().toLowerCase()).filter(Boolean)
+            : []
+    for (const u of Array.isArray(gmailUsers) ? gmailUsers : []) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u)) throw new Error(`--gmail: "${u}" is not an email address (or "all")`)
     }
     // A client that doesn't use Slack is fine, as long as something else is a source.
     if (channels.length === 0 && !repos.length && !folders.length && !notionRoots.length && !jiraEntries.length && gmailUsers === undefined) {
@@ -136,7 +143,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.length ? channels.join(', ') : 'no slack'}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''}${gmailUsers ? ` · gmail: ${gmailUsers.length ? gmailUsers.join(', ') : 'team contacts'}` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.length ? channels.join(', ') : 'no slack'}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''}${gmailUsers ? ` · gmail: ${gmailUsers === 'all' ? 'every mailbox in the Workspace' : gmailUsers.length ? gmailUsers.join(', ') : 'team contacts'}` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -191,8 +198,8 @@ export function buildSources(
   jiraProjects: string[] = [],
   jiraSite?: string,
   jiraBoards: number[] = [],
-  /** undefined = no gmail source; [] = read the team-side contacts' mailboxes; else these mailboxes. */
-  gmailUsers?: string[],
+  /** undefined = no gmail source; [] = the team-side contacts' mailboxes; "all" = every Workspace mailbox; else these. */
+  gmailUsers?: string[] | 'all',
 ): Record<string, Record<string, unknown>> {
   const sources: Record<string, Record<string, unknown>> = {}
   if (channels.length) {
@@ -216,7 +223,7 @@ export function buildSources(
   }
   if (gmailUsers !== undefined) {
     // Auth is the service account key on the syncing host (~/.lore/gmail-sa.json); no token here.
-    sources.gmail = gmailUsers.length ? { users: gmailUsers } : {}
+    sources.gmail = gmailUsers === 'all' ? { users: 'all' } : gmailUsers.length ? { users: gmailUsers } : {}
   }
   return sources
 }

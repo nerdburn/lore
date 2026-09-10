@@ -147,18 +147,23 @@ plus a secret on the repo. Every scope belongs to exactly one client repo.
   domain-wide delegation* (scope `gmail.readonly`, granted once by a
   Workspace admin) lets the connector read each teammate's mailbox without a
   per-person consent flow. Mailboxes default to the `team`-side contacts in
-  the `client` block (`users` to name them, `exclude` for an opt-out); in
-  each one it searches for mail from/to/cc the client's domains or
-  client-side contacts, so internal mail never matches. A thread that landed
+  the `client` block; `users` names them, or `users: "all"` reads every
+  active mailbox in the Workspace (listed through the Directory API as
+  `admin`, default `client.owner` — delegate
+  `admin.directory.user.readonly` as well), so a teammate the client emails
+  for the first time is covered with no config change. `exclude` is an
+  opt-out either way. In each mailbox it searches for mail from/to/cc the
+  client's domains or client-side contacts, so internal mail never matches. A thread that landed
   in four inboxes is one doc, keyed on its Message-ID (`meta.mailboxes` says
   who had it); replies chain on `References`. Quoted history and signatures
   are trimmed. The key JSON lives on the syncing host at
   `~/.lore/gmail-sa.json` (`key_file`), or as `key: env:GMAIL_SA_KEY` — a
   header-injecting proxy can't hold it, because the bearer differs per
-  mailbox. Setup: `--gmail` (team contacts) or `--gmail "a@x.com,b@x.com"`.
+  mailbox. Setup: `--gmail` (team contacts), `--gmail all`, or
+  `--gmail "a@x.com,b@x.com"`.
 
 ```json
-"gmail": { "users": ["kaity@inputlogic.ca", "shawn@inputlogic.ca"], "exclude": [], "query": "-label:newsletters" }
+"gmail": { "users": "all", "admin": "shawn@inputlogic.ca", "exclude": [], "query": "-subject:\"Invitation:\" -label:newsletters" }
 ```
 
 `lore setup --github "acme/web" --granola "Acme" --notion "<page url>" --jira "ACM" --jira-site https://acme.atlassian.net --gmail --client "Acme" --domains "acme.com"`
@@ -392,6 +397,7 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 - **`✗ granola: folder "Acme" not found`** — folder titles are matched case-insensitively against `list_meeting_folders`; pass the folder id instead if the title is ambiguous.
 - **`✗ gmail: mailbox x@…: token for x@…: unauthorized_client`** — domain-wide delegation isn't granted for the service account's client id (Workspace Admin → Security → API controls → Domain-wide delegation, scope `https://www.googleapis.com/auth/gmail.readonly`), or that address isn't a user in the domain. Other mailboxes still synced.
 - **`gmail: no service account key`** — put the key JSON at `~/.lore/gmail-sa.json` on the syncing host, or set `key_file` / `key: env:GMAIL_SA_KEY`.
+- **`gmail: listing Workspace users as x@… failed`** — `users: "all"` needs the `https://www.googleapis.com/auth/admin.directory.user.readonly` scope in the same domain-wide delegation entry, and `admin` (default `client.owner`) must be a Workspace admin.
 - **`"<user>" is not in lore.json write.allow`** — pins are restricted; run `lore remember --by <allowed-name>` or edit `write.allow`.
 - **Re-backfill one channel** — delete that channel's cursor from `state.json` and `lore sync`; it refetches its backfill window and dedupes. (Channels newly added to `lore.json` backfill automatically.)
 - **No "lore sync" workflow in the Actions tab** — GitHub sometimes misses workflows pushed in the repo-creating commit; `setup` nudges automatically, otherwise push any commit touching the file.

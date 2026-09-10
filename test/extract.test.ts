@@ -73,6 +73,8 @@ test('extract: pickModel — one batch onto existing artifacts is incremental, a
   assert.equal(pickModel(1, 120, {}), 'claude-sonnet-5')
   assert.equal(pickModel(3, 0, {}), 'claude-opus-4-8')
   assert.equal(pickModel(1, 5, { LORE_MODEL: 'x', LORE_MODEL_INCREMENTAL: 'x' }), 'x', 'same id on both sides opts out')
+  assert.equal(pickModel(1, 120, env, 40_000), 'delta-model', 'an hourly trickle stays incremental')
+  assert.equal(pickModel(1, 120, env, 219_000), 'full-model', 'a new source backfilled into one batch is not a delta — the full model reads it')
   assert.equal(cliModelAlias('claude-sonnet-5'), 'sonnet')
   assert.equal(cliModelAlias('claude-opus-4-8'), 'opus')
   assert.equal(cliModelAlias('claude-haiku-4-5'), 'haiku')

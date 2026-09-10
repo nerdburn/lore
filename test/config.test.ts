@@ -98,6 +98,8 @@ test('config: known sources are validated by their typed schema', () => {
   assert.deepEqual(ok.sources.notion.roots?.length, 1)
   assert.deepEqual(ok.sources.gmail.users, ['kaity@inputlogic.ca'])
   assert.ok(configSchema.parse({ project: 'p', sources: { gmail: {} } }).sources.gmail, 'an empty gmail block is valid: key file on the host, mailboxes from contacts')
+  assert.equal(configSchema.parse({ project: 'p', sources: { gmail: { users: 'all', admin: 'shawn@inputlogic.ca' } } }).sources.gmail.users, 'all')
+  bad({ gmail: { users: 'everyone' } })
   assert.equal(configSchema.parse({ project: 'x', sources: { jira: { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.projects?.[0], 'ACM')
   assert.deepEqual(configSchema.parse({ project: 'x', sources: { jira: { boards: [293], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.boards, [293])
   bad({ jira: { api_base: 'https://jira.int.exe.xyz/rest/api/3' } })

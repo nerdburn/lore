@@ -61,7 +61,10 @@ by a Google Workspace super-admin:
    key. Note the account's **Unique ID** (the numeric client id).
 2. Workspace Admin console → Security → Access and data control → API
    controls → **Domain-wide delegation** → Add new: that client id, scope
-   `https://www.googleapis.com/auth/gmail.readonly`. Nothing else.
+   `https://www.googleapis.com/auth/gmail.readonly`. To let a client's
+   `users: "all"` discover mailboxes, add a second scope on the same entry
+   (comma-separated): `https://www.googleapis.com/auth/admin.directory.user.readonly`.
+   Nothing else — no Admin SDK write scopes.
 3. Copy the key to the runner's home, readable only by it:
 
 ```sh

@@ -102,6 +102,7 @@ test('setup: buildSources writes proxy bases (no tokens) when proxies are config
   assert.equal(buildSources(['#acme'], [], undefined).gmail, undefined, 'no --gmail, no gmail source')
   assert.deepEqual(buildSources(['#acme'], [], undefined, [], [], [], undefined, [], []).gmail, {}, '--gmail with no list: mailboxes come from the team-side contacts')
   assert.deepEqual(buildSources(['#acme'], [], undefined, [], [], [], undefined, [], ['kaity@inputlogic.ca']).gmail, { users: ['kaity@inputlogic.ca'] })
+  assert.deepEqual(buildSources(['#acme'], [], undefined, [], [], [], undefined, [], 'all').gmail, { users: 'all' }, '--gmail all: every Workspace mailbox, listed as client.owner')
   assert.deepEqual(buildSources([], [], { slack: 'http://s' }, ['Acme'], [], [], undefined, [], []), { granola: { folders: ['Acme'] }, gmail: {} }, 'a client without Slack gets no slack source')
   assert.deepEqual(buildSources(['#acme'], [], { jira: 'https://jira.int.exe.xyz/rest/api/3' }, [], [], [], 'https://input-logic.atlassian.net', [293]).jira, { boards: [293], api_base: 'https://jira.int.exe.xyz/rest/api/3', site: 'https://input-logic.atlassian.net' })
   assert.deepEqual(buildSources(['#acme'], ['a/b'], { slack: 'http://s' }), {

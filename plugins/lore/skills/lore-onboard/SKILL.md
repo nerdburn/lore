@@ -41,7 +41,8 @@ relay the human steps, and verify before declaring success.
    top-level Notion page URL (relay: connect the `lore` integration to it via
    `···` → Connections); Jira project key + site if they track work there;
    whether the client works by email instead of Slack (then: whose inboxes —
-   default the team-side contacts — and tell those teammates); backfill months
+   `all` for every Workspace mailbox, a list, or the team-side contacts — and
+   tell those teammates); backfill months
    (default 3); known contacts (name, email, role, client/team side).
 2. **Slack** — relay: `/invite @lore` in each channel. Confirm membership
    before syncing: the bot's channel list is visible via the host's proxy
@@ -58,7 +59,7 @@ relay the human steps, and verify before declaring success.
    ```sh
    lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
               --notion "<client's Notion page URL>" [--jira ACM --jira-site https://acme.atlassian.net] \
-              [--gmail | --gmail "kaity@inputlogic.ca,shawn@inputlogic.ca"] \
+              [--gmail | --gmail all | --gmail "kaity@inputlogic.ca,shawn@inputlogic.ca"] \
               --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```
 
@@ -66,7 +67,9 @@ relay the human steps, and verify before declaring success.
    Gmail needs the service account key at `~/.lore/gmail-sa.json` on the host
    (one-time, `docs/DEPLOY_EXE.md`); check it exists before the first sync:
    `ssh exedev@lore-host.exe.xyz test -s .lore/gmail-sa.json && echo ok`.
-   `--domains` is the whole email search — get it right.
+   `--domains` is the whole email search — get it right. `--gmail all` also
+   needs the `admin.directory.user.readonly` scope on the delegation entry and
+   `client.owner` (or `admin`) to be a Workspace admin.
 
    Then add `client.contacts` to the repo's `lore.json` (cache clone at
    `~/.lore/cache/lore-<client>`), commit, push.
