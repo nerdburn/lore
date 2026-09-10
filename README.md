@@ -142,8 +142,28 @@ plus a secret on the repo. Every scope belongs to exactly one client repo.
   header (`--header "Authorization: Basic <base64 email:token>"`). `site` is
   the Atlassian URL for permalinks.
 
-`lore setup --github "acme/web" --granola "Acme" --notion "<page url>" --jira "ACM" --jira-site https://acme.atlassian.net --client "Acme" --domains "acme.com"`
-writes the sources and the client block (below).
+- **Gmail** reads the client's email out of your team's inboxes — for the
+  client who doesn't use Slack. One Google Workspace *service account with
+  domain-wide delegation* (scope `gmail.readonly`, granted once by a
+  Workspace admin) lets the connector read each teammate's mailbox without a
+  per-person consent flow. Mailboxes default to the `team`-side contacts in
+  the `client` block (`users` to name them, `exclude` for an opt-out); in
+  each one it searches for mail from/to/cc the client's domains or
+  client-side contacts, so internal mail never matches. A thread that landed
+  in four inboxes is one doc, keyed on its Message-ID (`meta.mailboxes` says
+  who had it); replies chain on `References`. Quoted history and signatures
+  are trimmed. The key JSON lives on the syncing host at
+  `~/.lore/gmail-sa.json` (`key_file`), or as `key: env:GMAIL_SA_KEY` — a
+  header-injecting proxy can't hold it, because the bearer differs per
+  mailbox. Setup: `--gmail` (team contacts) or `--gmail "a@x.com,b@x.com"`.
+
+```json
+"gmail": { "users": ["kaity@inputlogic.ca", "shawn@inputlogic.ca"], "exclude": [], "query": "-label:newsletters" }
+```
+
+`lore setup --github "acme/web" --granola "Acme" --notion "<page url>" --jira "ACM" --jira-site https://acme.atlassian.net --gmail --client "Acme" --domains "acme.com"`
+writes the sources and the client block (below). `--channels` is optional
+when another source is given, so a client without Slack works.
 
 **Who the client is.** Every context repo can carry a `client` block — name,
 email domains, known contacts with `side: client|team|vendor`. Email is the
@@ -344,7 +364,7 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys --jira-site url] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys --jira-site url] [--gmail [mailboxes]] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secret, first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
@@ -370,6 +390,8 @@ run them with `claude plugin eval ./plugins/lore` — see its README.
 - **`✗ jira: no such connector`** — a source is configured before its connector exists; remove it or set `"disabled": true`.
 - **`✗ github: repo acme/x not found or token lacks access`** — the token's repository access doesn't include it, or the name is wrong. Other repos still synced.
 - **`✗ granola: folder "Acme" not found`** — folder titles are matched case-insensitively against `list_meeting_folders`; pass the folder id instead if the title is ambiguous.
+- **`✗ gmail: mailbox x@…: token for x@…: unauthorized_client`** — domain-wide delegation isn't granted for the service account's client id (Workspace Admin → Security → API controls → Domain-wide delegation, scope `https://www.googleapis.com/auth/gmail.readonly`), or that address isn't a user in the domain. Other mailboxes still synced.
+- **`gmail: no service account key`** — put the key JSON at `~/.lore/gmail-sa.json` on the syncing host, or set `key_file` / `key: env:GMAIL_SA_KEY`.
 - **`"<user>" is not in lore.json write.allow`** — pins are restricted; run `lore remember --by <allowed-name>` or edit `write.allow`.
 - **Re-backfill one channel** — delete that channel's cursor from `state.json` and `lore sync`; it refetches its backfill window and dedupes. (Channels newly added to `lore.json` backfill automatically.)
 - **No "lore sync" workflow in the Actions tab** — GitHub sometimes misses workflows pushed in the repo-creating commit; `setup` nudges automatically, otherwise push any commit touching the file.

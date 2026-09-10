@@ -113,6 +113,25 @@ export const sourceSchemas = {
     .refine((j) => (j.projects?.length ?? 0) > 0 || (j.boards?.length ?? 0) > 0, { message: 'jira needs projects and/or boards', path: ['projects'] })
     .refine((j) => j.site || j.api_base, { message: 'jira needs site (https://x.atlassian.net) or api_base', path: ['site'] })
     .refine((j) => (j.email && j.token) || j.api_base, { message: 'jira needs email + token (env:…) or an api_base proxy that injects them', path: ['token'] }),
+  gmail: baseSource.extend({
+    /** Service account key JSON as an env ref (env:GMAIL_SA_KEY); or leave both unset for `key_file`. */
+    key: envRef.optional(),
+    /** Path of the service account key JSON on the syncing host (default ~/.lore/gmail-sa.json). */
+    key_file: z.string().optional(),
+    /** Mailboxes to read (Workspace users). Default: the team-side contacts in `client.contacts`. */
+    users: z.array(z.string().email()).optional(),
+    /** Mailboxes never read, whoever is in `users`/contacts — a teammate's opt-out. */
+    exclude: z.array(z.string().email()).optional(),
+    /** Extra client domains to match, on top of `client.domains`. */
+    domains: z.array(z.string().min(1)).optional(),
+    /** Extra Gmail search terms appended to the scope query, e.g. "-label:newsletters". */
+    query: z.string().optional(),
+    /** Days re-read on every sync (default 2). */
+    overlap_days: z.number().min(0).optional(),
+    /** Gmail REST base (default https://gmail.googleapis.com) and OAuth token endpoint — for tests and proxies. */
+    api_base: z.string().url().optional(),
+    token_url: z.string().url().optional(),
+  }),
 } as const
 
 export type SourceName = keyof typeof sourceSchemas

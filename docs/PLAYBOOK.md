@@ -15,6 +15,7 @@ to an agent with the lore plugin and it will walk you through this.
 | Granola folder title | `Jointly` | `sources.granola.folders` |
 | Notion root page(s) or database(s) | the client's top-level Notion page URL | `sources.notion.roots` |
 | Jira project key(s), if the client tracks work in Jira | `ACM` + `https://acme.atlassian.net` | `sources.jira.projects` |
+| Email — whose inboxes, if the client works by email (no Slack) | `kaity@inputlogic.ca, shawn@inputlogic.ca` (default: team-side contacts) | `sources.gmail.users` |
 | Backfill window | 3 months | first sync only; after that everything is incremental |
 
 Convention in this workspace: `#<client>` is internal, `#<client>-team` has
@@ -61,6 +62,18 @@ One Atlassian API token per Jira site lives as the `jira` exe.dev proxy
 (HTTP Basic, see `docs/DEPLOY_EXE.md`). The account behind it must be able to
 browse the client's project. Pass the project key(s) and site URL to setup.
 
+## 3d. Gmail — for the client who doesn't use Slack
+
+One-time (already done once the service account exists, see prerequisites):
+a Google Cloud service account with domain-wide delegation for
+`https://www.googleapis.com/auth/gmail.readonly`, its key JSON at
+`~/.lore/gmail-sa.json` on the host. Per client: nothing to authorise.
+Decide whose inboxes to read — by default every `team`-side contact in the
+client block — and tell those teammates. Only mail from/to/cc the client's
+domains or contacts is synced; a thread seen in several inboxes is stored
+once. Pass `--gmail` (team contacts) or `--gmail "a@…,b@…"` to setup, and
+make sure `--domains` is right: it is the whole search.
+
 ## 4. Create the context repo — one command
 
 From inside the client's code repo (links it, derives the name):
@@ -74,6 +87,8 @@ lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
 ```
 
 From anywhere, with an explicit name and no linking: `lore setup lore-acme --channels …`.
+A client without Slack: drop `--channels` and pass `--gmail` (plus
+`--granola`/`--notion` as they apply); the name then comes from `--client`.
 
 What it does: creates the bare repo on the host, scaffolds `lore.json` with
 proxy-based sources (no tokens anywhere), pushes, and — when run inside a
@@ -169,6 +184,8 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 - `✗ granola: folder "X" not found` — match the folder title exactly, or pass the folder id.
 - Notion pages missing — the integration hasn't been connected to that page (or an ancestor); Notion → page `···` → Connections.
 - `✗ jira: project X: jira 400 …` — wrong key, or the API token's account can't see that project.
+- `✗ gmail: mailbox x@…: … unauthorized_client` — domain-wide delegation isn't granted for the service account (Admin console → Security → API controls), or x@… isn't a Workspace user. `gmail: no service account key` — the key JSON is missing from `~/.lore/gmail-sa.json` on the host.
+- Gmail synced 0 docs on a busy client — check `client.domains`: the search is from/to/cc those domains (and client-side contacts) in each mailbox, nothing else.
 - `granola: no credentials — run lore auth granola` — the token file on the host is missing; run it there.
 - Sync ran but `lore recall` looks stale — reads pull the cache first; `--no-pull` skips that. The host syncs hourly; `systemctl start lore-sync.service` forces it.
 - Fold warnings `⚠ requests: model omitted N existing item(s) — kept them` are normal on commit-only batches; nothing was lost.
@@ -178,4 +195,5 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 - `lore-host` VM with the timer (`deploy/exe/setup.sh`), LLM via `llm.int.exe.xyz`
 - exe.dev integrations on tag `lore`: `slack` (bot token), `notion` (internal integration token, proxy to https://api.notion.com), `jira` (Basic email:token, proxy to the Atlassian site — when a client uses Jira), GitHub App connected to the org
 - `lore auth granola` run once on the host
+- For email: a Google Cloud service account (Gmail API enabled) with domain-wide delegation for `gmail.readonly` granted in the Workspace Admin console, its key JSON at `~/.lore/gmail-sa.json` on the host — see `docs/DEPLOY_EXE.md`
 - Laptop `~/.lore/config.json` with `remote` and `proxy` — see `docs/DEPLOY_EXE.md`

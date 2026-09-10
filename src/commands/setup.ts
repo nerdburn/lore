@@ -15,6 +15,8 @@ export interface SetupFlags {
   granola?: string
   /** Comma-separated Notion page/database ids or URLs scoping this client's docs — adds a notion source. */
   notion?: string
+  /** Adds a gmail source: `true` reads the team-side contacts' mailboxes, a comma-separated list names them. */
+  gmail?: string | boolean
   /** Comma-separated Jira project keys and/or "board:<id>" entries — adds a jira source. */
   jira?: string
   /** https://<site>.atlassian.net, for permalinks (and the API when no proxy). */
@@ -74,8 +76,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     }
 
     // Channels before name, so the name can fall back to the first channel.
-    const channels = normalizeChannels(flags.channels ?? (await ask('Slack channels to sync (comma-separated)', '')))
-    if (channels.length === 0) throw new Error('no channels — pass --channels "#acme,#acme-dev"')
+    const channels = normalizeChannels(flags.channels ?? (await ask('Slack channels to sync (comma-separated, blank for none)', '')))
     const repos = (flags.github ?? '')
       .split(/[,\s]+/)
       .map((r) => r.trim())
@@ -98,12 +99,21 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     const jiraProjects = jiraEntries.filter((e) => !/^board:/i.test(e)).map((k) => k.toUpperCase())
     const jiraBoards = jiraEntries.filter((e) => /^board:/i.test(e)).map((e) => Number(e.split(':')[1]))
     if (jiraBoards.some((b) => !Number.isInteger(b) || b <= 0)) throw new Error('--jira: board entries look like "board:293"')
+    const gmailUsers = flags.gmail === undefined || flags.gmail === false ? undefined : typeof flags.gmail === 'string' ? flags.gmail.split(/[,\s]+/).map((u) => u.trim().toLowerCase()).filter(Boolean) : []
+    for (const u of gmailUsers ?? []) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u)) throw new Error(`--gmail: "${u}" is not an email address`)
+    }
+    // A client that doesn't use Slack is fine, as long as something else is a source.
+    if (channels.length === 0 && !repos.length && !folders.length && !notionRoots.length && !jiraEntries.length && gmailUsers === undefined) {
+      throw new Error('no sources — pass --channels "#acme,#acme-dev", or --github/--granola/--notion/--jira/--gmail')
+    }
 
     // Name: explicit arg > the project repo we're standing in > first channel.
     let name = repoArg?.includes('/') ? repoArg.split('/')[1] : repoArg
     if (repoArg?.includes('/')) org = repoArg.split('/')[0]
     if (!name) {
-      const derived = projectRepoName(cwd) ?? channels[0].slice(1)
+      const derived = projectRepoName(cwd) ?? channels[0]?.slice(1) ?? (flags.client ? flags.client.toLowerCase().replace(/[^a-z0-9]+/g, '-') : undefined)
+      if (!derived) throw new Error('no name — pass the context repo name (lore-acme), or --channels / --client to derive one')
       name = await ask('Context repo name', `lore-${derived}`)
     }
     const ref = mode === 'remote' ? name : `${org}/${name}`
@@ -119,14 +129,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       project,
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards),
+      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.join(', ')}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.length ? channels.join(', ') : 'no slack'}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''}${gmailUsers ? ` · gmail: ${gmailUsers.length ? gmailUsers.join(', ') : 'team contacts'}` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -160,10 +170,11 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     console.log('\nStill human (by design):')
     console.log('  - if this workspace has no lore Slack app yet: `lore manifest slack` and create it')
     if (mode === 'remote') {
-      console.log(`  - /invite @lore in ${channels.join(', ')} — the host's next \`lore run-all\` picks the repo up automatically`)
+      if (channels.length) console.log(`  - /invite @lore in ${channels.join(', ')} — the host's next \`lore run-all\` picks the repo up automatically`)
+      if (gmailUsers !== undefined) console.log('  - gmail: the service account key must be at ~/.lore/gmail-sa.json on the host, with domain-wide delegation for gmail.readonly (docs/PLAYBOOK.md §3d)')
       if (!global.proxy?.slack) console.log('  - the host needs SLACK_TOKEN in its environment (no slack proxy configured)')
     } else {
-      console.log(`  - /invite @lore in ${channels.join(', ')}, then re-run the sync from Actions`)
+      if (channels.length) console.log(`  - /invite @lore in ${channels.join(', ')}, then re-run the sync from Actions`)
     }
   } finally {
     rl?.close()
@@ -180,9 +191,12 @@ export function buildSources(
   jiraProjects: string[] = [],
   jiraSite?: string,
   jiraBoards: number[] = [],
+  /** undefined = no gmail source; [] = read the team-side contacts' mailboxes; else these mailboxes. */
+  gmailUsers?: string[],
 ): Record<string, Record<string, unknown>> {
-  const sources: Record<string, Record<string, unknown>> = {
-    slack: proxy?.slack ? { channels, api_base: proxy.slack } : { channels, token: 'env:SLACK_TOKEN' },
+  const sources: Record<string, Record<string, unknown>> = {}
+  if (channels.length) {
+    sources.slack = proxy?.slack ? { channels, api_base: proxy.slack } : { channels, token: 'env:SLACK_TOKEN' }
   }
   if (repos.length) {
     sources.github = proxy?.github ? { repos, api_base: proxy.github } : { repos, token: 'env:LORE_GITHUB_TOKEN' }
@@ -199,6 +213,10 @@ export function buildSources(
     sources.jira = proxy?.jira
       ? { ...scope, api_base: proxy.jira, ...(jiraSite ? { site: jiraSite } : {}) }
       : { ...scope, site: jiraSite ?? 'https://CHANGE-ME.atlassian.net', email: 'env:JIRA_EMAIL', token: 'env:JIRA_TOKEN' }
+  }
+  if (gmailUsers !== undefined) {
+    // Auth is the service account key on the syncing host (~/.lore/gmail-sa.json); no token here.
+    sources.gmail = gmailUsers.length ? { users: gmailUsers } : {}
   }
   return sources
 }

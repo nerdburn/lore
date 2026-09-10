@@ -52,6 +52,28 @@ runner's home and refreshes in place:
 ssh exedev@lore-host.exe.xyz lore auth granola     # prints a URL + code; approve in a browser
 ```
 
+Gmail is the other exception: the connector mints a token *per mailbox* from
+a service account key, so the key lives on the VM too. One-time setup, done
+by a Google Workspace super-admin:
+
+1. Google Cloud console → a project (e.g. `lore-sync`) → enable the **Gmail
+   API** → IAM → Service accounts → create one (`lore`) → Keys → add a JSON
+   key. Note the account's **Unique ID** (the numeric client id).
+2. Workspace Admin console → Security → Access and data control → API
+   controls → **Domain-wide delegation** → Add new: that client id, scope
+   `https://www.googleapis.com/auth/gmail.readonly`. Nothing else.
+3. Copy the key to the runner's home, readable only by it:
+
+```sh
+scp lore-sync-abc123.json exedev@lore-host.exe.xyz:/home/exedev/.lore/gmail-sa.json
+ssh exedev@lore-host.exe.xyz chmod 600 /home/exedev/.lore/gmail-sa.json
+```
+
+The account can read every mailbox in the domain, so tell the team, and let
+lore's scoping do the limiting: per client it only searches for mail
+from/to/cc that client's domains and contacts, in the mailboxes the client's
+`lore.json` names.
+
 Inside the VM these become `https://slack.int.exe.xyz/api`, `https://notion.int.exe.xyz/v1`, `https://jira.int.exe.xyz/rest/api/3`, and — for every GitHub repo integration
 together — `https://github.int.exe.xyz/api/v3` (GitHub Enterprise-style REST
 layout; git and `gh` work against the same host). The GitHub integrations use

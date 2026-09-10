@@ -81,6 +81,8 @@ test('config: known sources are validated by their typed schema', () => {
   bad({ jira: { projects: ['ACM'], email: 'env:E', token: 'env:T' } })
   bad({ jira: { projects: ['ACM'], site: 'https://x.atlassian.net' } })
   bad({ notion: { token: 'literal', roots: ['abc'] } })
+  bad({ gmail: { key: '{"client_email":"x"}' } }) // literal key, not an env ref
+  bad({ gmail: { users: ['not-an-email'] } })
   bad({ granola: { token: 'literal-token', folders: ['Acme'] } })
 
   const ok = configSchema.parse({
@@ -90,9 +92,12 @@ test('config: known sources are validated by their typed schema', () => {
       github: { repos: ['acme/web', 'acme/mobile'], token: 'env:LORE_GITHUB_TOKEN', include: ['issues', 'commits'] },
       granola: { token: 'env:GRANOLA_TOKEN', folders: ['Acme'], attendee_domains: ['acme.com'], transcripts: false },
       notion: { token: 'env:NOTION_TOKEN', roots: ['https://www.notion.so/x/Docs-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d'], settle_minutes: 10 },
+      gmail: { users: ['kaity@inputlogic.ca'], exclude: ['nick@inputlogic.ca'], key: 'env:GMAIL_SA_KEY', query: '-label:newsletters' },
     },
   })
   assert.deepEqual(ok.sources.notion.roots?.length, 1)
+  assert.deepEqual(ok.sources.gmail.users, ['kaity@inputlogic.ca'])
+  assert.ok(configSchema.parse({ project: 'p', sources: { gmail: {} } }).sources.gmail, 'an empty gmail block is valid: key file on the host, mailboxes from contacts')
   assert.equal(configSchema.parse({ project: 'x', sources: { jira: { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.projects?.[0], 'ACM')
   assert.deepEqual(configSchema.parse({ project: 'x', sources: { jira: { boards: [293], api_base: 'https://jira.int.exe.xyz/rest/api/3' } } }).sources.jira.boards, [293])
   bad({ jira: { api_base: 'https://jira.int.exe.xyz/rest/api/3' } })

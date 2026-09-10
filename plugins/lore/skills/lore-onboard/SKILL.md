@@ -40,7 +40,8 @@ relay the human steps, and verify before declaring success.
    in it); GitHub repos as `owner/repo`; Granola folder title; the client's
    top-level Notion page URL (relay: connect the `lore` integration to it via
    `···` → Connections); Jira project key + site if they track work there;
-   backfill months
+   whether the client works by email instead of Slack (then: whose inboxes —
+   default the team-side contacts — and tell those teammates); backfill months
    (default 3); known contacts (name, email, role, client/team side).
 2. **Slack** — relay: `/invite @lore` in each channel. Confirm membership
    before syncing: the bot's channel list is visible via the host's proxy
@@ -57,17 +58,25 @@ relay the human steps, and verify before declaring success.
    ```sh
    lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
               --notion "<client's Notion page URL>" [--jira ACM --jira-site https://acme.atlassian.net] \
+              [--gmail | --gmail "kaity@inputlogic.ca,shawn@inputlogic.ca"] \
               --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```
+
+   No Slack? Drop `--channels`, pass `--gmail`; the name comes from `--client`.
+   Gmail needs the service account key at `~/.lore/gmail-sa.json` on the host
+   (one-time, `docs/DEPLOY_EXE.md`); check it exists before the first sync:
+   `ssh exedev@lore-host.exe.xyz test -s .lore/gmail-sa.json && echo ok`.
+   `--domains` is the whole email search — get it right.
 
    Then add `client.contacts` to the repo's `lore.json` (cache clone at
    `~/.lore/cache/lore-<client>`), commit, push.
 5. **First sync** — don't wait for the timer:
    `ssh exedev@lore-host.exe.xyz 'sudo systemctl start lore-sync.service; sudo journalctl -u lore-sync -o cat --since -30min | tail -40'`.
    Every `✗` is a config problem to fix and re-run (channel not joined, repo
-   not integrated, folder title mismatch).
+   not integrated, folder title mismatch, `unauthorized_client` = domain-wide
+   delegation not granted for a mailbox).
 6. **Verify end-to-end** with a real query for something only the client's
-   Slack would know: `lore grep -p <client> -i "<term>"`, then
+   Slack (or email) would know: `lore grep -p <client> -i "<term>"`, then
    `lore recall -p <client>` (client block, derived artifacts, open work,
    freshness). Zero hits on a busy channel means the sync didn't ingest it —
    investigate, don't hand off.
