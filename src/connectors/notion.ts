@@ -63,7 +63,7 @@ export const notion: Connector = {
         const parentId = parentIdOf(cur)
         if (!parentId) return false
         if (roots.has(parentId)) return true
-        cur = byId.get(parentId) ?? (await api.retrieve(parentId, cur.parent?.type === 'database_id' ? 'database' : 'page'))
+        cur = byId.get(parentId) ?? (await api.retrieve(parentId, parentKindOf(cur)))
         if (cur) byId.set(parentId, cur)
       }
       return false
@@ -129,7 +129,7 @@ async function channelFor(o: NotionObject, byId: Map<string, NotionObject>, api:
   for (let hops = 0; cur && hops < 20; hops++) {
     const parentId = parentIdOf(cur)
     if (!parentId) break
-    const parent: NotionObject | undefined = byId.get(parentId) ?? (await api.retrieve(parentId, cur.parent?.type === 'database_id' ? 'database' : 'page'))
+    const parent: NotionObject | undefined = byId.get(parentId) ?? (await api.retrieve(parentId, parentKindOf(cur)))
     if (!parent) break
     byId.set(parentId, parent)
     top = parent
@@ -265,6 +265,14 @@ export function normalizeId(idOrUrl: string): string {
   return m[1].toLowerCase().replace(/-/g, '')
 }
 
+/** Which endpoint retrieves `o`'s parent. Pages nested inside a column (or
+ * any other container block) have a `block_id` parent; walking through it is
+ * what lets a root page scope the pages laid out in its columns. */
+function parentKindOf(o: NotionObject): 'page' | 'database' | 'block' {
+  const t = o.parent?.type
+  return t === 'database_id' ? 'database' : t === 'block_id' ? 'block' : 'page'
+}
+
 function parentIdOf(o: NotionObject): string | undefined {
   const p = o.parent
   if (!p) return undefined
@@ -290,7 +298,7 @@ function numberOr(value: unknown, fallback: number): number {
 
 interface Api {
   searchSince(sinceMs: number): Promise<NotionObject[]>
-  retrieve(id: string, kind: 'page' | 'database'): Promise<NotionObject | undefined>
+  retrieve(id: string, kind: 'page' | 'database' | 'block'): Promise<NotionObject | undefined>
   blocksMarkdown(blockId: string, depth: number): Promise<string>
   user(id: string): Promise<string | undefined>
 }
@@ -332,7 +340,7 @@ function notionClient(apiBase: string, token: string | undefined): Api {
     },
     async retrieve(id, kind) {
       try {
-        return await request<NotionObject>(`/${kind === 'database' ? 'databases' : 'pages'}/${id}`)
+        return await request<NotionObject>(`/${kind === 'database' ? 'databases' : kind === 'block' ? 'blocks' : 'pages'}/${id}`)
       } catch {
         return undefined
       }
@@ -393,7 +401,8 @@ export interface NotionProperty {
   last_edited_time?: string
 }
 export interface NotionObject {
-  object: 'page' | 'database'
+  /** `block` only appears as an intermediate parent (a column, a toggle) — never as a synced doc. */
+  object: 'page' | 'database' | 'block'
   id: string
   url: string
   created_time: string

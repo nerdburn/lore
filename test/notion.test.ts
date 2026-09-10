@@ -25,6 +25,8 @@ function fakeNotion() {
   const state = {
     objects: [] as NotionObject[],
     blocks: {} as Record<string, NotionBlock[]>,
+    /** Container blocks retrievable by id (a column, a column_list) — parents of pages laid out inside them. */
+    blockObjects: {} as Record<string, NotionObject>,
     users: { U1: 'Priya Patel', U2: 'Shawn Adrian' } as Record<string, string>,
     calls: [] as string[],
     rateLimitOnce: false,
@@ -51,6 +53,8 @@ function fakeNotion() {
     }
     m = /^\/blocks\/([^/]+)\/children$/.exec(path)
     if (m) return json({ results: state.blocks[m[1]] ?? [], has_more: false, next_cursor: null })
+    m = /^\/blocks\/([^/]+)$/.exec(path)
+    if (m) return state.blockObjects[m[1]] ? json(state.blockObjects[m[1]]) : json({ message: 'not found' }, { status: 404 })
     m = /^\/users\/([^/]+)$/.exec(path)
     if (m) return state.users[m[1]] ? json({ name: state.users[m[1]] }) : json({ message: 'nf' }, { status: 404 })
     return json({ message: 'not found' }, { status: 404 })
@@ -139,6 +143,27 @@ test('notion: syncs edited pages in scope with rendered content, properties, aut
   assert.equal((nextCursor as { since: string }).since, '2026-08-11T12:00:00.000Z')
   assert.ok(!docs.some((d) => d.text.includes('Other client')), 'out-of-scope page excluded')
   assert.ok(!docs.some((d) => d.text.includes('Too fresh')), 'settling page deferred')
+})
+
+test('notion: a root page scopes pages laid out inside its columns (block parents in the chain)', async () => {
+  // CareMobi's real shape: root page → column_list → column → "Hub" page → Roadmap database → PRD pages.
+  const n = fakeNotion()
+  const root = page('aa000000000000000000000000000000', { title: 'CareMobi', last_edited_time: '2025-01-24T00:00:00.000Z' })
+  const block = (id: string, type: string, parent: NotionObject['parent']): NotionObject =>
+    ({ object: 'block', id, url: '', created_time: '2025-01-24T00:00:00.000Z', last_edited_time: '2025-01-24T00:00:00.000Z', parent, type } as NotionObject)
+  n.blockObjects['c1000000000000000000000000000001'] = block('c1000000000000000000000000000001', 'column_list', { type: 'page_id', page_id: root.id })
+  n.blockObjects['c0000000000000000000000000000002'] = block('c0000000000000000000000000000002', 'column', { type: 'block_id', block_id: 'c1000000000000000000000000000001' })
+  const hub = page('bb000000000000000000000000000003', { title: 'CareMobi Hub', parent: { type: 'block_id', block_id: 'c0000000000000000000000000000002' }, last_edited_time: '2026-06-04T00:00:00.000Z' })
+  const roadmap: NotionObject = { object: 'database', id: 'db000000000000000000000000000004', url: 'https://www.notion.so/db4', created_time: '2026-01-01T00:00:00Z', last_edited_time: '2026-06-04T00:00:00.000Z', title: rt('Roadmap'), parent: { type: 'page_id', page_id: hub.id } }
+  const prd = page('cc000000000000000000000000000005', { title: 'PRD: Apple Health Integration', parent: { type: 'database_id', database_id: roadmap.id }, properties: { Name: { type: 'title', title: rt('PRD: Apple Health Integration') } } })
+  n.objects = [root, hub, roadmap, prd, page('dd000000000000000000000000000006', { title: 'Other client' })]
+  n.blocks[prd.id] = [{ id: 'p', type: 'paragraph', paragraph: { rich_text: rt('Read HealthKit steps.') } }]
+
+  const { docs, errors } = await notion.fetch(ctx({ config: { token: 'ntn_test', roots: [`https://app.notion.com/p/x/CareMobi-${root.id}`] } }))
+  assert.equal(errors, undefined)
+  assert.deepEqual(docs.map((d) => d.meta?.page), [prd.id], 'the PRD under the column-nested hub is in scope; the unrelated page is not')
+  assert.equal(docs[0].channel, 'CareMobi', 'channel walks through the blocks to the root page title')
+  assert.ok(n.calls.some((c) => c === 'GET /v1/blocks/c0000000000000000000000000000002'), 'block parents are retrieved as blocks, not pages')
 })
 
 test('notion: with no roots everything shared is in scope; api_base routes to a proxy without a token', async () => {
