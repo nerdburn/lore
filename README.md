@@ -13,7 +13,8 @@ lore extract   # streams → derived artifacts      (LLM fold — Claude API or 
 
 lore grep      # search project memory — from any linked repo, or anywhere with -p
 lore recall    # pinned facts + derived artifacts + live work tables
-lore remember  # pin a fact (the only explicit write)
+lore remember  # pin a fact (an explicit write)
+lore sow add   # attach a statement of work: human-weeks sold over a period (the other explicit write)
 lore refresh   # pull the latest memory; --trigger makes the host sync right now
 lore mcp       # the same verbs as MCP tools over stdio, for agents
 ```
@@ -323,6 +324,37 @@ is disposable; delete `~/.lore/cache/` any time.
 update too. Both are rate-limited to once per 5 minutes (`--force`), and a
 run already in flight is waited out rather than restarted.
 
+### Commitments — statements of work
+
+An SOW in lore is a *capacity commitment*: how many human-weeks were sold,
+over what period, sometimes with a few named scope items. It is the one
+document that is authoritative about what was agreed, so it gets its own
+layer, `context/sow/<slug>.md`, written only by a human (or an agent on
+explicit instruction), never by sync or the fold.
+
+```sh
+lore sow add jointly-sow-4.md --name "Jointly SOW 4" --weeks 12 \
+  --start 2026-09-01 --end 2026-12-15 --signed 2026-08-28 \
+  --source "https://docs.google.com/document/d/…" --scope "Agreement builder v2; Onboarding"
+lore sow list
+```
+
+The document can be Markdown or text (Google Docs: **File → Download →
+Markdown**) or a PDF. The body is scrubbed like every stream doc and, by
+default, stripped of lines carrying currency amounts — the commitment lore
+needs is in weeks, and the repo is readable by every agent pointed at it
+(`--keep-commercials` to keep them). Re-adding the same name updates it;
+`--status exhausted|superseded|closed` retires it. Every add commits, pushes,
+and lands in the audit log.
+
+`lore recall` (and `lore_recall`) then return a `sow` layer: each SOW's
+weeks, period, status, scope, and how far through the period today is — the
+only burn proxy until a time-tracking source writes weeks spent next to it.
+The fold sees the active SOWs and notes when a request falls outside named
+scope; the weekly report gets a Budget line restating the figures. Agents
+attach one with `lore_sow_add`, passing the document text they read (from
+Google Drive tools, say) plus the numbers the user or the document states.
+
 ### Onboarding the next client
 
 [docs/PLAYBOOK.md](docs/PLAYBOOK.md) is the step-by-step: the facts to
@@ -352,7 +384,7 @@ removing @lore from the Slack channels.
 ### For agents (MCP)
 
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
-`lore_recall`, `lore_sync_now`, `lore_remember`. `lore_recall` returns
+`lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`. `lore_recall` returns
 exactly what the CLI does — pins, every derived artifact, the work tables,
 recent reports, and sync/extract timestamps so an agent can say how fresh
 its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
@@ -418,6 +450,8 @@ cites sources, never pins uninvited); run them with
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts + work tables |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
+| `lore sow add <file> --name n --weeks n --start d --end d [--signed d] [--source url] [--scope items] [--status s] [--by who] [--keep-commercials]` | attach a statement of work (.md/.txt/.pdf): weeks sold over a period; commits + pushes |
+| `lore sow list [--json]` | attached SOWs with calendar progress |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
 | `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
@@ -427,7 +461,7 @@ cites sources, never pins uninvited); run them with
 | `lore check` | validate config, connectors, env refs; print per-source sync health |
 | `lore manifest slack` | print the bundled Slack app manifest |
 
-`grep`, `recall`, `remember`, `refresh`, `archive`, and `mcp` all take
+`grep`, `recall`, `remember`, `sow`, `refresh`, `archive`, and `mcp` all take
 `--context <owner/repo>`, `-p/--project <name>`, and `--no-pull`.
 
 ## Troubleshooting
@@ -464,8 +498,9 @@ scrubber, stream writing and dedup, every connector against a fake API
 (Slack, GitHub, Granola via captured MCP responses, Notion, Jira, Gmail),
 Granola OAuth, sync/check failure handling, context resolution, archive,
 recall, every MCP tool over an in-memory transport, `remember` + audit,
-extract output parsing and merging, the self-hosted runner and refresh, and
-the `lore www` host page.
+extract output parsing and merging, the self-hosted runner and refresh,
+statements of work (add, recall layer, MCP tool, PDF extraction), and the
+`lore www` host page.
 
 ## Status
 
@@ -475,8 +510,9 @@ requests/decisions/roadmap + weekly report + pin-contradiction audit), the
 query surface — `grep`, `recall`, `remember`, `refresh`, `mcp` — with
 pointer resolution + `~/.lore/cache`, two hosting modes (self-hosted timer
 or GitHub Actions), a `lore setup` wizard covering every source, a Claude
-Code plugin with skills and evals, client lifecycle (`archive`), fail-safe
-sync with per-source health, secret scrubbing, and an audit log. Next (see
+Code plugin with skills and evals, client lifecycle (`archive`), statements of work as a human-owned
+commitments layer, fail-safe sync with per-source health, secret scrubbing,
+and an audit log. Next (see
 [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): contact
 identity resolution, `work_tracking` modes, client-scoped MCP tools, remote
 MCP.

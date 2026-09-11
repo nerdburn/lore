@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
+import { readSows, summarizeSow, type SowSummary } from './sow.js'
 import type { Client, Lifecycle, LoreConfig } from './config.js'
 import type { Pin } from './types.js'
 
@@ -28,6 +29,12 @@ export interface Recalled {
   work: Record<string, WorkSummary>
   /** Most recent weekly reports, newest first. */
   reports: { date: string; text: string }[]
+  /**
+   * Statements of work (context/sow/*.md): human-attached capacity
+   * commitments — weeks sold over a period — with calendar progress. As
+   * authoritative as pins; never written by sync or the fold.
+   */
+  sow: SowSummary[]
 }
 
 export interface WorkSummary {
@@ -38,6 +45,7 @@ export interface WorkSummary {
 
 export const REPORTS_CATEGORY = 'reports'
 export const WORK_CATEGORY = 'work'
+export const SOW_CATEGORY = 'sow'
 const DEFAULT_REPORT_LIMIT = 3
 
 /**
@@ -122,12 +130,13 @@ export function recallData(
     pins,
     derived,
     work,
+    sow: !category || category === SOW_CATEGORY ? readSows(root).map((s) => summarizeSow(s)) : [],
     reports,
   }
 }
 
 export function isEmpty(r: Recalled): boolean {
   return (
-    r.pins.length === 0 && Object.keys(r.derived).length === 0 && Object.keys(r.work).length === 0 && r.reports.length === 0
+    r.pins.length === 0 && Object.keys(r.derived).length === 0 && Object.keys(r.work).length === 0 && r.reports.length === 0 && r.sow.length === 0
   )
 }

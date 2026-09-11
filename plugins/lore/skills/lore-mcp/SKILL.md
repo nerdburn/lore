@@ -50,6 +50,12 @@ history, say so, and never present it as current state.
    a source. Good for "what has the client asked for" and "what was decided";
    `contradictions` lists pins that fresh evidence disputes — surface those.
 4. **Weekly reports** (`reports`) — the last few generated status reports.
+   **Statements of work** (`sow`) — human-attached commitments: human-weeks
+   sold, period, status, named scope if any, and `period_elapsed_pct`
+   (calendar progress; weeks *spent* are not tracked yet, so never present
+   elapsed time as burn). As authoritative as pins for what was committed.
+   Use it for "how much runway / budget is left", "what did we commit to",
+   and to flag a request that falls outside named scope.
 5. **Raw streams** — the synced material itself, one markdown file per
    source, channel/repo/folder, and day:
    - `context/streams/slack/#channel/YYYY-MM-DD.md` — messages, threads
@@ -76,6 +82,10 @@ look for that in Slack or a pin before stating it as settled.
 
 ## Answering questions from memory
 
+- **Budget / commitment questions** ("how many weeks did we sell", "how
+  far through the SOW are we", "is this in scope"): `lore_recall` with
+  `category: "sow"`; cite the SOW's `file`. Say "X% of the period has
+  elapsed" — not "X% of the budget is used" — until a burn source exists.
 - **Status questions** ("what's open / in progress / done", "what's
   outstanding for the client"): `lore_recall` with `category: "work"` for
   tracker state, then `category: "requests"` for asks that have no ticket
@@ -138,3 +148,11 @@ and ask whether they still want a pin. When you do pin:
 
 The tool is unavailable on archived clients and may be refused by the repo's
 write allow-list; report either plainly rather than working around it.
+
+## Attaching a statement of work
+
+Only when the user explicitly asks. Get the document text (read the Google
+Doc with the tools you have, or ask for a Markdown export) and call
+`lore_sow_add` with the text plus the numbers the user or the document
+states: `weeks`, `start`, `end`, and `signed`/`source`/`scope` when known.
+Never estimate weeks or dates; ask. Re-adding the same `name` updates it.

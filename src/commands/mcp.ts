@@ -8,6 +8,7 @@ import { recallData } from '../recall.js'
 import { grepContext } from '../search.js'
 import { refresh } from './refresh.js'
 import { remember } from './remember.js'
+import { sowAdd } from './sow.js'
 
 const PULL_INTERVAL_MS = 60_000
 
@@ -87,7 +88,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (the live GitHub issue/PR list — authoritative for delivery state; open items in full, closed/merged as counts, full table via lore_read of the given file), and recent weekly reports, with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports.',
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (the live GitHub issue/PR list — authoritative for delivery state; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold per period with calendar progress — authoritative for what was committed; burn is not tracked yet), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow.',
       inputSchema: { category: z.string().optional() },
     },
     async ({ category }) => {
@@ -131,6 +132,35 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       // server runs as, tagged as an MCP write in the audit log.
       const pin = remember(rememberOpts.cwd, fact, { ...rememberOpts.opts, category, source, via: 'mcp' })
       return text(`pinned ${pin.id}: ${fact}`)
+    },
+  )
+
+  server.registerTool(
+    'lore_sow_add',
+    {
+      description: archived
+        ? 'Unavailable: this client is archived and its memory is read-only.'
+        : 'Attach a statement of work to project memory: the document text (markdown — e.g. read from the Google Doc first) plus the commitment: human-weeks sold, period start/end, optional signed date, source link, and named scope items. Use ONLY on explicit user instruction, with the numbers the user or the document states — never estimate them. Lines carrying currency amounts are stripped unless keep_commercials. Re-adding the same name updates it (e.g. status: exhausted | superseded | closed).',
+      inputSchema: {
+        name: z.string().describe('e.g. "Jointly SOW 4"'),
+        text: z.string().describe('the SOW document as markdown/plain text'),
+        weeks: z.number().positive().describe('human-weeks sold'),
+        start: z.string().describe('period start, YYYY-MM-DD'),
+        end: z.string().describe('period end, YYYY-MM-DD'),
+        signed: z.string().optional().describe('date signed, YYYY-MM-DD'),
+        source: z.string().optional().describe('where the document lives (Google Doc URL)'),
+        scope: z.array(z.string()).optional().describe('named deliverables, when the SOW lists any'),
+        status: z.enum(['active', 'exhausted', 'superseded', 'closed']).optional(),
+        keep_commercials: z.boolean().optional(),
+      },
+    },
+    async ({ name, text: body, weeks, start, end, signed, source, scope, status, keep_commercials }) => {
+      const s = await sowAdd(
+        rememberOpts.cwd,
+        { name, text: body, weeks, start, end, signed, source, scope, status, keepCommercials: keep_commercials },
+        { ...rememberOpts.opts, via: 'mcp' },
+      )
+      return text(s)
     },
   )
 

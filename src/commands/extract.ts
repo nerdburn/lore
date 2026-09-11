@@ -4,6 +4,7 @@ import { join, relative } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
+import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { loadState, updateState } from '../state.js'
 import type { Pin } from '../types.js'
 
@@ -132,7 +133,7 @@ Rules:
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
 
-const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, docs, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
+const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, docs, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, period, percent elapsed) — never compute or estimate hours spent. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
 
 interface FoldResult {
   requests: unknown[]
@@ -175,6 +176,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
 
     let contradictions: FoldResult['contradictions'] = []
     mkdirSync(join(root, 'context/derived'), { recursive: true })
+    const sowNote = commitmentsNote(root)
     const clientNote = config.client
       ? `\n\n# Client\n${config.client.name}${config.client.domains.length ? ` — people with emails at ${config.client.domains.join(', ')} are the client` : ''}${
           config.client.contacts.length
@@ -182,8 +184,9 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
             : ''
         }\nAttribute requests and decisions to the client side vs the team accordingly.`
       : ''
+    const commitments = sowNote ? `\n\n# Commitments (statements of work — authoritative, human-attached)\n${sowNote}\nWhere an SOW names scope items, note in a request's text whether it falls inside or outside them; never invent budget figures.` : ''
     for (let i = 0; i < batches.length; i++) {
-      const user = `Today is ${today}.${clientNote}\n\n# Current artifacts\n${Object.entries(artifacts)
+      const user = `Today is ${today}.${clientNote}${commitments}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = await withRetry(() => (llm === 'sdk' ? sdkFold(model, user) : Promise.resolve(cliFold(model, user))), 2, (attempt, err) =>
@@ -230,7 +233,8 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       console.log('weekly report: no material this week')
     } else {
       const artifactContext = ARTIFACTS.map((n) => `## ${n}\n${readRaw(root, `context/derived/${n}.yaml`)}`).join('\n')
-      const user = `Today is ${today}.\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
+      const sowNote = commitmentsNote(root)
+      const user = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
         .map((f) => f.text)
         .join('\n\n')}`
       const report = llm === 'sdk' ? await sdkText(MODEL, REPORT_SYSTEM, user) : cliCall(MODEL, REPORT_SYSTEM, user)
@@ -477,4 +481,9 @@ function readRaw(root: string, rel: string): string {
 function isToday(day: string): boolean {
   const names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
   return names[new Date().getUTCDay()] === day.toLowerCase()
+}
+
+/** Active SOWs as precomputed lines for the prompts; empty when none. */
+function commitmentsNote(root: string): string {
+  return describeSows(readSows(root).map((s) => summarizeSow(s)))
 }

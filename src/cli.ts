@@ -18,6 +18,7 @@ import { runAll } from './commands/run-all.js'
 import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
+import { sowAdd, sowList } from './commands/sow.js'
 
 /** Options shared by every command that reads or writes a context repo. */
 function contextual(cmd: Command): Command {
@@ -129,6 +130,42 @@ contextual(
   remember(root, fact, opts)
 })
 
+const sow = program.command('sow').description('statements of work — the commitments layer: human-weeks sold over a period (human-attached, never LLM-written)')
+contextual(
+  sow
+    .command('add')
+    .description('attach an SOW: the document (Markdown/text/PDF; Google Docs: File → Download → Markdown) plus its budget and period; commits and pushes')
+    .argument('<file>', 'path to the SOW as .md, .txt, or .pdf')
+    .requiredOption('--name <name>', 'e.g. "Jointly SOW 4" (becomes the file slug)')
+    .requiredOption('--weeks <n>', 'human-weeks sold', Number)
+    .requiredOption('--start <date>', 'period start, YYYY-MM-DD')
+    .requiredOption('--end <date>', 'period end, YYYY-MM-DD')
+    .option('--signed <date>', 'date signed, YYYY-MM-DD')
+    .option('--source <url>', 'where the document lives (Google Doc link)')
+    .option('--scope <items>', 'named deliverables, comma- or semicolon-separated, when the SOW lists any')
+    .option('--status <s>', 'active | exhausted | superseded | closed (default active)')
+    .option('--by <who>', 'who is attaching this (defaults to OS username)')
+    .option('--keep-commercials', 'keep lines with currency amounts (default: strip them — the repo is readable by every agent)'),
+).action(async (file: string, o) => {
+  await sowAdd(
+    root,
+    {
+      file,
+      name: o.name,
+      weeks: o.weeks,
+      start: o.start,
+      end: o.end,
+      signed: o.signed,
+      source: o.source,
+      scope: o.scope ? String(o.scope).split(/[;,]/) : undefined,
+      status: o.status,
+      keepCommercials: o.keepCommercials,
+    },
+    o,
+  )
+})
+contextual(sow.command('list').description('list attached SOWs with calendar progress').option('--json', 'machine-readable output')).action((o) => void sowList(root, o))
+
 program
   .command('link')
   .description('point this project repo at a context repo (writes a one-line lore.json pointer + AGENTS.md section)')
@@ -178,7 +215,7 @@ contextual(
 contextual(
   program
     .command('mcp')
-    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember)'),
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add)'),
 ).action((opts) => mcp(root, opts))
 
 program.parseAsync().catch((err) => {

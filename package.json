@@ -28,6 +28,7 @@
     "@anthropic-ai/sdk": "^0.113.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^13.1.0",
+    "pdfjs-dist": "^6.3.289",
     "yaml": "^2.7.0",
     "zod": "^3.24.0"
   },
