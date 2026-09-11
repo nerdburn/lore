@@ -167,14 +167,23 @@ export async function pdfText(data: Buffer): Promise<string> {
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i)
     const content = await page.getTextContent()
+    // Runs are joined by their real horizontal gap, not blindly with a
+    // space: a ligature ("fi", "fl") arrives as its own run flush against
+    // its neighbours, while a word gap shows as a visible offset.
     let line = ''
+    let prevEnd: number | undefined
     const lines: string[] = []
-    for (const item of content.items as { str: string; hasEOL?: boolean }[]) {
+    for (const item of content.items as { str: string; hasEOL?: boolean; width?: number; transform?: number[] }[]) {
+      const x = item.transform?.[4]
+      const size = Math.abs(item.transform?.[0] ?? 10) || 10
+      if (line && x !== undefined && prevEnd !== undefined && !line.endsWith(' ') && !item.str.startsWith(' ') && x - prevEnd > size * 0.12) line += ' '
       line += item.str
+      prevEnd = x !== undefined ? x + (item.width ?? 0) : undefined
       if (item.hasEOL) {
         lines.push(line.trimEnd())
         line = ''
-      } else if (item.str && !item.str.endsWith(' ')) line += ' '
+        prevEnd = undefined
+      }
     }
     if (line.trim()) lines.push(line.trimEnd())
     pages.push(lines.join('\n'))
