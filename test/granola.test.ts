@@ -268,6 +268,8 @@ test('granola: the repo client block scopes meetings by domain and by contact em
     assert.deepEqual(byDomain.docs.map((d) => d.id), ['granola-11111111-1111-4111-8111-111111111111'])
     const byContact = await s.connector.fetch(ctx({ config: { token: 't', transcripts: false }, client: { name: 'Input', domains: [], contacts: [{ name: 'Kaity', email: 'KAITY@inputlogic.ca', side: 'client' }] } }))
     assert.deepEqual(byContact.docs.map((d) => d.id), ['granola-22222222-2222-4222-8222-222222222222'])
+    const byAlias = await s.connector.fetch(ctx({ config: { token: 't', transcripts: false }, client: { name: 'Input', domains: [], contacts: [{ name: 'Kaity', email: 'kaity@elsewhere.example', aliases: ['kaity@inputlogic.ca'], side: 'client' }] } }))
+    assert.deepEqual(byAlias.docs.map((d) => d.id), ['granola-22222222-2222-4222-8222-222222222222'], 'an alias address scopes a meeting like the primary email')
     const teamOnly = s.connector.fetch(ctx({ config: { token: 't' }, client: { name: 'X', domains: [], contacts: [{ name: 'Kaity', email: 'kaity@inputlogic.ca', side: 'team' }] } }))
     await assert.rejects(teamOnly, /nothing scopes meetings/, 'team-side contacts alone do not define the client')
   } finally {

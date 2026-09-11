@@ -36,7 +36,7 @@ export interface ConnectorContext {
    * it to scope material to this client — Granola matches meetings on the
    * domains and contact emails — without repeating the list per source.
    */
-  client?: { name: string; domains: string[]; contacts: { name: string; email: string; role?: string; side: string }[]; owner?: string }
+  client?: { name: string; domains: string[]; contacts: { name: string; email: string; aliases?: string[]; role?: string; side: string }[]; owner?: string }
   log: (msg: string) => void
   /**
    * Read a file this connector previously emitted via `FetchResult.files`

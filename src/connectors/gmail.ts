@@ -100,7 +100,7 @@ export const gmail: Connector = {
 
     // Scope: the client's domains and people.
     const domains = uniq([...((ctx.config.domains as string[] | undefined) ?? []), ...(ctx.client?.domains ?? [])].map((d) => lower(d).replace(/^@/, '')))
-    const contactEmails = uniq((ctx.client?.contacts ?? []).filter((c) => c.side !== 'team').map((c) => lower(c.email)))
+    const contactEmails = uniq((ctx.client?.contacts ?? []).filter((c) => c.side !== 'team').flatMap((c) => [c.email, ...(c.aliases ?? [])].map(lower)))
     if (domains.length === 0 && contactEmails.length === 0) {
       throw new Error('gmail: nothing scopes mail to this client — set client.domains/contacts in lore.json, or `domains` on the source')
     }

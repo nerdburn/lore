@@ -9,6 +9,9 @@ import { exportGoogleDoc, googleDocId } from '../src/gdoc.js'
 import { readSows } from '../src/sow.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
 
+// Isolate from the developer's ~/.lore/config.json (a saved global `owner` would satisfy the no-owner case).
+process.env.LORE_HOME = mkdtempSync(join(tmpdir(), 'lore-home-gdoc-'))
+
 const DOC_ID = '1DNMt4pUJPRqU7vj3dPo6U0icWuNO_2RbZAcEKnATaqg'
 const URL = `https://docs.google.com/document/d/${DOC_ID}/edit?usp=sharing`
 

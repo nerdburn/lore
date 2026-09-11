@@ -132,6 +132,8 @@ test('config: client block — domains normalised, contacts default to the clien
   })
   assert.deepEqual(cfg.client?.domains, ['jointly.ca', 'getjointly.ca'])
   assert.equal(cfg.client?.contacts[0].side, 'client')
+  const withAlias = loadConfig(makeContextRepo({}, { project: 'x', client: { name: 'X', domains: [], contacts: [{ name: 'J', email: 'j@x.com', aliases: ['J.Personal@Gmail.com'] }] } }))
+  assert.deepEqual(withAlias.client?.contacts[0].aliases, ['j.personal@gmail.com'], 'aliases are kept and lowercased')
   assert.equal(cfg.client?.contacts[1].side, 'team')
   assert.throws(() => configSchema.parse({ project: 'x', client: { name: 'X', contacts: [{ name: 'A', email: 'not-an-email' }] } }))
   assert.equal(configSchema.parse({ project: 'x' }).client, undefined)

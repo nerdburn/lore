@@ -193,7 +193,7 @@ export function makeGranola(
       const domains = new Set(
         [...((ctx.config.attendee_domains as string[] | undefined) ?? []), ...(ctx.client?.domains ?? [])].map((d) => d.toLowerCase().replace(/^@/, '')),
       )
-      const emails = new Set((ctx.client?.contacts ?? []).filter((c) => c.side !== 'team').map((c) => c.email.toLowerCase()))
+      const emails = new Set((ctx.client?.contacts ?? []).filter((c) => c.side !== 'team').flatMap((c) => [c.email, ...(c.aliases ?? [])].map((e) => e.toLowerCase())))
       if (folders.length === 0 && domains.size === 0 && emails.size === 0) {
         throw new Error('granola: nothing scopes meetings to this client — set folders/attendee_domains on the source, or client.domains/contacts in lore.json')
       }

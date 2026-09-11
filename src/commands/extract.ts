@@ -180,7 +180,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     const clientNote = config.client
       ? `\n\n# Client\n${config.client.name}${config.client.domains.length ? ` — people with emails at ${config.client.domains.join(', ')} are the client` : ''}${
           config.client.contacts.length
-            ? `\nKnown people: ${config.client.contacts.map((c) => `${c.name} <${c.email}>${c.role ? ` (${c.role})` : ''} [${c.side}]`).join('; ')}`
+            ? `\nKnown people: ${config.client.contacts.map((c) => `${c.name} <${[c.email, ...(c.aliases ?? [])].join(', ')}>${c.role ? ` (${c.role})` : ''} [${c.side}]`).join('; ')}`
             : ''
         }\nAttribute requests and decisions to the client side vs the team accordingly.`
       : ''

@@ -170,6 +170,8 @@ export type Lifecycle = (typeof LIFECYCLES)[number]
 export const contactSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
+  /** Other addresses the same person writes from (a personal gmail, an old domain) — matched like `email` by every connector. */
+  aliases: z.array(z.string().email().transform((e) => e.toLowerCase())).optional(),
   role: z.string().optional(),
   /** "client" (default) — the customer side; "team" — your own people; "vendor". */
   side: z.enum(['client', 'team', 'vendor']).default('client'),

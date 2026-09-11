@@ -236,7 +236,9 @@ configured but skipped, set `"disabled": true` on it. Per-source health
 overrides supported); everything after is forward-incremental.
 
 **Who the client is.** Every context repo carries a `client` block — name,
-email domains, known contacts with `side: client|team|vendor`, and `owner`:
+email domains, known contacts with `side: client|team|vendor` (and
+`aliases` for a person's other addresses, such as a personal gmail, matched
+like the primary email by Gmail and Granola), and `owner`:
 the *team-side* account lead, the Workspace user the service account acts as
 for Gmail directory listing and Google Doc export (asked once by `lore
 setup`, saved as `owner` in `~/.lore/config.json`, `--owner` overrides).
