@@ -178,7 +178,7 @@ contextual(
 contextual(
   program
     .command('mcp')
-    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_remember)'),
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember)'),
 ).action((opts) => mcp(root, opts))
 
 program.parseAsync().catch((err) => {

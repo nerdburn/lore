@@ -1,12 +1,12 @@
 ---
 name: lore-onboard
-description: Set up lore project memory for a client — gather the five facts, create the context repo, wire Slack/GitHub/Granola, verify, and point an agent at it. Use when asked to "set up lore for <client>", "onboard <client>", "add project memory", link a repo to existing memory, connect a Slack agent to lore, or archive a client.
+description: Set up lore project memory for a client — gather the five facts, create the context repo, wire Slack/GitHub/Granola/Notion/Jira/Gmail, verify, and point an agent at it. Use when asked to "set up lore for <client>", "onboard <client>", "add project memory", link a repo to existing memory, connect a Slack agent to lore, or archive a client.
 ---
 
 # Onboarding a client to lore
 
-Lore is git-native project memory: Slack, GitHub and Granola meetings synced
-into a private **context repo** per client, queried through the `lore` CLI or
+Lore is git-native project memory: Slack, GitHub, Jira, Granola meetings,
+Notion pages and client email synced into a private **context repo** per client, queried through the `lore` CLI or
 its MCP server. This skill is the agent-run version of `docs/PLAYBOOK.md`
 (also served at the host's page, e.g. https://lore-host.exe.xyz). Walk the
 user through it interactively: ask for what only they know, run what you can,

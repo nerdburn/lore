@@ -5,3 +5,4 @@ dist/
 .DS_Store
 plugins/lore/evals/results/
 plugins/lore/evals/mocks/
+*.tgz
