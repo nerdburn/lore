@@ -15,7 +15,7 @@ export interface SowAddInput {
   name: string
   weeks: number
   start: string
-  end: string
+  end?: string
   /** Document text (markdown). Exactly one of `text` / `file`. */
   text?: string
   /** Path to a .md/.txt/.pdf on this machine, or a docs.google.com link (exported via the Workspace service account). */
@@ -60,7 +60,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
   for (const [k, v] of [['start', input.start], ['end', input.end], ['signed', input.signed]] as const) {
     if (v !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(`sow: --${k} must be an ISO date (YYYY-MM-DD), got "${v}"`)
   }
-  if (input.end < input.start) throw new Error('sow: --end is before --start')
+  if (input.end && input.end < input.start) throw new Error('sow: --end is before --start')
   const status = input.status ?? 'active'
   if (!SOW_STATUSES.includes(status)) throw new Error(`sow: status must be one of ${SOW_STATUSES.join(', ')}`)
 
@@ -87,7 +87,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
     name: input.name.trim(),
     weeks: input.weeks,
     start: input.start,
-    end: input.end,
+    ...(input.end ? { end: input.end } : {}),
     status,
     ...(input.signed ? { signed: input.signed } : {}),
     ...(source ? { source } : {}),
@@ -108,7 +108,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
 
   if (ctx.mode === 'cache') {
     git(ctx.root, 'add', rel, AUDIT_FILE)
-    git(ctx.root, 'commit', '--quiet', '-m', `lore: sow ${existed ? 'update' : 'add'} ${slug} (${meta.weeks} weeks, ${meta.start} → ${meta.end})`)
+    git(ctx.root, 'commit', '--quiet', '-m', `lore: sow ${existed ? 'update' : 'add'} ${slug} (${meta.weeks} weeks, effective ${meta.start})`)
     try {
       git(ctx.root, 'push', '--quiet')
     } catch {
@@ -119,7 +119,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
   const summary = summarizeSow(readSows(ctx.root).find((s) => s.id === slug)!)
   if (via === 'cli') {
     const notes = [removed ? `${removed} line(s) with amounts stripped` : '', Object.keys(clean.redacted).length ? 'secrets redacted' : ''].filter(Boolean)
-    console.log(`${existed ? 'updated' : 'added'} ${rel}: ${meta.name} — ${meta.weeks} weeks, ${meta.start} → ${meta.end}${notes.length ? ` (${notes.join(', ')})` : ''}${ctx.repo ? ` → ${ctx.repo}` : ''}`)
+    console.log(`${existed ? 'updated' : 'added'} ${rel}: ${meta.name} — ${meta.weeks} weeks, effective ${meta.start}${meta.end ? ` to ${meta.end}` : ''}${notes.length ? ` (${notes.join(', ')})` : ''}${ctx.repo ? ` → ${ctx.repo}` : ''}`)
   }
   return summary
 }
@@ -128,8 +128,8 @@ export function sowList(cwd: string, opts: ResolveOptions & { json?: boolean } =
   const ctx = resolveContext(cwd, opts)
   const sows = readSows(ctx.root).map((s) => summarizeSow(s))
   if (opts.json) console.log(JSON.stringify(sows, null, 2))
-  else if (sows.length === 0) console.log('no statements of work attached — `lore sow add <file> --name … --weeks … --start … --end …`')
-  else for (const s of sows) console.log(`${s.status.padEnd(10)} ${s.name}: ${s.weeks} weeks, ${s.start} → ${s.end} (${s.period_elapsed_pct}% elapsed, ${s.days_left} days left)${s.scope?.length ? ` — scope: ${s.scope.join('; ')}` : ''}  [${s.file}]`)
+  else if (sows.length === 0) console.log('no statements of work attached — `lore sow add <file-or-link> --name … --weeks … --start …`')
+  else for (const s of sows) console.log(`${s.status.padEnd(10)} ${s.name}: ${s.weeks} weeks, effective ${s.start}${s.end ? ` to ${s.end}` : ''}${s.scope?.length ? ` — scope: ${s.scope.join('; ')}` : ''}  [${s.file}]`)
   return sows
 }
 

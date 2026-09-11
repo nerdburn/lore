@@ -88,7 +88,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (the live GitHub issue/PR list — authoritative for delivery state; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold per period with calendar progress — authoritative for what was committed; burn is not tracked yet), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow.',
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (the live GitHub issue/PR list — authoritative for delivery state; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow.',
       inputSchema: { category: z.string().optional() },
     },
     async ({ category }) => {
@@ -146,8 +146,8 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         text: z.string().optional().describe('the SOW document as markdown/plain text (or give url)'),
         url: z.string().optional().describe('docs.google.com link to the SOW (or give text)'),
         weeks: z.number().positive().describe('human-weeks sold'),
-        start: z.string().describe('period start, YYYY-MM-DD'),
-        end: z.string().describe('period end, YYYY-MM-DD'),
+        start: z.string().describe('effective date, YYYY-MM-DD'),
+        end: z.string().optional().describe('period end, YYYY-MM-DD — only when the SOW states one'),
         signed: z.string().optional().describe('date signed, YYYY-MM-DD'),
         source: z.string().optional().describe('where the document lives (Google Doc URL)'),
         scope: z.array(z.string()).optional().describe('named deliverables, when the SOW lists any'),

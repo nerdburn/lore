@@ -139,8 +139,8 @@ contextual(
     .argument('<file>', 'path to the SOW as .md, .txt, or .pdf — or a docs.google.com link (read via the Workspace service account)')
     .requiredOption('--name <name>', 'e.g. "Jointly SOW 4" (becomes the file slug)')
     .requiredOption('--weeks <n>', 'human-weeks sold', Number)
-    .requiredOption('--start <date>', 'period start, YYYY-MM-DD')
-    .requiredOption('--end <date>', 'period end, YYYY-MM-DD')
+    .requiredOption('--start <date>', 'effective date, YYYY-MM-DD')
+    .option('--end <date>', 'period end, YYYY-MM-DD — only when the SOW states one')
     .option('--signed <date>', 'date signed, YYYY-MM-DD')
     .option('--source <url>', 'where the document lives (Google Doc link)')
     .option('--scope <items>', 'named deliverables, comma- or semicolon-separated, when the SOW lists any')
@@ -179,7 +179,7 @@ program
     const doc = await exportGoogleDoc(url, o.as)
     console.log(o.json ? JSON.stringify(doc) : doc.markdown)
   })
-contextual(sow.command('list').description('list attached SOWs with calendar progress').option('--json', 'machine-readable output')).action((o) => void sowList(root, o))
+contextual(sow.command('list').description('list attached SOWs').option('--json', 'machine-readable output')).action((o) => void sowList(root, o))
 
 program
   .command('link')

@@ -51,11 +51,11 @@ history, say so, and never present it as current state.
    `contradictions` lists pins that fresh evidence disputes — surface those.
 4. **Weekly reports** (`reports`) — the last few generated status reports.
    **Statements of work** (`sow`) — human-attached commitments: human-weeks
-   sold, period, status, named scope if any, and `period_elapsed_pct`
-   (calendar progress; weeks *spent* are not tracked yet, so never present
-   elapsed time as burn). As authoritative as pins for what was committed.
-   Use it for "how much runway / budget is left", "what did we commit to",
-   and to flag a request that falls outside named scope.
+   sold, effective date, status, named scope if any. As authoritative as
+   pins for what was committed. Weeks *allocated* against an SOW are not
+   tracked yet, and calendar time is never a proxy for them — never say how
+   much of an SOW is used or left. Use it for "what did we commit to", "how
+   many weeks did we sell", and to flag a request outside named scope.
 5. **Raw streams** — the synced material itself, one markdown file per
    source, channel/repo/folder, and day:
    - `context/streams/slack/#channel/YYYY-MM-DD.md` — messages, threads
@@ -82,10 +82,10 @@ look for that in Slack or a pin before stating it as settled.
 
 ## Answering questions from memory
 
-- **Budget / commitment questions** ("how many weeks did we sell", "how
-  far through the SOW are we", "is this in scope"): `lore_recall` with
-  `category: "sow"`; cite the SOW's `file`. Say "X% of the period has
-  elapsed" — not "X% of the budget is used" — until a burn source exists.
+- **Budget / commitment questions** ("how many weeks did we sell", "is
+  this in scope"): `lore_recall` with `category: "sow"`; cite the SOW's
+  `file`. "How much is left" cannot be answered until the scheduling source
+  is connected — say so rather than reasoning from dates.
 - **Status questions** ("what's open / in progress / done", "what's
   outstanding for the client"): `lore_recall` with `category: "work"` for
   tracker state, then `category: "requests"` for asks that have no ticket

@@ -12,8 +12,11 @@ import { parse } from 'yaml'
  * The body is the document text rendered to markdown so it is grep-able and
  * citable; the frontmatter is what recall and extract read.
  *
- * Burn (weeks actually spent) is deliberately not here: that belongs to a
- * time-tracking source writing a work table next to this layer.
+ * Burn is deliberately not here, and neither is calendar-elapsed time: the
+ * team measures a commitment by the weeks *allocated on the calendar*
+ * against the weeks sold, and that comes from the scheduling source (a work
+ * table next to this layer) when it exists. Until then recall states what
+ * was sold and when it took effect, nothing more.
  */
 
 export const SOW_DIR = 'context/sow'
@@ -25,9 +28,10 @@ export interface SowMeta {
   name: string
   /** Human-weeks sold. */
   weeks: number
-  /** ISO dates of the commitment period. */
+  /** ISO date the SOW took effect. */
   start: string
-  end: string
+  /** ISO date the commitment period ends, when the SOW states one (many don't: work "ends when finished"). */
+  end?: string
   status: SowStatus
   signed?: string
   /** Where the document lives (Google Doc URL, Drive link…). */
@@ -45,14 +49,10 @@ export interface Sow extends SowMeta {
   body: string
 }
 
-/** The recall view: metadata plus how far through the period we are today. */
+/** The recall view: the commitment as stated, no derived progress. */
 export interface SowSummary extends SowMeta {
   id: string
   file: string
-  /** 0–100, calendar progress through start…end as of today; the only burn proxy without a time source. */
-  period_elapsed_pct: number
-  /** Whole days left in the period (negative when past `end`). */
-  days_left: number
 }
 
 export function readSows(root: string): Sow[] {
@@ -64,14 +64,14 @@ export function readSows(root: string): Sow[] {
     const parsed = splitFrontmatter(readFileSync(join(dir, entry), 'utf8'))
     if (!parsed) continue
     const meta = parsed.meta as Partial<SowMeta>
-    if (!meta.name || typeof meta.weeks !== 'number' || !meta.start || !meta.end) continue
+    if (!meta.name || typeof meta.weeks !== 'number' || !meta.start) continue
     out.push({
       id: entry.replace(/\.md$/, ''),
       file: `${SOW_DIR}/${entry}`,
       name: meta.name,
       weeks: meta.weeks,
       start: String(meta.start),
-      end: String(meta.end),
+      ...(meta.end ? { end: String(meta.end) } : {}),
       status: (SOW_STATUSES as string[]).includes(String(meta.status)) ? (meta.status as SowStatus) : 'active',
       ...(meta.signed ? { signed: String(meta.signed) } : {}),
       ...(meta.source ? { source: meta.source } : {}),
@@ -84,13 +84,9 @@ export function readSows(root: string): Sow[] {
   return out
 }
 
-export function summarizeSow(sow: Sow, now = Date.now()): SowSummary {
+export function summarizeSow(sow: Sow): SowSummary {
   const { body: _body, ...meta } = sow
-  const startMs = Date.parse(sow.start)
-  const endMs = Date.parse(sow.end)
-  const span = Math.max(endMs - startMs, 1)
-  const pct = Math.round(Math.min(Math.max((now - startMs) / span, 0), 1) * 100)
-  return { ...meta, period_elapsed_pct: pct, days_left: Math.ceil((endMs - now) / 86_400_000) }
+  return meta
 }
 
 /** One line per active SOW for prompts and logs: the numbers, precomputed. */
@@ -99,7 +95,7 @@ export function describeSows(sows: SowSummary[]): string {
     .filter((s) => s.status === 'active')
     .map(
       (s) =>
-        `${s.name}: ${s.weeks} human-weeks sold, ${s.start} → ${s.end} (${s.period_elapsed_pct}% of the period elapsed, ${s.days_left} days left)${
+        `${s.name}: ${s.weeks} human-weeks sold, effective ${s.start}${s.end ? `, period to ${s.end}` : ''}${
           s.scope?.length ? `; named scope: ${s.scope.join('; ')}` : ''
         }`,
     )

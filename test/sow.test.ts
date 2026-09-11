@@ -30,7 +30,7 @@ Slack token for the integration: ${['xoxb', '0'.repeat(12), '0'.repeat(12), 'ABC
 
 const META = { name: 'Jointly SOW 4', weeks: 12, start: '2026-09-01', end: '2026-12-15' }
 
-test('sow: slug, frontmatter, commercial stripping, period progress', () => {
+test('sow: slug, frontmatter, commercial stripping, summary carries no derived progress', () => {
   assert.equal(sowSlug('Jointly SOW 4'), 'jointly-sow-4')
   assert.equal(sowSlug('  Coffee & Contracts: Phase II '), 'coffee-contracts-phase-ii')
   const stripped = stripCommercials(DOC)
@@ -41,11 +41,20 @@ test('sow: slug, frontmatter, commercial stripping, period progress', () => {
   assert.equal(stripCommercials('Total: 12,000 USD\nEUR 900').removed, 2)
   const fm = splitFrontmatter('---\nname: x\nweeks: 3\n---\nbody here\n')
   assert.deepEqual(fm, { meta: { name: 'x', weeks: 3 }, body: 'body here\n' })
-  const mid = Date.parse('2026-10-23T00:00:00Z')
-  const s = summarizeSow({ id: 'a', file: 'f', body: '', added: '', added_by: 'u', status: 'active', ...META }, mid)
-  assert.equal(s.period_elapsed_pct, 50)
-  assert.equal(s.days_left, 53)
-  assert.equal(summarizeSow({ id: 'a', file: 'f', body: '', added: '', added_by: 'u', status: 'active', ...META }, Date.parse('2027-01-01')).period_elapsed_pct, 100)
+  const s = summarizeSow({ id: 'a', file: 'f', body: 'text', added: '', added_by: 'u', status: 'active', ...META })
+  assert.deepEqual(s, { id: 'a', file: 'f', added: '', added_by: 'u', status: 'active', ...META })
+  assert.ok(!('period_elapsed_pct' in s) && !('days_left' in s), 'calendar time is never a burn proxy')
+})
+
+test('sow add: the end date is optional — most SOWs only state weeks and an effective date', async () => {
+  const root = makeContextRepo()
+  const { end: _end, ...noEnd } = META
+  const { result, out } = await captureConsole(() => sowAdd(root, { ...noEnd, text: 'Sixteen weeks of work.' }, { context: root }))
+  assert.equal(result.end, undefined)
+  assert.match(out, /12 weeks, effective 2026-09-01\s*$/m)
+  assert.doesNotMatch(readFileSync(join(root, 'context/sow/jointly-sow-4.md'), 'utf8'), /^end:/m)
+  const [sow] = readSows(root)
+  assert.equal(sow.end, undefined)
 })
 
 test('sow add: writes context/sow/<slug>.md with frontmatter, strips amounts, scrubs secrets, audits', async () => {
@@ -55,7 +64,7 @@ test('sow add: writes context/sow/<slug>.md with frontmatter, strips amounts, sc
   const { result, out } = await captureConsole(() =>
     sowAdd(root, { ...META, file, signed: '2026-08-28', source: 'https://docs.google.com/document/d/abc', scope: ['Agreement builder v2', ' Onboarding flow '] }, { context: root }),
   )
-  assert.match(out, /added context\/sow\/jointly-sow-4\.md: Jointly SOW 4 — 12 weeks, 2026-09-01 → 2026-12-15 \(1 line\(s\) with amounts stripped, secrets redacted\)/)
+  assert.match(out, /added context\/sow\/jointly-sow-4\.md: Jointly SOW 4 — 12 weeks, effective 2026-09-01 to 2026-12-15 \(1 line\(s\) with amounts stripped, secrets redacted\)/)
   assert.equal(result.id, 'jointly-sow-4')
   assert.equal(result.added_by, userInfo().username)
   assert.deepEqual(result.scope, ['Agreement builder v2', 'Onboarding flow'])
@@ -114,7 +123,6 @@ test('sow: recall carries the layer with progress; category "sow" isolates it; l
   const all = recallData(root, ACME)
   assert.equal(all.sow.length, 1)
   assert.equal(all.sow[0].name, 'Jointly SOW 4')
-  assert.equal(typeof all.sow[0].period_elapsed_pct, 'number')
   assert.equal(all.sow[0].file, 'context/sow/jointly-sow-4.md')
   assert.ok(!('body' in all.sow[0]), 'recall carries metadata, not the document body')
   assert.ok(!isEmpty(all))
@@ -123,7 +131,7 @@ test('sow: recall carries the layer with progress; category "sow" isolates it; l
   assert.equal(only.pins.length, 0)
   assert.equal(recallData(root, ACME, 'requests').sow.length, 0)
   const { out } = await captureConsole(() => sowList(root, { context: root }))
-  assert.match(out, /active\s+Jointly SOW 4: 12 weeks, 2026-09-01 → 2026-12-15 \(\d+% elapsed, -?\d+ days left\)  \[context\/sow\/jointly-sow-4\.md\]/)
+  assert.match(out, /active\s+Jointly SOW 4: 12 weeks, effective 2026-09-01 to 2026-12-15  \[context\/sow\/jointly-sow-4\.md\]/)
 })
 
 test('sow: the lore_sow_add MCP tool writes as an MCP actor and lore_recall returns it', async () => {

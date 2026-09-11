@@ -36,7 +36,7 @@ export function recall(cwd: string, category: string | undefined, opts: ResolveO
     console.log(JSON.stringify(table.open, null, 2))
   }
   for (const s of recalled.sow) {
-    console.log(`\n## sow: ${s.name} [${s.status}] — ${s.weeks} human-weeks, ${s.start} → ${s.end} (${s.period_elapsed_pct}% of period elapsed, ${s.days_left} days left)${s.scope?.length ? `; scope: ${s.scope.join('; ')}` : ''}; document: ${s.file}`)
+    console.log(`\n## sow: ${s.name} [${s.status}] — ${s.weeks} human-weeks, effective ${s.start}${s.end ? ` to ${s.end}` : ''}${s.scope?.length ? `; scope: ${s.scope.join('; ')}` : ''}; document: ${s.file}`)
   }
   for (const report of recalled.reports) {
     console.log(`\n## report ${report.date}\n${report.text.trimEnd()}`)

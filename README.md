@@ -334,7 +334,7 @@ explicit instruction), never by sync or the fold.
 
 ```sh
 lore sow add "https://docs.google.com/document/d/…" --name "Jointly SOW 4" --weeks 12 \
-  --start 2026-09-01 --end 2026-12-15 --signed 2026-08-28 \
+  --start 2026-09-01 --signed 2026-08-28 \
   --source "https://docs.google.com/document/d/…" --scope "Agreement builder v2; Onboarding"
 lore sow list
 ```
@@ -353,10 +353,12 @@ needs is in weeks, and the repo is readable by every agent pointed at it
 and lands in the audit log.
 
 `lore recall` (and `lore_recall`) then return a `sow` layer: each SOW's
-weeks, period, status, scope, and how far through the period today is — the
-only burn proxy until a time-tracking source writes weeks spent next to it.
-The fold sees the active SOWs and notes when a request falls outside named
-scope; the weekly report gets a Budget line restating the figures. Agents
+weeks sold, effective date, status, and scope. Nothing is derived from the
+calendar — the team measures a commitment by the weeks *allocated* against
+it, and that will come from the scheduling source as a work table next to
+this layer. The fold sees the active SOWs and notes when a request falls
+outside named scope; the weekly report gets a Budget line restating the
+figures. Agents
 attach one with `lore_sow_add`, passing the Google Doc link (or the text
 they read) plus the numbers the user or the document states.
 
@@ -455,9 +457,9 @@ cites sources, never pins uninvited); run them with
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts + work tables |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
-| `lore sow add <file-or-gdoc-link> --name n --weeks n --start d --end d [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
+| `lore sow add <file-or-gdoc-link> --name n --weeks n --start d [--end d] [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
 | `lore gdoc export <url> --as <email> [--json]` | export a Google Doc as Markdown via the service account (used by `sow add` on the host) |
-| `lore sow list [--json]` | attached SOWs with calendar progress |
+| `lore sow list [--json]` | attached SOWs |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
 | `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |

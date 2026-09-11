@@ -133,7 +133,7 @@ Rules:
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
 
-const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, docs, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, period, percent elapsed) — never compute or estimate hours spent. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
+const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, docs, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, effective date) — never compute or estimate weeks used or remaining. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
 
 interface FoldResult {
   requests: unknown[]
