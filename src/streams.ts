@@ -25,8 +25,7 @@ export function writeDocs(root: string, docs: Doc[]): WriteResult {
 
   for (const doc of sorted) {
     const day = doc.timestamp.slice(0, 10)
-    const channelDir = doc.channel.replace(/[^a-zA-Z0-9#@_-]/g, '_')
-    const path = join(root, 'context', 'streams', doc.source, channelDir, `${day}.md`)
+    const path = join(root, streamRelPath(doc.source, doc.channel, doc.timestamp))
 
     if (existsSync(path)) {
       if (hasDoc(readFileSync(path, 'utf8'), doc.id)) {
@@ -47,6 +46,12 @@ export function writeDocs(root: string, docs: Doc[]): WriteResult {
     written++
   }
   return { written, skipped, redacted }
+}
+
+/** Context-relative path of the stream file a doc with this source/channel/timestamp lands in. */
+export function streamRelPath(source: string, channel: string, timestamp: string): string {
+  const channelDir = channel.replace(/[^a-zA-Z0-9#@_-]/g, '_')
+  return join('context', 'streams', source, channelDir, `${timestamp.slice(0, 10)}.md`)
 }
 
 /** Whether a stream file already carries a doc with this exact id. */

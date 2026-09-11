@@ -3,6 +3,9 @@ import { test } from 'node:test'
 import {
   formatTranscript,
   makeGranola,
+  newPacing,
+  TRANSCRIPT_GAP_MS,
+  TRANSCRIPT_HOLD_MS,
   parseFolders,
   parseGranolaDate,
   parseMeetings,
@@ -129,12 +132,28 @@ test('granola: date parsing handles US zones, no time, and falls back', () => {
 
 // ---- the connector against a scripted MCP ----
 
-function scripted() {
-  const calls: { tool: string; args: Record<string, unknown> }[] = []
+/** Fake clock: sleeping advances time, nothing actually waits. */
+function fakePacing() {
+  let t = 1_000_000
+  const sleeps: number[] = []
+  const pacing = newPacing()
+  pacing.now = () => t
+  pacing.sleep = async (ms) => {
+    sleeps.push(ms)
+    t += ms
+  }
+  return { pacing, sleeps, now: () => t }
+}
+
+function scripted(override?: (tool: string, args: Record<string, unknown>, n: number) => string | undefined) {
+  const calls: { tool: string; args: Record<string, unknown>; at: number }[] = []
   let closed = false
+  const clock = fakePacing()
   const connector = makeGranola(async () => ({
     call: async (tool, args) => {
-      calls.push({ tool, args })
+      calls.push({ tool, args, at: clock.now() })
+      const forced = override?.(tool, args, calls.length)
+      if (forced !== undefined) return forced
       switch (tool) {
         case 'list_meeting_folders':
           return FOLDERS
@@ -151,8 +170,8 @@ function scripted() {
     close: async () => {
       closed = true
     },
-  }))
-  return { connector, calls, isClosed: () => closed }
+  }), clock.pacing)
+  return { connector, calls, isClosed: () => closed, sleeps: clock.sleeps }
 }
 
 const NOW = Date.parse('2026-09-09T00:00:00Z')
@@ -288,7 +307,7 @@ test('granola: the connector hands the transport a token source (static token, o
   const probe = makeGranola(async (_endpoint, tokens) => {
     seen.push(await tokens.get(false))
     return { call: async () => FOLDERS, close: async () => {} }
-  })
+  }, fakePacing().pacing)
   await probe.fetch(ctx({ config: { token: 'static-t', folders: ['Jointly'] } })).catch(() => {})
   await probe.fetch(ctx({ config: { endpoint: 'https://granola.int.exe.xyz/mcp', folders: ['Jointly'] } })).catch(() => {})
   assert.deepEqual(seen, ['static-t', undefined])
@@ -303,8 +322,146 @@ test('granola: missing token or scope fails loudly; the client is closed even on
       throw new Error('granola list_meeting_folders: unauthorized')
     },
     close: async () => void (closedAfterError = true),
-  }))
+  }), fakePacing().pacing)
   let closedAfterError = false
   await assert.rejects(failing.fetch(ctx()), /unauthorized/)
   assert.ok(closedAfterError)
+})
+
+// ---- pacing, transcript budget, partial progress ----
+
+const M_OLD = '22222222-2222-4222-8222-222222222222' // Sep 3
+const M_NEW = '11111111-1111-4111-8111-111111111111' // Sep 8
+const RATE_LIMIT = 'granola get_meeting_transcript: Rate limit exceeded. Please slow down requests.'
+const withNow = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const realNow = Date.now
+  Date.now = () => NOW
+  try {
+    return await fn()
+  } finally {
+    Date.now = realNow
+  }
+}
+const transcriptCalls = (s: ReturnType<typeof scripted>) => s.calls.filter((c) => c.tool === 'get_meeting_transcript')
+
+test('granola: calls are paced ≥ 1s apart, transcripts ≥ the transcript gap apart', async () => {
+  const s = scripted()
+  await withNow(() => s.connector.fetch(ctx()))
+  assert.ok(s.calls.length >= 4)
+  for (let i = 1; i < s.calls.length; i++) assert.ok(s.calls[i].at - s.calls[i - 1].at >= 1000, `call ${i} not paced`)
+  const t = transcriptCalls(s).map((c) => c.at)
+  assert.equal(t.length, 2)
+  assert.ok(t[1] - t[0] >= TRANSCRIPT_GAP_MS)
+})
+
+test('granola: a refused transcript holds every transcript call, doubles the gap, and is retried within the budget', async () => {
+  let failed = false
+  const s = scripted((tool, args) => {
+    if (tool === 'get_meeting_transcript' && args.meeting_id === M_OLD && !failed) {
+      failed = true
+      throw new Error(RATE_LIMIT)
+    }
+    return undefined
+  })
+  const { docs, nextCursor, errors } = await withNow(() => s.connector.fetch(ctx()))
+  assert.equal(errors, undefined)
+  assert.equal(docs.length, 4)
+  assert.equal(nextCursor.transcripts, undefined)
+  const t = transcriptCalls(s).map((c) => c.at)
+  assert.equal(t.length, 3) // old (refused), old (retry), new
+  assert.ok(t[1] - t[0] >= TRANSCRIPT_HOLD_MS, 'retry waited out the hold')
+  assert.ok(t[2] - t[1] >= TRANSCRIPT_GAP_MS * 2, `gap doubled after the refusal: ${t[2] - t[1]}`)
+})
+
+test('granola: notes land first; transcripts the budget cannot cover stay pending in the cursor and are fetched next run', async () => {
+  const s = scripted((tool, args) => {
+    if (tool === 'get_meeting_transcript' && args.meeting_id === M_NEW) throw new Error(RATE_LIMIT)
+    return undefined
+  })
+  // Budget of 100s: old transcript at +0 (ok); new refused → hold 60s, gap 60s → next slot past the deadline.
+  const r1 = await withNow(() => s.connector.fetch(ctx({ config: { token: 't', folders: ['Jointly'], transcript_seconds: 100 } })))
+  assert.equal(r1.errors, undefined, 'a rate-limited deferral is not an error')
+  assert.deepEqual(r1.docs.map((d) => d.id), [`granola-${M_OLD}`, `granola-${M_OLD}-transcript`, `granola-${M_NEW}`])
+  assert.equal(r1.nextCursor.since, '2026-09-08T18:00:00.000Z', 'cursor advances past every meeting whose notes landed')
+  assert.deepEqual(r1.nextCursor.transcripts, [{ id: M_NEW, dateMs: Date.parse('2026-09-08T18:00:00Z'), title: 'Jointly Weekly Sync', folder: 'Jointly' }])
+  assert.ok(s.isClosed())
+
+  // Next run: the pending transcript is fetched; the already-synced one is not re-fetched.
+  const s2 = scripted()
+  const r2 = await withNow(() =>
+    s2.connector.fetch(
+      ctx({
+        cursor: r1.nextCursor,
+        readFile: (rel) => (rel === 'context/streams/granola/Jointly/2026-09-03.md' ? `<!-- id: granola-${M_OLD}-transcript -->` : undefined),
+      }),
+    ),
+  )
+  assert.equal(r2.errors, undefined)
+  assert.deepEqual(transcriptCalls(s2).map((c) => c.args.meeting_id), [M_NEW])
+  assert.ok(r2.docs.some((d) => d.id === `granola-${M_NEW}-transcript`))
+  assert.equal(r2.nextCursor.transcripts, undefined)
+})
+
+test('granola: transcript_seconds bounds the run — with no budget, notes sync and every transcript is deferred', async () => {
+  const s = scripted()
+  const { docs, nextCursor, errors } = await withNow(() => s.connector.fetch(ctx({ config: { token: 't', folders: ['Jointly'], transcript_seconds: 0 } })))
+  assert.equal(errors, undefined)
+  assert.deepEqual(docs.map((d) => d.id), [`granola-${M_OLD}`, `granola-${M_NEW}`])
+  assert.equal(transcriptCalls(s).length, 0)
+  assert.equal((nextCursor.transcripts as unknown[]).length, 2)
+})
+
+test('granola: a transcript already in the stream is not fetched again', async () => {
+  const s = scripted()
+  const { docs, errors } = await withNow(() =>
+    s.connector.fetch(
+      ctx({
+        readFile: (rel) => (rel === 'context/streams/granola/Jointly/2026-09-03.md' ? `---\n---\n<!-- id: granola-${M_OLD}-transcript thread: ${M_OLD} -->\n` : undefined),
+      }),
+    ),
+  )
+  assert.equal(errors, undefined)
+  assert.deepEqual(docs.map((d) => d.id), [`granola-${M_OLD}`, `granola-${M_NEW}`, `granola-${M_NEW}-transcript`])
+  assert.deepEqual(transcriptCalls(s).map((c) => c.args.meeting_id), [M_NEW])
+})
+
+test('granola: meetings_per_run caps new meetings oldest-first; the next run finishes the rest', async () => {
+  await withNow(async () => {
+    const first = scripted()
+    const r1 = await first.connector.fetch(ctx({ config: { token: 't', folders: ['Jointly'], meetings_per_run: 1 } }))
+    assert.equal(r1.errors, undefined)
+    assert.deepEqual(r1.docs.map((d) => d.id), [`granola-${M_OLD}`, `granola-${M_OLD}-transcript`])
+    assert.equal(r1.nextCursor.since, '2026-09-03T16:30:00.000Z')
+
+    const second = scripted()
+    const r2 = await second.connector.fetch(ctx({ config: { token: 't', folders: ['Jointly'], meetings_per_run: 1 }, cursor: r1.nextCursor }))
+    assert.equal(r2.errors, undefined)
+    // The overlap re-read of the old meeting is not counted against the cap.
+    assert.deepEqual(r2.docs.map((d) => d.id), [`granola-${M_OLD}`, `granola-${M_OLD}-transcript`, `granola-${M_NEW}`, `granola-${M_NEW}-transcript`])
+    assert.equal(r2.nextCursor.since, '2026-09-08T18:00:00.000Z')
+  })
+})
+
+test('granola: a non-rate-limit transcript error is reported once and the meeting is not retried forever', async () => {
+  const s = scripted((tool, args) => {
+    if (tool === 'get_meeting_transcript' && args.meeting_id === M_OLD) throw new Error('granola get_meeting_transcript: boom')
+    return undefined
+  })
+  const { docs, nextCursor, errors } = await withNow(() => s.connector.fetch(ctx()))
+  assert.deepEqual(docs.map((d) => d.id), [`granola-${M_OLD}`, `granola-${M_NEW}`, `granola-${M_NEW}-transcript`])
+  assert.match(errors![0], /transcript for "Shawn <> Kaity" .*boom/)
+  assert.equal(nextCursor.transcripts, undefined)
+  assert.equal(transcriptCalls(s).filter((c) => c.args.meeting_id === M_OLD).length, 1)
+})
+
+test('granola: a failure in the notes phase returns what was gathered with a resumable cursor and the error', async () => {
+  let n = 0
+  const s = scripted((tool) => {
+    if (tool === 'get_meetings' && ++n === 1) throw new Error('granola get_meetings: upstream 502')
+    return undefined
+  })
+  const { docs, nextCursor, errors } = await withNow(() => s.connector.fetch(ctx({ since: Date.parse('2026-08-01T00:00:00Z') })))
+  assert.equal(docs.length, 0)
+  assert.match(errors![0], /502 — synced notes for 0 of 2 meeting\(s\) this run; the rest resume from 2026-08-01/)
+  assert.equal(nextCursor.since, '2026-08-01T00:00:00.000Z')
 })

@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { accessToken, defaultAuthFile, readAuthFile } from '../granola-auth.js'
+import { hasDoc, streamRelPath } from '../streams.js'
 import type { Connector, ConnectorContext, Doc } from '../types.js'
 
 /**
@@ -29,6 +30,25 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
  * Granola has finished the summary; each sync re-lists `overlap_days`
  * (default 2) and stream dedup absorbs the repeats.
  *
+ * Pacing. Granola rate-limits `get_meeting_transcript` per account on a
+ * tight budget — measured at roughly one success every two minutes
+ * sustained, with a small burst allowance — while listing and notes calls
+ * are effectively free. So a run has two phases. Notes first: every settled
+ * meeting in range gets its notes doc (batched `get_meetings`) and the
+ * cursor advances, so summaries are available to the fold right away.
+ * Transcripts second: meetings whose transcript is still owed sit in a
+ * pending list carried in the cursor, and each run works through it
+ * oldest-first for at most `transcript_seconds` (default 300), then stops
+ * and leaves the rest for the next run — a deferral, not an error. Every
+ * client in a `run-all` shares the one Granola account, so all calls go
+ * through a process-wide pacer: a second between any two calls, and an
+ * adaptive gap between transcript calls that doubles on every "slow down"
+ * reply, which also holds every client off transcripts for a minute.
+ * Transcripts already in the stream are never fetched again, so the overlap
+ * re-read costs nothing. If a notes-phase call fails mid-run, the docs
+ * gathered so far are returned with a cursor at the last completed meeting
+ * plus the error, so the next run resumes rather than restarting.
+ *
  * Auth, in order: a static `token` (env ref); a proxy `endpoint` that injects
  * one; otherwise the OAuth token file from `lore auth granola` (`auth_file`,
  * default ~/.lore/granola-auth.json), refreshed automatically and retried
@@ -39,9 +59,103 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
 /** The four Granola tools, as a function — injectable so tests never hit the network. */
 export type GranolaCall = (tool: string, args: Record<string, unknown>) => Promise<string>
 
+/**
+ * Clock + gate shared by every Granola call in the process. Injectable so
+ * tests run on a fake clock; the default export uses one process-wide
+ * instance, which is what makes concurrent clients take turns.
+ */
+export interface GranolaPacing {
+  sleep: (ms: number) => Promise<void>
+  now: () => number
+  /** Epoch ms of the most recently reserved call slot (any tool). */
+  lastSlot: number
+  /** Epoch ms of the most recently reserved transcript slot. */
+  lastTranscriptSlot: number
+  /** Current minimum gap between transcript calls; doubles on every rate-limit reply. */
+  transcriptGapMs: number
+  /** No transcript call before this epoch ms — set while a refused call backs off, so other clients wait too. */
+  transcriptHoldUntil: number
+}
+
+export function newPacing(): GranolaPacing {
+  return {
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: Date.now,
+    lastSlot: 0,
+    lastTranscriptSlot: 0,
+    transcriptGapMs: TRANSCRIPT_GAP_MS,
+    transcriptHoldUntil: 0,
+  }
+}
+
+const TRANSCRIPT_TOOL = 'get_meeting_transcript'
+const MIN_GAP_MS = 1_000
+/** Initial spacing between transcript calls; adaptive from here (see GranolaPacing). */
+export const TRANSCRIPT_GAP_MS = 30_000
+const TRANSCRIPT_GAP_MAX_MS = 240_000
+/** How long every client stays off transcripts after a "slow down" reply. */
+export const TRANSCRIPT_HOLD_MS = 60_000
+/** Retry waits for the other (never observed limited) tools. */
+const BACKOFF_MS = [5_000, 15_000, 45_000]
+const RATE_LIMITED = /rate limit/i
+const sharedPacing = newPacing()
+
+/** When the next transcript call may go, given the shared pacing state. */
+function nextTranscriptSlot(pacing: GranolaPacing): number {
+  return Math.max(pacing.now(), pacing.lastSlot + MIN_GAP_MS, pacing.lastTranscriptSlot + pacing.transcriptGapMs, pacing.transcriptHoldUntil)
+}
+
+/**
+ * Space calls process-wide: MIN_GAP_MS between any two, the adaptive
+ * transcript gap (and hold) before a transcript call. Slot reservation is
+ * synchronous (read + write before any await), so concurrent callers never
+ * grab the same slot. A refused transcript call widens the gap, sets the
+ * hold, and throws RateLimited for the caller to schedule around; a refused
+ * call on any other tool is retried here with a short backoff.
+ */
+function paced(call: GranolaCall, pacing: GranolaPacing, log: (msg: string) => void): GranolaCall {
+  return async (tool, args) => {
+    const transcript = tool === TRANSCRIPT_TOOL
+    for (let attempt = 0; ; attempt++) {
+      const now = pacing.now()
+      const slot = transcript ? nextTranscriptSlot(pacing) : Math.max(now, pacing.lastSlot + MIN_GAP_MS)
+      pacing.lastSlot = slot
+      if (transcript) pacing.lastTranscriptSlot = slot
+      if (slot > now) await pacing.sleep(slot - now)
+      try {
+        return await call(tool, args)
+      } catch (err) {
+        if (!RATE_LIMITED.test(String(err))) throw err
+        if (transcript) {
+          pacing.transcriptGapMs = Math.min(pacing.transcriptGapMs * 2, TRANSCRIPT_GAP_MAX_MS)
+          pacing.transcriptHoldUntil = Math.max(pacing.transcriptHoldUntil, pacing.now() + TRANSCRIPT_HOLD_MS)
+          throw new RateLimited(err instanceof Error ? err.message : String(err))
+        }
+        if (attempt >= BACKOFF_MS.length) throw err
+        const wait = BACKOFF_MS[attempt]
+        log(`granola: rate limited on ${tool} — waiting ${wait / 1000}s before retry ${attempt + 1}/${BACKOFF_MS.length}`)
+        await pacing.sleep(wait)
+        pacing.lastSlot = Math.max(pacing.lastSlot, pacing.now())
+      }
+    }
+  }
+}
+
 interface GranolaCursor {
   since?: string
+  /** Meetings whose notes are synced but whose transcript is still owed; drained oldest-first within each run's transcript budget. */
+  transcripts?: PendingTranscript[]
 }
+
+export interface PendingTranscript {
+  id: string
+  dateMs: number
+  title: string
+  folder?: string
+}
+
+/** A "slow down" reply on a transcript call; the pacer has already widened the gap and set the hold. */
+export class RateLimited extends Error {}
 
 const DEFAULT_ENDPOINT = 'https://mcp.granola.ai/mcp'
 const DEFAULT_OVERLAP_DAYS = 2
@@ -49,6 +163,8 @@ const DEFAULT_SETTLE_HOURS = 1
 const DAY_MS = 86_400_000
 const LIST_WINDOW_DAYS = 30
 const GET_BATCH = 10
+const DEFAULT_MEETINGS_PER_RUN = 50
+const DEFAULT_TRANSCRIPT_SECONDS = 300
 
 /** How the connector obtains a bearer for each connection attempt. */
 export interface TokenSource {
@@ -58,6 +174,7 @@ export interface TokenSource {
 
 export function makeGranola(
   connect: (endpoint: string, tokens: TokenSource) => Promise<{ call: GranolaCall; close: () => Promise<void> }>,
+  pacing: GranolaPacing = sharedPacing,
 ): Connector {
   return {
     name: 'granola',
@@ -83,13 +200,16 @@ export function makeGranola(
       const withTranscripts = ctx.config.transcripts !== false
       const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
       const settleMs = numberOr(ctx.config.settle_hours, DEFAULT_SETTLE_HOURS) * 3_600_000
+      const perRun = Math.max(1, Math.floor(numberOr(ctx.config.meetings_per_run, DEFAULT_MEETINGS_PER_RUN)))
+      const transcriptBudgetMs = numberOr(ctx.config.transcript_seconds, DEFAULT_TRANSCRIPT_SECONDS) * 1000
 
       const prev = ctx.cursor as GranolaCursor
       const now = Date.now()
       const startMs = prev.since ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
       const cutoff = now - settleMs
 
-      const { call, close } = await connect(endpoint, tokens)
+      const { call: rawCall, close } = await connect(endpoint, tokens)
+      const call = paced(rawCall, pacing, ctx.log)
       const docs: Doc[] = []
       const errors: string[] = []
       try {
@@ -116,23 +236,79 @@ export function makeGranola(
           }
         }
 
-        const ready = [...candidates.values()].filter((m) => m.dateMs <= cutoff).sort((a, b) => a.dateMs - b.dateMs)
-        let newest = prev.since ? new Date(prev.since).getTime() : 0
-        for (let i = 0; i < ready.length; i += GET_BATCH) {
-          const batch = ready.slice(i, i + GET_BATCH)
-          const details = parseMeetings(await call('get_meetings', { meeting_ids: batch.map((m) => m.id) }))
-          for (const ref of batch) {
-            const detail = details.find((d) => d.id === ref.id)
-            docs.push(notesDoc(ref, detail))
-            if (withTranscripts) {
-              const transcript = parseTranscript(await call('get_meeting_transcript', { meeting_id: ref.id }))
-              if (transcript) docs.push(transcriptDoc(ref, transcript))
+        const prevSince = prev.since ? new Date(prev.since).getTime() : 0
+        const settled = [...candidates.values()].filter((m) => m.dateMs <= cutoff).sort((a, b) => a.dateMs - b.dateMs)
+        // Overlap re-reads (≤ the cursor) always go; the per-run cap applies to
+        // meetings past the cursor, so a run always moves the cursor forward.
+        const overlap = settled.filter((m) => m.dateMs <= prevSince)
+        const fresh = settled.filter((m) => m.dateMs > prevSince)
+        const ready = [...overlap, ...fresh.slice(0, perRun)]
+        const deferred = fresh.length - Math.min(fresh.length, perRun)
+
+        // Transcripts owed from earlier runs, plus whatever this run adds.
+        const pending = new Map<string, PendingTranscript>()
+        for (const p of prev.transcripts ?? []) pending.set(p.id, p)
+
+        // Phase 1 — notes for every ready meeting (cheap, batched).
+        let newest = prevSince
+        let notes = 0
+        try {
+          for (let i = 0; i < ready.length; i += GET_BATCH) {
+            const batch = ready.slice(i, i + GET_BATCH)
+            const details = parseMeetings(await call('get_meetings', { meeting_ids: batch.map((m) => m.id) }))
+            for (const ref of batch) {
+              docs.push(notesDoc(ref, details.find((d) => d.id === ref.id)))
+              notes++
+              if (withTranscripts && !hasTranscript(ctx, ref)) pending.set(ref.id, { id: ref.id, dateMs: ref.dateMs, title: ref.title, ...(ref.folder ? { folder: ref.folder } : {}) })
+              if (ref.dateMs > newest) newest = ref.dateMs
             }
-            if (ref.dateMs > newest) newest = ref.dateMs
+          }
+        } catch (err) {
+          // Keep what was gathered: sync writes these docs and advances the
+          // cursor to the last completed meeting, then records the error.
+          const resume = new Date(newest || startMs).toISOString().slice(0, 10)
+          errors.push(`${err instanceof Error ? err.message : String(err)} — synced notes for ${notes} of ${ready.length} meeting(s) this run; the rest resume from ${resume} next run`)
+        }
+
+        // Phase 2 — transcripts, oldest first, until the run's budget is spent.
+        // A "slow down" is a deferral (the meeting stays pending), not an error.
+        let fetched = 0
+        let limited = 0
+        if (!withTranscripts) pending.clear()
+        else {
+          const deadline = pacing.now() + transcriptBudgetMs
+          queue: for (const p of [...pending.values()].sort((a, b) => a.dateMs - b.dateMs)) {
+            for (;;) {
+              if (nextTranscriptSlot(pacing) > deadline) break queue
+              try {
+                const transcript = parseTranscript(await call(TRANSCRIPT_TOOL, { meeting_id: p.id }))
+                if (transcript) docs.push(transcriptDoc(p, transcript))
+                pending.delete(p.id)
+                fetched++
+                break
+              } catch (err) {
+                if (err instanceof RateLimited) {
+                  limited++
+                  ctx.log(`granola: transcript rate limited — holding ${TRANSCRIPT_HOLD_MS / 1000}s, gap now ${pacing.transcriptGapMs / 1000}s`)
+                  continue
+                }
+                errors.push(`transcript for "${p.title}" (${p.id}): ${err instanceof Error ? err.message : String(err)}`)
+                pending.delete(p.id)
+                break
+              }
+            }
           }
         }
-        ctx.log(`granola: ${ready.length} meeting(s) in scope → ${docs.length} docs`)
-        const nextCursor: GranolaCursor = { since: new Date(Math.max(newest, prev.since ? new Date(prev.since).getTime() : 0) || startMs).toISOString() }
+
+        const parts = [`${settled.length} meeting(s) in scope → ${notes} notes, ${fetched} transcript(s)`]
+        if (pending.size) parts.push(`${pending.size} transcript(s) pending${limited ? ' (rate limited)' : ''} — next run continues`)
+        if (deferred) parts.push(`${deferred} meeting(s) past the per-run cap`)
+        ctx.log(`granola: ${parts.join('; ')}`)
+        const nextCursor: GranolaCursor = {
+          since: new Date(newest || startMs).toISOString(),
+          ...(pending.size ? { transcripts: [...pending.values()].sort((a, b) => a.dateMs - b.dateMs) } : {}),
+        }
+        docs.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
         return { docs, nextCursor: nextCursor as Record<string, unknown>, ...(errors.length ? { errors } : {}) }
       } finally {
         await close()
@@ -220,7 +396,14 @@ function notesDoc(ref: MeetingRef & { folder?: string }, detail: MeetingRef | un
   }
 }
 
-function transcriptDoc(ref: MeetingRef & { folder?: string }, transcript: string): Doc {
+/** Transcript already in the stream from an earlier run (overlap re-read)? Then don't spend a rate-limited call on it. */
+function hasTranscript(ctx: ConnectorContext, ref: PendingTranscript): boolean {
+  const probe = transcriptDoc(ref, '')
+  const file = ctx.readFile(streamRelPath(probe.source, probe.channel, probe.timestamp))
+  return file !== undefined && hasDoc(file, probe.id)
+}
+
+function transcriptDoc(ref: PendingTranscript, transcript: string): Doc {
   return {
     id: `granola-${ref.id}-transcript`,
     source: 'granola',

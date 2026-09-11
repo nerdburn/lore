@@ -73,6 +73,10 @@ export const sourceSchemas = {
       overlap_days: z.number().min(0).optional(),
       /** Hours a meeting must be over before it is synced, so Granola has finished the summary (default 1). */
       settle_hours: z.number().min(0).optional(),
+      /** New meetings whose notes are synced per run, oldest first (default 50). */
+      meetings_per_run: z.number().int().positive().optional(),
+      /** Seconds per run spent fetching owed transcripts (default 300) — Granola allows roughly one every two minutes, so a backfill's transcripts trickle in over later runs. */
+      transcript_seconds: z.number().min(0).optional(),
     })
     // Scope (folders / attendee_domains / the repo's `client` block) and auth
     // (token, proxy endpoint, or a device-flow token file) are checked at
