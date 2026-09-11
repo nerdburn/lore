@@ -236,8 +236,11 @@ configured but skipped, set `"disabled": true` on it. Per-source health
 overrides supported); everything after is forward-incremental.
 
 **Who the client is.** Every context repo carries a `client` block — name,
-email domains, known contacts with `side: client|team|vendor`. Email is the
-identity key; names are display. Connectors use it to scope material
+email domains, known contacts with `side: client|team|vendor`, and `owner`:
+the *team-side* account lead, the Workspace user the service account acts as
+for Gmail directory listing and Google Doc export (asked once by `lore
+setup`, saved as `owner` in `~/.lore/config.json`, `--owner` overrides).
+Email is the identity key; names are display. Connectors use it to scope material
 (Granola matches attendees, Gmail matches correspondents and picks
 mailboxes), extract uses it to tell client asks from team decisions, and
 `recall` returns it so an agent knows who it is talking about.

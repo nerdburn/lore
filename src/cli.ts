@@ -58,6 +58,7 @@ program
   .option('--jira-site <url>', 'https://<site>.atlassian.net (permalinks; the API too when no proxy)')
   .option('--gmail [mailboxes]', 'sync client email from the team\'s Gmail inboxes: comma-separated teammate addresses, "all" for every Workspace mailbox, or no value for the team-side contacts')
   .option('--client <name>', 'client display name (default: project name)')
+  .option('--owner <email>', 'team-side account lead → client.owner (default: saved once in ~/.lore/config.json)')
   .option('--domains <list>', 'comma-separated client email domains, e.g. "acme.com,acme.ca" — scopes Granola meetings and tells extract who the client is')
   .option('--backfill <months>', 'backfill window for the first sync (default 3)')
   .option('--org <org>', 'GitHub org for context repos (asked once and saved to ~/.lore/config.json)')

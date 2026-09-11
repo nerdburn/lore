@@ -67,8 +67,8 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
   let body = input.text
   let source = input.source
   if (body === undefined && input.file && googleDocId(input.file)) {
-    const as = input.as ?? ctx.config.client?.owner
-    if (!as) throw new Error('sow: a Google Doc link needs --as <teammate email> (or client.owner in lore.json) — the service account reads the doc as that person')
+    const as = input.as ?? ctx.config.client?.owner ?? readGlobalConfig().owner
+    if (!as) throw new Error('sow: a Google Doc link needs --as <teammate email> (or client.owner in lore.json, or owner in ~/.lore/config.json) — the service account reads the doc as that person')
     const doc = await (opts.exportDoc ?? resolveGoogleDoc)(input.file, as)
     body = doc.markdown
     source ??= doc.url

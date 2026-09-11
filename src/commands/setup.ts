@@ -23,6 +23,8 @@ export interface SetupFlags {
   jiraSite?: string
   /** Client display name (defaults to the project name, capitalised). */
   client?: string
+  /** Team-side account lead email → `client.owner` (default: the saved global `owner`, asked once). */
+  owner?: string
   /** Comma-separated client email domains, e.g. "acme.com,acme.ca". */
   domains?: string
   backfill?: string
@@ -84,6 +86,16 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     for (const r of repos) {
       if (!/^[\w.-]+\/[\w.-]+$/.test(r)) throw new Error(`--github: "${r}" is not "owner/repo"`)
     }
+
+    // Team-side account lead → client.owner on every new client: the
+    // Workspace identity the service account acts as (Gmail directory,
+    // Google Doc export). Asked once, saved globally; --owner overrides.
+    let owner = flags.owner ?? global.owner
+    if (!owner) {
+      const guess = gitEmail()
+      owner = flags.yes ? guess : await ask('Account lead email (yours — becomes client.owner; Gmail/Drive act as this user)', guess ?? '')
+      if (owner && owner !== global.owner) writeGlobalConfig({ ...readGlobalConfig(), owner })
+    }
     const folders = (flags.granola ?? '')
       .split(',')
       .map((f) => f.trim())
@@ -135,7 +147,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     const config: ScaffoldConfig = {
       project,
       lifecycle: 'active',
-      client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [] },
+      client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [], ...(owner ? { owner } : {}) },
       sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
@@ -291,6 +303,16 @@ function normalizeChannels(input: string): string[] {
     .map((c) => c.trim())
     .filter(Boolean)
     .map((c) => (c.startsWith('#') ? c : `#${c}`))
+}
+
+/** `git config user.email` when it looks like a real work address, else undefined. */
+function gitEmail(): string | undefined {
+  try {
+    const email = execFileSync('git', ['config', 'user.email'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) && !/noreply|users\.noreply\.github\.com/.test(email) ? email : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** "org/repo.git" remote of the repo containing cwd → "repo", else null. */
