@@ -90,23 +90,32 @@ look for that in Slack or a pin before stating it as settled.
   around a hit before quoting; a match alone lacks conversational context.
 - **Cite what you found.** Give who and when from the surrounding context,
   and the permalink or stream path, so the user can check.
-- **Freshness.** `lore_recall` returns `synced.lastSync` and `lastExtract`.
-  Say when the memory was last synced whenever recency matters; derived
-  artifacts can lag the streams until the next extract. The host syncs on a
-  timer (every 15 min on the host). **Never run `lore sync` yourself** — an agent has neither
-  the credentials nor the network for it. When the user asks for fresh data
-  or the last sync is stale, call `lore_sync_now` (it asks the host to sync
-  now and waits — about a minute; if a run is already in flight it waits for
-  that one) and tell the user what changed. Fresh raw material is then in
-  `lore_grep`/`lore_read`; the derived lists behind `lore_recall` (requests,
-  decisions, roadmap) are updated by the fold on that timer. **For status
-  questions — what is open, blocked, done, what did the client ask for —
-  call `lore_sync_now` with `fold: true` first** (about a minute; it is
-  rate-limited to once per 5 minutes, so a recent call is a cheap no-op),
-  then answer from recall. Use sync-only when you will read the raw streams
-  yourself. Check `outcome`: a `failed` host run comes back in the result
-  rather than as an error — say so instead of presenting the data as fresh.
-  With `trigger: false` it only pulls what the host already has.
+- **Freshness — recall first, refresh second.** `lore_recall` returns
+  `synced.lastSync` and `synced.lastExtract`. The host syncs and folds on a
+  timer (every 15 min), so recall is normally at most ~15 minutes behind
+  and is the answer to "give me an update": the work tables, requests,
+  decisions, roadmap, and the latest weekly report are the up-to-date
+  summary. **Do not refresh before answering.** Answer from recall, and
+  always state the freshness ("synced 6 min ago, folded 12 min ago").
+  Then refresh only when one of these holds:
+  - the user asks for fresh data or says something just happened;
+  - `lastSync` is older than ~20 minutes (the timer has missed a run) —
+    say so and offer to trigger one;
+  - the question is about the last few minutes, or about a specific thing
+    you cannot find and which may have arrived since `lastSync`.
+  Otherwise, close with the offer: "Memory is from 14:32; want me to run a
+  refresh (~1–2 min)?" — and refresh only if the user says yes.
+  **Never run `lore sync` yourself** — an agent has neither the credentials
+  nor the network for it. To refresh, call `lore_sync_now` (it asks the host
+  to sync now and waits — about a minute; if a run is already in flight it
+  waits for that one). Fresh raw material is then in `lore_grep`/`lore_read`;
+  the derived lists behind `lore_recall` (requests, decisions, roadmap) only
+  update with `fold: true` (a minute or two more), so use `fold: true` when
+  the refreshed answer must come from recall, and sync-only when you will
+  read the raw streams yourself. It is rate-limited to once per 5 minutes.
+  Check `outcome`: a `failed` host run comes back in the result rather than
+  as an error — say so instead of presenting the data as fresh. With
+  `trigger: false` it only pulls what the host already has.
 - Zero grep hits ≠ "it never happened" — try synonyms and looser patterns;
   memory covers only the configured channels, repos, and meeting folders,
   since the backfill window.
