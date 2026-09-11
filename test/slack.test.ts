@@ -24,6 +24,10 @@ function fakeSlack() {
     channels: [{ id: 'C0ACME', name: 'acme' }, { id: 'C0DEV', name: 'acme-dev' }],
     calls: [] as { method: string; params: Record<string, string> }[],
     rateLimitOnce: false,
+    /** Thread parents that have been deleted: conversations.replies → thread_not_found. */
+    deleted: new Set<string>(),
+    /** Channels whose history call fails outright. */
+    failing: new Set<string>(),
   }
   const json = (body: unknown, init: ResponseInit = {}) =>
     new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' }, ...init })
@@ -51,11 +55,13 @@ function fakeSlack() {
       case 'conversations.list':
         return json({ ok: true, channels: state.channels })
       case 'conversations.history': {
+        if (state.failing.has(params.channel)) return json({ ok: false, error: 'internal_error' })
         const oldest = Number(params.oldest ?? 0)
         const msgs = (state.history[params.channel] ?? []).filter((m) => Number(m.ts) > oldest)
         return json({ ok: true, messages: msgs })
       }
       case 'conversations.replies': {
+        if (state.deleted.has(params.ts)) return json({ ok: false, error: 'thread_not_found' })
         const parent = (state.history[params.channel] ?? []).find((m) => m.ts === params.ts)
         const oldest = Number(params.oldest ?? 0)
         const all = [...(parent ? [parent] : []), ...(state.replies[params.ts] ?? [])]
@@ -242,4 +248,35 @@ test('slack: API errors propagate with the method name', async () => {
   s.channels = []
   globalThis.fetch = (async () => new Response(JSON.stringify({ ok: false, error: 'invalid_auth' }))) as typeof fetch
   await assert.rejects(slack.fetch(ctx()), /slack auth\.test: invalid_auth/)
+})
+
+test('slack: a tracked thread whose parent was deleted is dropped from tracking, not a failed sync', async () => {
+  const s = fakeSlack()
+  const gone = daysAgo(10)
+  const alive = daysAgo(9)
+  s.history.C0ACME = [{ ts: daysAgo(1), user: 'U0SHAWN', text: 'today' }]
+  s.deleted.add(gone)
+  s.replies[alive] = [{ ts: daysAgo(0, '000500'), user: 'U0PRIYA', text: 'late reply' }]
+  const cursor = { C0ACME: { ts: daysAgo(2), threads: { [gone]: daysAgo(10, '000200'), [alive]: daysAgo(9, '000200') } } }
+  const logs: string[] = []
+  const { docs, nextCursor, errors } = await slack.fetch(ctx({ cursor, log: (m) => logs.push(m) }))
+  assert.equal(errors, undefined)
+  assert.deepEqual(docs.map((d) => d.text), ['today', 'late reply'])
+  const c = nextCursor.C0ACME as { ts: string; threads: Record<string, string> }
+  assert.deepEqual(c.threads, { [alive]: daysAgo(0, '000500') }, 'the deleted thread is gone from the cursor; the live one keeps tracking')
+  assert.equal(c.ts, daysAgo(1))
+  assert.ok(logs.some((l) => l.includes(`thread ${gone} no longer exists`)))
+})
+
+test('slack: a channel that fails mid-fetch is reported and keeps its cursor; the other channel still syncs', async () => {
+  const s = fakeSlack()
+  s.history.C0ACME = [{ ts: daysAgo(1), user: 'U0SHAWN', text: 'acme message' }]
+  s.history.C0DEV = [{ ts: daysAgo(1), user: 'U0SHAWN', text: 'dev message' }]
+  s.failing.add('C0DEV')
+  const cursor = { C0ACME: { ts: daysAgo(3), threads: {} }, C0DEV: { ts: daysAgo(3), threads: {} } }
+  const { docs, nextCursor, errors } = await slack.fetch(ctx({ cursor, config: { token: 't', channels: ['#acme', '#acme-dev'] } }))
+  assert.deepEqual(docs.map((d) => d.text), ['acme message'])
+  assert.deepEqual(errors, ['#acme-dev: slack conversations.history: internal_error'])
+  assert.equal((nextCursor.C0ACME as { ts: string }).ts, daysAgo(1))
+  assert.deepEqual(nextCursor.C0DEV, { ts: daysAgo(3), threads: {} }, 'the failed channel is retried from its old cursor next run')
 })

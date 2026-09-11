@@ -18,7 +18,23 @@ import type { Connector, ConnectorContext, Cursor, Doc } from '../types.js'
  *
  * Rate-limit aware: honors 429 Retry-After, which matters for backfills (new
  * non-Marketplace apps get ~1 req/min on conversations.history).
+ *
+ * Failure model: a channel that fails mid-fetch (an API error other than
+ * the ones handled below) is reported and keeps its previous cursor, while
+ * the other channels still sync. A tracked thread whose parent was deleted
+ * (`thread_not_found`) is dropped from tracking with a log line — the
+ * replies already synced stay in the stream, and it is not an error.
  */
+
+/** A Slack Web API `ok: false` reply. `code` is Slack's error string. */
+export class SlackApiError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly code: string,
+  ) {
+    super(`slack ${method}: ${code}`)
+  }
+}
 
 interface ChannelCursor {
   ts: string
@@ -69,6 +85,19 @@ export const slack: Connector = {
       const prev = readCursor(cursor[channel.id])
       const meta = { team, channel: channel.id }
       const mkDoc = (msg: SlackMessage, thread?: string) => toDoc(msg, name, channel.id, users, meta, thread)
+      /** Replies for one thread; a deleted parent means "stop tracking it", not a failed sync. */
+      const replies = async (parentTs: string, after: string | undefined): Promise<string | undefined | null> => {
+        try {
+          return await pullReplies(api, channel.id, parentTs, after, (r) => docs.push(mkDoc(r, parentTs)))
+        } catch (err) {
+          if (err instanceof SlackApiError && err.code === 'thread_not_found') {
+            ctx.log(`slack: ${name} thread ${parentTs} no longer exists — dropped from tracking`)
+            return null
+          }
+          throw err
+        }
+      }
+      const before = docs.length
 
       // No cursor (first sync, or channel newly added to config) → start at
       // the backfill window. Otherwise back off by the overlap so late edits
@@ -79,41 +108,48 @@ export const slack: Connector = {
       const seenParents = new Set<string>()
       let pageCursor: string | undefined
 
-      do {
-        const res = await api('conversations.history', {
-          channel: channel.id,
-          oldest,
-          limit: '200',
-          ...(pageCursor ? { cursor: pageCursor } : {}),
-        })
-        const messages = (res.messages as SlackMessage[]) ?? []
+      try {
+        do {
+          const res = await api('conversations.history', {
+            channel: channel.id,
+            oldest,
+            limit: '200',
+            ...(pageCursor ? { cursor: pageCursor } : {}),
+          })
+          const messages = (res.messages as SlackMessage[]) ?? []
 
-        for (const msg of messages) {
-          if (!msg.text || msg.subtype === 'channel_join') continue
-          docs.push(mkDoc(msg))
-          if (msg.ts > latestSeen) latestSeen = msg.ts
+          for (const msg of messages) {
+            if (!msg.text || msg.subtype === 'channel_join') continue
+            docs.push(mkDoc(msg))
+            if (msg.ts > latestSeen) latestSeen = msg.ts
 
-          if (msg.reply_count && msg.reply_count > 0) {
-            seenParents.add(msg.ts)
-            const known = prev?.threads[msg.ts]
-            const newest = await pullReplies(api, channel.id, msg.ts, known, (r) => docs.push(mkDoc(r, msg.ts)))
-            threads[msg.ts] = newest ?? known ?? msg.ts
+            if (msg.reply_count && msg.reply_count > 0) {
+              seenParents.add(msg.ts)
+              const known = prev?.threads[msg.ts]
+              const newest = await replies(msg.ts, known)
+              if (newest !== null) threads[msg.ts] = newest ?? known ?? msg.ts
+            }
           }
+          pageCursor = (res.response_metadata as { next_cursor?: string })?.next_cursor || undefined
+        } while (pageCursor)
+
+        // Threads we track whose parent has aged out of the history window:
+        // ask only for replies newer than the last one we saw.
+        for (const [parentTs, lastReply] of Object.entries(prev?.threads ?? {})) {
+          if (seenParents.has(parentTs)) continue
+          if (nowS - Number(parentTs) > threadWindowS) continue
+          const newest = await replies(parentTs, lastReply)
+          if (newest !== null) threads[parentTs] = newest ?? lastReply
         }
-        pageCursor = (res.response_metadata as { next_cursor?: string })?.next_cursor || undefined
-      } while (pageCursor)
 
-      // Threads we track whose parent has aged out of the history window:
-      // ask only for replies newer than the last one we saw.
-      for (const [parentTs, lastReply] of Object.entries(prev?.threads ?? {})) {
-        if (seenParents.has(parentTs)) continue
-        if (nowS - Number(parentTs) > threadWindowS) continue
-        const newest = await pullReplies(api, channel.id, parentTs, lastReply, (r) => docs.push(mkDoc(r, parentTs)))
-        threads[parentTs] = newest ?? lastReply
+        cursor[channel.id] = { ts: latestSeen, threads }
+        ctx.log(`slack: ${name} → ${docs.length} docs so far`)
+      } catch (err) {
+        // This channel keeps its previous cursor and is retried next run;
+        // drop its half-read docs so nothing lands ahead of the cursor.
+        docs.length = before
+        errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`)
       }
-
-      cursor[channel.id] = { ts: latestSeen, threads }
-      ctx.log(`slack: ${name} → ${docs.length} docs so far`)
     }
 
     return { docs, nextCursor: cursor, ...(errors.length ? { errors } : {}) }
@@ -183,7 +219,7 @@ function slackClient(apiBase: string, token: string | undefined): SlackApi {
       return call(method, params)
     }
     const body = (await res.json()) as Record<string, unknown>
-    if (!body.ok) throw new Error(`slack ${method}: ${body.error}`)
+    if (!body.ok) throw new SlackApiError(method, String(body.error))
     return body
   }
 }
