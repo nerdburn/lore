@@ -19,6 +19,7 @@ import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
+import { exportGoogleDoc } from './gdoc.js'
 
 /** Options shared by every command that reads or writes a context repo. */
 function contextual(cmd: Command): Command {
@@ -135,7 +136,7 @@ contextual(
   sow
     .command('add')
     .description('attach an SOW: the document (Markdown/text/PDF; Google Docs: File → Download → Markdown) plus its budget and period; commits and pushes')
-    .argument('<file>', 'path to the SOW as .md, .txt, or .pdf')
+    .argument('<file>', 'path to the SOW as .md, .txt, or .pdf — or a docs.google.com link (read via the Workspace service account)')
     .requiredOption('--name <name>', 'e.g. "Jointly SOW 4" (becomes the file slug)')
     .requiredOption('--weeks <n>', 'human-weeks sold', Number)
     .requiredOption('--start <date>', 'period start, YYYY-MM-DD')
@@ -144,6 +145,7 @@ contextual(
     .option('--source <url>', 'where the document lives (Google Doc link)')
     .option('--scope <items>', 'named deliverables, comma- or semicolon-separated, when the SOW lists any')
     .option('--status <s>', 'active | exhausted | superseded | closed (default active)')
+    .option('--as <email>', 'for a Google Doc link: the teammate the service account reads it as (default client.owner)')
     .option('--by <who>', 'who is attaching this (defaults to OS username)')
     .option('--keep-commercials', 'keep lines with currency amounts (default: strip them — the repo is readable by every agent)'),
 ).action(async (file: string, o) => {
@@ -159,11 +161,24 @@ contextual(
       source: o.source,
       scope: o.scope ? String(o.scope).split(/[;,]/) : undefined,
       status: o.status,
+      as: o.as,
       keepCommercials: o.keepCommercials,
     },
     o,
   )
 })
+program
+  .command('gdoc')
+  .description('Google Docs helpers (need the Workspace service account key on this machine)')
+  .command('export')
+  .description('export a Google Doc as Markdown via the service account, acting as a teammate')
+  .argument('<url>', 'docs.google.com link')
+  .requiredOption('--as <email>', 'the Workspace user to read as')
+  .option('--json', 'emit {id, name, url, markdown} instead of the markdown')
+  .action(async (url: string, o) => {
+    const doc = await exportGoogleDoc(url, o.as)
+    console.log(o.json ? JSON.stringify(doc) : doc.markdown)
+  })
 contextual(sow.command('list').description('list attached SOWs with calendar progress').option('--json', 'machine-readable output')).action((o) => void sowList(root, o))
 
 program

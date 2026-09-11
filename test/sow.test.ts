@@ -95,7 +95,7 @@ test('sow add: validation, write.allow, archived', async () => {
   await assert.rejects(sowAdd(root, { ...META, text: 'x', start: 'Sept 1' }, { context: root }), /--start must be an ISO date/)
   await assert.rejects(sowAdd(root, { ...META, text: 'x', end: '2026-01-01' }, { context: root }), /--end is before --start/)
   await assert.rejects(sowAdd(root, { ...META, text: 'x', status: 'paused' as never }, { context: root }), /status must be one of/)
-  await assert.rejects(sowAdd(root, { ...META }, { context: root }), /file path or as text/)
+  await assert.rejects(sowAdd(root, { ...META }, { context: root }), /file path, a Google Doc link, or as text/)
   await assert.rejects(sowAdd(root, { ...META, file: join(root, 'nope.docx') }, { context: root }), /file not found/)
   writeFileSync(join(root, 'x.docx'), 'z')
   await assert.rejects(sowAdd(root, { ...META, file: join(root, 'x.docx') }, { context: root }), /unsupported file type/)

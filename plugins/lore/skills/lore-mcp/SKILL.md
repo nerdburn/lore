@@ -151,8 +151,10 @@ write allow-list; report either plainly rather than working around it.
 
 ## Attaching a statement of work
 
-Only when the user explicitly asks. Get the document text (read the Google
-Doc with the tools you have, or ask for a Markdown export) and call
-`lore_sow_add` with the text plus the numbers the user or the document
-states: `weeks`, `start`, `end`, and `signed`/`source`/`scope` when known.
+Only when the user explicitly asks ("attach this SOW", "record the new
+SOW"). Pass the Google Doc link as `url` — lore exports it itself through
+the Workspace service account, reading as the client owner — or, failing
+that, the document text as `text`. Call `lore_sow_add` with that plus the
+numbers the user or the document states: `weeks`, `start`, `end`, and
+`signed`/`source`/`scope` when known.
 Never estimate weeks or dates; ask. Re-adding the same `name` updates it.

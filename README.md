@@ -333,14 +333,19 @@ layer, `context/sow/<slug>.md`, written only by a human (or an agent on
 explicit instruction), never by sync or the fold.
 
 ```sh
-lore sow add jointly-sow-4.md --name "Jointly SOW 4" --weeks 12 \
+lore sow add "https://docs.google.com/document/d/…" --name "Jointly SOW 4" --weeks 12 \
   --start 2026-09-01 --end 2026-12-15 --signed 2026-08-28 \
   --source "https://docs.google.com/document/d/…" --scope "Agreement builder v2; Onboarding"
 lore sow list
 ```
 
-The document can be Markdown or text (Google Docs: **File → Download →
-Markdown**) or a PDF. The body is scrubbed like every stream doc and, by
+The document can be a **Google Doc link** — lore exports it as Markdown
+through the Workspace service account (the Gmail one, with
+`drive.readonly` added to its domain-wide delegation and the Drive API
+enabled in its Cloud project), reading as `client.owner` or `--as
+<teammate>`, so contracts never need to be link-shareable — or a Markdown,
+text, or PDF file. A machine without the key hands the link to the lore host
+over SSH. The body is scrubbed like every stream doc and, by
 default, stripped of lines carrying currency amounts — the commitment lore
 needs is in weeks, and the repo is readable by every agent pointed at it
 (`--keep-commercials` to keep them). Re-adding the same name updates it;
@@ -352,8 +357,8 @@ weeks, period, status, scope, and how far through the period today is — the
 only burn proxy until a time-tracking source writes weeks spent next to it.
 The fold sees the active SOWs and notes when a request falls outside named
 scope; the weekly report gets a Budget line restating the figures. Agents
-attach one with `lore_sow_add`, passing the document text they read (from
-Google Drive tools, say) plus the numbers the user or the document states.
+attach one with `lore_sow_add`, passing the Google Doc link (or the text
+they read) plus the numbers the user or the document states.
 
 ### Onboarding the next client
 
@@ -450,7 +455,8 @@ cites sources, never pins uninvited); run them with
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
 | `lore recall [category] [--json]` | pinned facts + derived artifacts + work tables |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
-| `lore sow add <file> --name n --weeks n --start d --end d [--signed d] [--source url] [--scope items] [--status s] [--by who] [--keep-commercials]` | attach a statement of work (.md/.txt/.pdf): weeks sold over a period; commits + pushes |
+| `lore sow add <file-or-gdoc-link> --name n --weeks n --start d --end d [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
+| `lore gdoc export <url> --as <email> [--json]` | export a Google Doc as Markdown via the service account (used by `sow add` on the host) |
 | `lore sow list [--json]` | attached SOWs with calendar progress |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |

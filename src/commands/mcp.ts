@@ -140,10 +140,11 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? 'Unavailable: this client is archived and its memory is read-only.'
-        : 'Attach a statement of work to project memory: the document text (markdown — e.g. read from the Google Doc first) plus the commitment: human-weeks sold, period start/end, optional signed date, source link, and named scope items. Use ONLY on explicit user instruction, with the numbers the user or the document states — never estimate them. Lines carrying currency amounts are stripped unless keep_commercials. Re-adding the same name updates it (e.g. status: exhausted | superseded | closed).',
+        : 'Attach a statement of work to project memory: the document — a docs.google.com link (url; lore exports it as markdown via the Workspace service account, reading as the client owner) or its text (text) — plus the commitment: human-weeks sold, period start/end, optional signed date, source link, and named scope items. Use ONLY on explicit user instruction, with the numbers the user or the document states — never estimate them. Lines carrying currency amounts are stripped unless keep_commercials. Re-adding the same name updates it (e.g. status: exhausted | superseded | closed).',
       inputSchema: {
         name: z.string().describe('e.g. "Jointly SOW 4"'),
-        text: z.string().describe('the SOW document as markdown/plain text'),
+        text: z.string().optional().describe('the SOW document as markdown/plain text (or give url)'),
+        url: z.string().optional().describe('docs.google.com link to the SOW (or give text)'),
         weeks: z.number().positive().describe('human-weeks sold'),
         start: z.string().describe('period start, YYYY-MM-DD'),
         end: z.string().describe('period end, YYYY-MM-DD'),
@@ -154,10 +155,10 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         keep_commercials: z.boolean().optional(),
       },
     },
-    async ({ name, text: body, weeks, start, end, signed, source, scope, status, keep_commercials }) => {
+    async ({ name, text: body, url, weeks, start, end, signed, source, scope, status, keep_commercials }) => {
       const s = await sowAdd(
         rememberOpts.cwd,
-        { name, text: body, weeks, start, end, signed, source, scope, status, keepCommercials: keep_commercials },
+        { name, text: body, file: url, weeks, start, end, signed, source, scope, status, keepCommercials: keep_commercials },
         { ...rememberOpts.opts, via: 'mcp' },
       )
       return text(s)

@@ -4,7 +4,11 @@ import { extname, join } from 'node:path'
 import { stringify } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, resolveContext, type ResolveOptions } from '../context.js'
+import { exportGoogleDoc, googleDocId, hasServiceAccountKey, type GoogleDoc } from '../gdoc.js'
 import { scrub } from '../scrub.js'
+import { sshTargetFromRemote } from './refresh.js'
+import { readGlobalConfig } from '../context.js'
+import { execFileSync } from 'node:child_process'
 import { readSows, SOW_DIR, SOW_STATUSES, sowSlug, stripCommercials, summarizeSow, type SowMeta, type SowStatus, type SowSummary } from '../sow.js'
 
 export interface SowAddInput {
@@ -14,8 +18,10 @@ export interface SowAddInput {
   end: string
   /** Document text (markdown). Exactly one of `text` / `file`. */
   text?: string
-  /** Path to a .md/.txt/.pdf on this machine. */
+  /** Path to a .md/.txt/.pdf on this machine, or a docs.google.com link (exported via the Workspace service account). */
   file?: string
+  /** For a Google Doc link: the teammate the service account reads as (default `client.owner`). */
+  as?: string
   signed?: string
   source?: string
   scope?: string[]
@@ -28,6 +34,8 @@ export interface SowAddOptions extends ResolveOptions {
   /** CLI only: who is attaching this. MCP callers can never set it. */
   by?: string
   via?: 'cli' | 'mcp'
+  /** Test seam: how a Google Doc link becomes markdown. */
+  exportDoc?: (url: string, as: string) => Promise<GoogleDoc>
 }
 
 /**
@@ -56,8 +64,16 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
   const status = input.status ?? 'active'
   if (!SOW_STATUSES.includes(status)) throw new Error(`sow: status must be one of ${SOW_STATUSES.join(', ')}`)
 
-  let body = input.text ?? (input.file ? await readDocument(input.file) : undefined)
-  if (body === undefined) throw new Error('sow: give the document as a file path or as text')
+  let body = input.text
+  let source = input.source
+  if (body === undefined && input.file && googleDocId(input.file)) {
+    const as = input.as ?? ctx.config.client?.owner
+    if (!as) throw new Error('sow: a Google Doc link needs --as <teammate email> (or client.owner in lore.json) — the service account reads the doc as that person')
+    const doc = await (opts.exportDoc ?? resolveGoogleDoc)(input.file, as)
+    body = doc.markdown
+    source ??= doc.url
+  } else if (body === undefined && input.file) body = await readDocument(input.file)
+  if (body === undefined) throw new Error('sow: give the document as a file path, a Google Doc link, or as text')
   let removed = 0
   if (!input.keepCommercials) ({ text: body, removed } = stripCommercials(body))
   const clean = scrub(body)
@@ -74,7 +90,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
     end: input.end,
     status,
     ...(input.signed ? { signed: input.signed } : {}),
-    ...(input.source ? { source: input.source } : {}),
+    ...(source ? { source } : {}),
     ...(input.scope?.length ? { scope: input.scope.map((s) => s.trim()).filter(Boolean) } : {}),
     added_by: actor,
     added: new Date().toISOString().slice(0, 10),
@@ -87,7 +103,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
     actor,
     via,
     id: slug,
-    ...(input.source ? { source: input.source } : {}),
+    ...(source ? { source } : {}),
   })
 
   if (ctx.mode === 'cache') {
@@ -115,6 +131,24 @@ export function sowList(cwd: string, opts: ResolveOptions & { json?: boolean } =
   else if (sows.length === 0) console.log('no statements of work attached — `lore sow add <file> --name … --weeks … --start … --end …`')
   else for (const s of sows) console.log(`${s.status.padEnd(10)} ${s.name}: ${s.weeks} weeks, ${s.start} → ${s.end} (${s.period_elapsed_pct}% elapsed, ${s.days_left} days left)${s.scope?.length ? ` — scope: ${s.scope.join('; ')}` : ''}  [${s.file}]`)
   return sows
+}
+
+/**
+ * A Google Doc link → markdown: locally when this machine holds the service
+ * account key, otherwise over SSH on the lore host (which does), the same
+ * way `lore refresh --trigger` reaches it.
+ */
+export async function resolveGoogleDoc(url: string, as: string): Promise<GoogleDoc> {
+  if (hasServiceAccountKey()) return exportGoogleDoc(url, as)
+  const target = sshTargetFromRemote(readGlobalConfig().remote)
+  if (!target) throw new Error('sow: no service account key here and no SSH lore host configured — export the doc as Markdown and pass the file')
+  const out = execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', target, `lore gdoc export ${JSON.stringify(url)} --as ${JSON.stringify(as)} --json`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 60_000,
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  return JSON.parse(out) as GoogleDoc
 }
 
 /** .md/.txt as-is; .pdf via pdf.js text extraction, one paragraph per line run. */
