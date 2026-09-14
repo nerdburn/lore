@@ -8,6 +8,7 @@ import { recallData } from '../recall.js'
 import { grepContext } from '../search.js'
 import { refresh } from './refresh.js'
 import { remember } from './remember.js'
+import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -53,7 +54,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   server.registerTool(
     'lore_grep',
     {
-      description: `${label}Search ${ctx.config.project}'s project memory (synced Slack history, decisions, pinned facts). Pattern is a regex; falls back to literal. Returns file:line matches — read surrounding context with lore_read.`,
+      description: `${label}Search ${ctx.config.project}'s project memory (synced Slack, email, meetings, attached documents, decisions, pinned facts). Pattern is a regex; falls back to literal. Returns file:line matches — read surrounding context with lore_read.`,
       inputSchema: {
         pattern: z.string().describe('regex or literal to search for'),
         channel: z.string().optional().describe('substring filter on the file path, e.g. a channel name'),
@@ -162,6 +163,27 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         { ...rememberOpts.opts, via: 'mcp' },
       )
       return text(s)
+    },
+  )
+
+  server.registerTool(
+    'lore_doc_add',
+    {
+      description: archived
+        ? 'Unavailable: this client is archived and its memory is read-only.'
+        : 'Add a document to project memory as raw material — a spec, brief, deck, handoff package, anything a client sends that is not a statement of work. Give a Google Docs/Drive link (url; lore reads it via the Workspace service account as the client owner — Docs, Slides, Sheets, PDFs, text) or the text itself (text, with a title). It lands in the docs stream like a Slack message or an email: grep-able at once, folded by the next extract into requests/decisions/roadmap citing the link. Nothing in it becomes authoritative; for commitments use lore_sow_add. Use on explicit user instruction. Re-adding identical content is a no-op; changed content adds a new version.',
+      inputSchema: {
+        url: z.string().optional().describe('docs.google.com or drive.google.com link (or give text)'),
+        text: z.string().optional().describe('the document as markdown/plain text (or give url)'),
+        title: z.string().optional().describe('title — required with text; defaults to the Google Doc name'),
+        from: z.string().optional().describe('who sent or authored it (default: the Drive owner)'),
+        date: z.string().optional().describe('YYYY-MM-DD the document belongs to (default today)'),
+        source: z.string().optional().describe('where it lives, when not the Google link'),
+      },
+    },
+    async ({ url, text: body, title, from, date, source }) => {
+      const d = await docAdd(rememberOpts.cwd, { file: url, text: body, title, from, date, source }, { ...rememberOpts.opts, via: 'mcp' })
+      return text(d)
     },
   )
 

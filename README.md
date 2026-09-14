@@ -15,6 +15,7 @@ lore grep      # search project memory — from any linked repo, or anywhere wit
 lore recall    # pinned facts + derived artifacts + live work tables
 lore remember  # pin a fact (an explicit write)
 lore sow add   # attach a statement of work: human-weeks sold over a period (the other explicit write)
+lore doc add   # add a document a client sent — spec, brief, deck — to the raw material, folded like email
 lore refresh   # pull the latest memory; --trigger makes the host sync right now
 lore mcp       # the same verbs as MCP tools over stdio, for agents
 ```
@@ -226,6 +227,21 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   (`meta.mailboxes` says who had it); replies chain on `References`. Quoted
   history and signatures are trimmed. Setup: `--gmail` (team contacts),
   `--gmail all`, or `--gmail "a@x.com,b@x.com"`.
+- **Documents** (`docs`) is the stream with no connector: the spec, brief,
+  deck, or handoff package a client sends by whatever means. `lore doc add
+  <link-or-file>` puts it under `context/streams/docs/<title-slug>/` as one
+  stream doc — the sender as author, the link as permalink — so it is
+  grep-able at once and the next fold reads it exactly like a day of email:
+  requirements a spec states become requests from whoever sent it, a plan
+  in a brief becomes roadmap, every item citing the document. Nothing in a
+  document is authoritative (that is what an SOW is for). Google Docs,
+  Slides, Sheets, and Drive-hosted PDFs or text are read through the
+  Workspace service account as `client.owner` (`--as` to read as someone
+  else), so nothing needs to be link-shareable; local `.md`, `.txt`, and
+  `.pdf` files work too. Re-adding identical content is a no-op; a changed
+  document lands as a new version in the same channel. A 400-page spec is
+  fine: the fold splits it across batches and the weekly report only sees
+  its opening. Every add is audited, committed, and pushed.
 
 Every configured source must be usable or the sync fails — a source with no
 connector or an unresolved `env:` ref is an error, not a skip, so a scheduler
@@ -367,6 +383,23 @@ figures. Agents
 attach one with `lore_sow_add`, passing the Google Doc link (or the text
 they read) plus the numbers the user or the document states.
 
+### Documents — the client's specs, briefs, and decks
+
+```sh
+lore doc add "https://docs.google.com/document/d/…"                 # title, author, link from Drive
+lore doc add ~/Downloads/alpha-gtm-brief.pdf --from "Matthew" --date 2026-09-09
+lore doc add "https://docs.google.com/presentation/d/…" --title "Vision deck"
+lore doc list
+```
+
+A document is raw material, not a layer: it lands in the `docs` stream (see
+[Sources](#sources)) and from there behaves like anything else lore synced —
+`lore grep` finds it immediately, the next `lore extract` folds it into
+requests, decisions, and roadmap citing the document's link, and the weekly
+report mentions that it arrived. Agents add one with `lore_doc_add`, passing
+the Google link (or the text they read plus a title). When a document *is*
+the commitment — weeks sold over a period — use `lore sow add` instead.
+
 ### Onboarding the next client
 
 [docs/PLAYBOOK.md](docs/PLAYBOOK.md) is the step-by-step: the facts to
@@ -396,7 +429,7 @@ removing @lore from the Slack channels.
 ### For agents (MCP)
 
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
-`lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`. `lore_recall` returns
+`lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`, `lore_doc_add`. `lore_recall` returns
 exactly what the CLI does — pins, every derived artifact, the work tables,
 recent reports, and sync/extract timestamps so an agent can say how fresh
 its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
@@ -463,8 +496,10 @@ cites sources, never pins uninvited); run them with
 | `lore recall [category] [--json]` | pinned facts + derived artifacts + work tables |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore sow add <file-or-gdoc-link> --name n --weeks n --start d [--end d] [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
-| `lore gdoc export <url> --as <email> [--json]` | export a Google Doc as Markdown via the service account (used by `sow add` on the host) |
 | `lore sow list [--json]` | attached SOWs |
+| `lore doc add <file-or-google-link> [--title t] [--from who] [--date d] [--source url] [--as email] [--by who]` | add a document (Google Doc/Slides/Sheet, Drive PDF/text, or local .md/.txt/.pdf) to the `docs` stream — raw material, folded like email; commits + pushes |
+| `lore doc list [--json]` | documents in the `docs` stream |
+| `lore gdoc export <url> --as <email> [--json]` | export a Google Doc (Slides, Sheet, Drive-hosted PDF/text) as text via the service account (used by `sow add` / `doc add` on the host) |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
 | `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
@@ -474,7 +509,7 @@ cites sources, never pins uninvited); run them with
 | `lore check` | validate config, connectors, env refs; print per-source sync health |
 | `lore manifest slack` | print the bundled Slack app manifest |
 
-`grep`, `recall`, `remember`, `sow`, `refresh`, `archive`, and `mcp` all take
+`grep`, `recall`, `remember`, `sow`, `doc`, `refresh`, `archive`, and `mcp` all take
 `--context <owner/repo>`, `-p/--project <name>`, and `--no-pull`.
 
 ## Troubleshooting

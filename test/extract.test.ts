@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, streamFiles, withRetry } from '../src/commands/extract.js'
+import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, reportExcerpt, streamFiles, withRetry } from '../src/commands/extract.js'
 import { makeContextRepo } from './helpers.js'
 
 const VALID = { requests: [], decisions: [{ id: 'dec-0001' }], roadmap: [], contradictions: [] }
@@ -35,10 +35,29 @@ test('extract: pack keeps whole day-files and records each batch\'s last day and
   assert.ok(!batches[0].text.includes('c'))
 })
 
-test('extract: pack never splits a single oversized file', () => {
-  const batches = pack([{ day: '2026-08-01', text: 'x'.repeat(500) }], 100)
-  assert.equal(batches.length, 1)
-  assert.equal(batches[0].lastDay, '2026-08-01')
+test('extract: pack splits a single oversized file at paragraph breaks, restating the heading, and records it only with its last part', () => {
+  const header = '### Julie — 2026-09-14T00:00:00.000Z\n<!-- id: doc-abc-123 title: spec -->\n[permalink](https://docs.google.com/document/d/abc)\n'
+  const body = Array.from({ length: 12 }, (_, i) => `para ${i} ${'x'.repeat(40)}`).join('\n\n')
+  const text = `${header}\n# Spec\n\n${body}`
+  const batches = pack([{ path: 'context/streams/docs/spec/2026-09-14.md', day: '2026-09-14', text }, { path: 'b.md', day: '2026-09-15', text: 'small' }], 260)
+  assert.ok(batches.length >= 3, `expected the big file in several parts, got ${batches.length}`)
+  const parts = batches.slice(0, -1)
+  assert.ok(parts.every((b) => b.text.length <= 260 + header.length + 40 && b.lastDay === '2026-09-14'))
+  assert.deepEqual(parts.slice(0, -1).flatMap((b) => b.files), [], 'earlier parts do not mark the file consumed')
+  assert.deepEqual(parts.at(-1)!.files, [{ path: 'context/streams/docs/spec/2026-09-14.md', length: text.length }])
+  assert.ok(parts.slice(1).every((b) => b.text.startsWith(header.trimEnd() + '\n\n(…continued)')), 'continuations carry the heading and permalink')
+  assert.equal(parts.map((b) => b.text.replace(/^### [\s\S]*?\(…continued\)\n\n/, '')).join('').replace(/\s+/g, ''), text.replace(/\s+/g, ''), 'nothing is lost')
+  assert.deepEqual(batches.at(-1)!.files, [{ path: 'b.md', length: 5 }])
+  // A file that fits is never split.
+  assert.equal(pack([{ day: '2026-08-01', text: 'x'.repeat(100) }], 100).length, 1)
+})
+
+test('extract: the weekly report excerpts long documents but never other streams', () => {
+  const doc = { path: 'context/streams/docs/spec/2026-09-14.md', day: '2026-09-14', text: 'd'.repeat(50) }
+  assert.match(reportExcerpt(doc, 20), /^d{20}\n\n\[… document truncated for the report: 30 more characters in context\/streams\/docs\/spec\/2026-09-14\.md\]$/)
+  assert.equal(reportExcerpt({ ...doc, text: 'short' }, 20), 'short')
+  const mail = { path: 'context/streams/gmail/x/2026-09-14.md', day: '2026-09-14', text: 'm'.repeat(50) }
+  assert.equal(reportExcerpt(mail, 20), mail.text)
 })
 
 test('extract: acceptFold applies a delta — omitted items are kept silently, returned ids update, new ids append', () => {

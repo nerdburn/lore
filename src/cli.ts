@@ -19,6 +19,7 @@ import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
+import { docAdd, docList } from './commands/doc.js'
 import { exportGoogleDoc } from './gdoc.js'
 
 /** Options shared by every command that reads or writes a context repo. */
@@ -181,6 +182,23 @@ program
     console.log(o.json ? JSON.stringify(doc) : doc.markdown)
   })
 contextual(sow.command('list').description('list attached SOWs').option('--json', 'machine-readable output')).action((o) => void sowList(root, o))
+
+const doc = program.command('doc').description('documents as a stream — specs, briefs, decks, handoff packages: raw material folded like Slack or email, never authoritative')
+contextual(
+  doc
+    .command('add')
+    .description('add a document to the `docs` stream: a Google Docs/Drive link (Doc, Slides, Sheet, PDF, text — read via the Workspace service account) or a local .md/.txt/.pdf; commits and pushes')
+    .argument('<file>', 'path to a .md, .txt, or .pdf — or a docs.google.com / drive.google.com link')
+    .option('--title <title>', 'document title (default: the Google Doc name or the file name); becomes the stream channel')
+    .option('--from <who>', 'who sent or authored it (default: the Drive owner, else you)')
+    .option('--date <date>', 'YYYY-MM-DD the document belongs to (default today)')
+    .option('--source <url>', 'where the document lives (default: the Google link) — the permalink derived items cite')
+    .option('--as <email>', 'for a Google link: the teammate the service account reads it as (default client.owner)')
+    .option('--by <who>', 'who is adding this (defaults to OS username)'),
+).action(async (file: string, o) => {
+  await docAdd(root, { file, title: o.title, from: o.from, date: o.date, source: o.source, as: o.as }, o)
+})
+contextual(doc.command('list').description('list documents in the `docs` stream').option('--json', 'machine-readable output')).action((o) => void docList(root, o))
 
 program
   .command('link')

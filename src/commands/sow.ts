@@ -1,14 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { userInfo } from 'node:os'
-import { extname, join } from 'node:path'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, resolveContext, type ResolveOptions } from '../context.js'
-import { exportGoogleDoc, googleDocId, hasServiceAccountKey, type GoogleDoc } from '../gdoc.js'
+import { googleDocId, resolveGoogleDoc, type GoogleDoc } from '../gdoc.js'
+import { pdfText, readDocument as readDocumentFile } from '../document.js'
 import { scrub } from '../scrub.js'
-import { sshTargetFromRemote } from './refresh.js'
+import { authorizeWrite } from '../write.js'
 import { readGlobalConfig } from '../context.js'
-import { execFileSync } from 'node:child_process'
 import { readSows, SOW_DIR, SOW_STATUSES, sowSlug, stripCommercials, summarizeSow, type SowMeta, type SowStatus, type SowSummary } from '../sow.js'
 
 export interface SowAddInput {
@@ -47,13 +46,8 @@ export interface SowAddOptions extends ResolveOptions {
  */
 export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOptions = {}): Promise<SowSummary> {
   const ctx = resolveContext(cwd, opts)
-  if (ctx.config.lifecycle === 'archived') {
-    throw new Error(`${ctx.config.project} is archived — its memory is read-only (\`lore archive --restore\` to reopen)`)
-  }
   const via = opts.via ?? 'cli'
-  const actor = via === 'cli' && opts.by ? opts.by : userInfo().username
-  const allow = ctx.config.write?.allow
-  if (allow && !allow.includes(actor)) throw new Error(`"${actor}" is not in lore.json write.allow — sow refused`)
+  const actor = authorizeWrite(ctx, opts, 'sow')
 
   if (!input.name.trim()) throw new Error('sow: --name is required')
   if (!(input.weeks > 0)) throw new Error('sow: --weeks must be a positive number of human-weeks')
@@ -133,61 +127,9 @@ export function sowList(cwd: string, opts: ResolveOptions & { json?: boolean } =
   return sows
 }
 
-/**
- * A Google Doc link → markdown: locally when this machine holds the service
- * account key, otherwise over SSH on the lore host (which does), the same
- * way `lore refresh --trigger` reaches it.
- */
-export async function resolveGoogleDoc(url: string, as: string): Promise<GoogleDoc> {
-  if (hasServiceAccountKey()) return exportGoogleDoc(url, as)
-  const target = sshTargetFromRemote(readGlobalConfig().remote)
-  if (!target) throw new Error('sow: no service account key here and no SSH lore host configured — export the doc as Markdown and pass the file')
-  const out = execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', target, `lore gdoc export ${JSON.stringify(url)} --as ${JSON.stringify(as)} --json`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 60_000,
-    maxBuffer: 16 * 1024 * 1024,
-  })
-  return JSON.parse(out) as GoogleDoc
+/** .md/.txt as-is; .pdf via pdf.js text extraction (shared with `doc add`). */
+export function readDocument(file: string): Promise<string> {
+  return readDocumentFile(file, 'sow')
 }
 
-/** .md/.txt as-is; .pdf via pdf.js text extraction, one paragraph per line run. */
-export async function readDocument(file: string): Promise<string> {
-  if (!existsSync(file)) throw new Error(`sow: file not found: ${file}`)
-  const ext = extname(file).toLowerCase()
-  if (ext === '.pdf') return pdfText(readFileSync(file))
-  if (ext === '.md' || ext === '.txt' || ext === '.markdown' || ext === '') return readFileSync(file, 'utf8')
-  throw new Error(`sow: unsupported file type "${ext}" — export the document as Markdown (Google Docs: File → Download → Markdown) or PDF`)
-}
-
-export async function pdfText(data: Buffer): Promise<string> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true, disableFontFace: true }).promise
-  const pages: string[] = []
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i)
-    const content = await page.getTextContent()
-    // Runs are joined by their real horizontal gap, not blindly with a
-    // space: a ligature ("fi", "fl") arrives as its own run flush against
-    // its neighbours, while a word gap shows as a visible offset.
-    let line = ''
-    let prevEnd: number | undefined
-    const lines: string[] = []
-    for (const item of content.items as { str: string; hasEOL?: boolean; width?: number; transform?: number[] }[]) {
-      const x = item.transform?.[4]
-      const size = Math.abs(item.transform?.[0] ?? 10) || 10
-      if (line && x !== undefined && prevEnd !== undefined && !line.endsWith(' ') && !item.str.startsWith(' ') && x - prevEnd > size * 0.12) line += ' '
-      line += item.str
-      prevEnd = x !== undefined ? x + (item.width ?? 0) : undefined
-      if (item.hasEOL) {
-        lines.push(line.trimEnd())
-        line = ''
-        prevEnd = undefined
-      }
-    }
-    if (line.trim()) lines.push(line.trimEnd())
-    pages.push(lines.join('\n'))
-  }
-  await doc.cleanup()
-  return pages.join('\n\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n')
-}
+export { pdfText }

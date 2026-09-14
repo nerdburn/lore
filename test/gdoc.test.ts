@@ -19,7 +19,9 @@ test('gdoc: recognises Docs and Drive links, rejects everything else', () => {
   assert.equal(googleDocId(URL), DOC_ID)
   assert.equal(googleDocId(`https://docs.google.com/document/d/${DOC_ID}`), DOC_ID)
   assert.equal(googleDocId(`https://drive.google.com/file/d/${DOC_ID}/view`), DOC_ID)
-  assert.equal(googleDocId('https://docs.google.com/spreadsheets/d/abc'), undefined)
+  assert.equal(googleDocId('https://docs.google.com/spreadsheets/d/abc'), undefined, 'too short to be an id')
+  assert.equal(googleDocId(`https://docs.google.com/spreadsheets/d/${DOC_ID}/edit#gid=0`), DOC_ID)
+  assert.equal(googleDocId(`https://docs.google.com/presentation/d/${DOC_ID}/edit`), DOC_ID)
   assert.equal(googleDocId('./sow.md'), undefined)
   assert.equal(googleDocId('https://example.com/document/d/' + DOC_ID), undefined)
 })
@@ -32,7 +34,7 @@ function fakeKeyFile(): string {
   return file
 }
 
-function fakeDrive(opts: { tokenError?: string; missing?: boolean; mime?: string; apiDisabled?: boolean } = {}) {
+function fakeDrive(opts: { tokenError?: string; missing?: boolean; mime?: string; apiDisabled?: boolean; media?: string } = {}) {
   const calls: { url: string; sub?: string; auth?: string }[] = []
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -47,7 +49,8 @@ function fakeDrive(opts: { tokenError?: string; missing?: boolean; mime?: string
     }
     calls.push({ url, auth })
     if (opts.apiDisabled) return json({ error: { message: 'Google Drive API has not been used in project 1 before or it is disabled.' } }, 403)
-    if (url.includes(`/files/${DOC_ID}?`)) return opts.missing ? json({ error: 'nf' }, 404) : json({ name: 'Input — SOW — Jointly (Marketing Site)', mimeType: opts.mime ?? 'application/vnd.google-apps.document' })
+    if (url.includes(`/files/${DOC_ID}?alt=media`)) return new Response(opts.media ?? '', { status: 200, headers: { 'content-type': opts.mime ?? 'text/plain' } })
+    if (url.includes(`/files/${DOC_ID}?`)) return opts.missing ? json({ error: 'nf' }, 404) : json({ name: 'Input — SOW — Jointly (Marketing Site)', mimeType: opts.mime ?? 'application/vnd.google-apps.document', modifiedTime: '2026-09-09T17:03:00.000Z', owners: [{ displayName: 'Julie Harsh', emailAddress: 'julie@getmerrin.com' }] })
     if (url.includes(`/files/${DOC_ID}/export`)) return new Response('**![logo][image1]**\n\n**Statement of Work**  \n\nJointly — Marketing site\n\n\n\n| Estimated Weeks | 3 weeks |\n\n[image1]: <data:image/png;base64,AAAA>\n', { status: 200, headers: { 'content-type': 'text/markdown' } })
     return json({ error: 'unexpected ' + url }, 500)
   }) as typeof fetch
@@ -63,13 +66,32 @@ test('gdoc: exports a Doc as markdown, acting as the given teammate, and tidies 
   assert.equal(doc.markdown, '****\n\n**Statement of Work**\n\nJointly — Marketing site\n\n| Estimated Weeks | 3 weeks |')
   assert.equal(d.calls[0].sub, 'shawn@inputlogic.ca')
   assert.ok(d.calls.slice(1).every((c) => c.auth === 'Bearer tok'))
+  assert.equal(doc.mimeType, 'application/vnd.google-apps.document')
+  assert.equal(doc.modified, '2026-09-09T17:03:00.000Z')
+  assert.equal(doc.owner, 'Julie Harsh')
+  assert.match(d.calls[2].url, /export\?mimeType=text%2Fmarkdown/)
+})
+
+test('gdoc: Slides export as plain text; a Drive-hosted text file downloads as-is; each keeps its own link shape', async () => {
+  const key = fakeKeyFile()
+  const slides = fakeDrive({ mime: 'application/vnd.google-apps.presentation' })
+  const deck = await exportGoogleDoc(`https://docs.google.com/presentation/d/${DOC_ID}/edit`, 'x@y', { fetch: slides.fetchFn, keyFile: key })
+  assert.match(slides.calls[2].url, /export\?mimeType=text%2Fplain/)
+  assert.equal(deck.url, `https://docs.google.com/presentation/d/${DOC_ID}`)
+  assert.match(deck.markdown, /Statement of Work/)
+
+  const drive = fakeDrive({ mime: 'text/markdown', media: '# Handoff\n\nRead me.\n' })
+  const file = await exportGoogleDoc(`https://drive.google.com/file/d/${DOC_ID}/view`, 'x@y', { fetch: drive.fetchFn, keyFile: key })
+  assert.match(drive.calls[2].url, /alt=media/)
+  assert.equal(file.markdown, '# Handoff\n\nRead me.')
+  assert.equal(file.url, `https://drive.google.com/file/d/${DOC_ID}`)
 })
 
 test('gdoc: failures name the fix', async () => {
   const key = fakeKeyFile()
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ tokenError: 'unauthorized_client' }).fetchFn, keyFile: key }), /domain-wide delegation .* lacks https:\/\/www\.googleapis\.com\/auth\/drive\.readonly/)
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ missing: true }).fetchFn, keyFile: key }), /not found, or x@y cannot see it/)
-  await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ mime: 'application/pdf' }).fetchFn, keyFile: key }), /not a Google Doc — download it/)
+  await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ mime: 'image/png' }).fetchFn, keyFile: key }), /not a Google Doc — download it/)
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ apiDisabled: true }).fetchFn, keyFile: key }), /Drive API is not enabled/)
   await assert.rejects(exportGoogleDoc('https://example.com/x', 'x@y', { keyFile: key }), /not a Google Doc link/)
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { keyFile: join(tmpdir(), 'nope.json') }), /no service account key/)

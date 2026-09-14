@@ -1,10 +1,10 @@
 import { readFileSync, writeFileSync } from 'node:fs'
-import { userInfo } from 'node:os'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, resolveContext, type ResolveOptions } from '../context.js'
 import type { Pin } from '../types.js'
+import { authorizeWrite } from '../write.js'
 
 const FACTS_HEADER = '# Pinned facts. Written only via `lore remember`.\n'
 
@@ -30,16 +30,8 @@ export interface RememberOptions extends ResolveOptions {
  */
 export function remember(cwd: string, fact: string, opts: RememberOptions): Pin {
   const ctx = resolveContext(cwd, opts)
-  if (ctx.config.lifecycle === 'archived') {
-    throw new Error(`${ctx.config.project} is archived — its memory is read-only (\`lore archive --restore\` to reopen)`)
-  }
   const via = opts.via ?? 'cli'
-  const actor = via === 'cli' && opts.by ? opts.by : userInfo().username
-
-  const allow = ctx.config.write?.allow
-  if (allow && !allow.includes(actor)) {
-    throw new Error(`"${actor}" is not in lore.json write.allow — pin refused`)
-  }
+  const actor = authorizeWrite(ctx, opts, 'pin')
 
   const path = join(ctx.root, 'context', 'facts.yaml')
   const pins: Pin[] = (parse(readFileSync(path, 'utf8')) as Pin[] | null) ?? []

@@ -53,6 +53,8 @@ const MODEL_INCREMENTAL = process.env.LORE_MODEL_INCREMENTAL ?? 'claude-sonnet-5
 /** Above this much new material a "one batch" fold is a backfill (a new source, a re-fold), not an hourly delta — the full model handles it. */
 const INCREMENTAL_MAX_CHARS = 60_000
 const BATCH_CHARS = 300_000
+/** A document in the weekly report is evidence that it arrived, not material to summarise in full — this much of it is plenty. */
+const REPORT_DOC_CHARS = 12_000
 const ARTIFACTS = ['requests', 'decisions', 'roadmap'] as const
 
 const ITEM_SCHEMAS: Record<string, object> = {
@@ -122,7 +124,7 @@ const FOLD_SCHEMA: Record<string, unknown> = {
 
 const FOLD_SYSTEM = `You maintain the derived-artifact layer of a project's memory. Input: the current artifacts (YAML), the pinned facts, and a batch of newly synced raw material — Slack messages, emails, meeting notes and transcripts, documentation pages, issues and pull requests — each with a permalink. Output: only the items that are new or changed — the caller merges them into the artifacts.
 
-Email is a first-class source: a client asking for something in an email is a request; a client or lead confirming a plan in an email is a decision; scheduled work described in an email is roadmap. Treat every source the same way — what matters is who said it and whether it is an ask, a call, or a plan.
+Email is a first-class source: a client asking for something in an email is a request; a client or lead confirming a plan in an email is a decision; scheduled work described in an email is roadmap. Attached documents (the docs stream — specs, briefs, decks, handoff packages the client sent) are the same: requirements a spec states are requests from whoever sent it, a plan a brief lays out is roadmap, a choice a document records is a decision — cite the document's permalink. A long document yields a handful of substantive items, not one per paragraph. Treat every source the same way — what matters is who said it and whether it is an ask, a call, or a plan.
 
 Rules:
 - Output is a delta. Return only items that are new, or existing items whose fields the material changed (return the whole item, same id). Every existing item you leave out is kept exactly as it is — do not repeat unchanged items. Empty arrays are the normal result for a batch with nothing new.
@@ -133,7 +135,7 @@ Rules:
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
 
-const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, docs, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, effective date) — never compute or estimate weeks used or remaining. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
+const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, attached documents, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, effective date) — never compute or estimate weeks used or remaining. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
 
 interface FoldResult {
   requests: unknown[]
@@ -235,7 +237,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
       const artifactContext = ARTIFACTS.map((n) => `## ${n}\n${readRaw(root, `context/derived/${n}.yaml`)}`).join('\n')
       const sowNote = commitmentsNote(root)
       const user = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
-        .map((f) => f.text)
+        .map((f) => reportExcerpt(f))
         .join('\n\n')}`
       const report = llm === 'sdk' ? await sdkText(MODEL, REPORT_SYSTEM, user) : cliCall(MODEL, REPORT_SYSTEM, user)
       mkdirSync(join(root, 'context/derived/reports'), { recursive: true })
@@ -448,23 +450,71 @@ export interface Batch {
   files: { path: string; length: number }[]
 }
 
+/**
+ * Group files into batches under `budget` chars. A day-file is kept whole
+ * when it fits; one bigger than the budget on its own — a 400-page spec in
+ * the docs stream, a huge mail day — is split at paragraph breaks into
+ * parts, each carrying the stream heading it continues so the model still
+ * knows who sent it and what to cite. The file is recorded as consumed only
+ * in the batch holding its last part, so a fold killed midway refolds it.
+ */
 export function pack(files: Pick<StreamFile, 'day' | 'text'>[] & Partial<StreamFile>[], budget: number): Batch[] {
   const batches: Batch[] = []
   let current = ''
   let lastDay = ''
   let members: Batch['files'] = []
+  const flush = () => {
+    if (current) batches.push({ text: current, lastDay, files: members })
+    current = ''
+    members = []
+  }
   for (const f of files) {
-    if (current && current.length + f.text.length > budget) {
-      batches.push({ text: current, lastDay, files: members })
-      current = ''
-      members = []
+    if (f.text.length > budget) {
+      flush()
+      const parts = splitDoc(f.text, budget)
+      for (let i = 0; i < parts.length; i++) {
+        batches.push({ text: parts[i] + '\n\n', lastDay: f.day, files: i === parts.length - 1 ? [{ path: f.path ?? '', length: f.text.length }] : [] })
+      }
+      continue
     }
+    if (current && current.length + f.text.length > budget) flush()
     current += f.text + '\n\n'
     lastDay = f.day
     members.push({ path: f.path ?? '', length: f.text.length })
   }
-  if (current) batches.push({ text: current, lastDay, files: members })
+  flush()
   return batches
+}
+
+/** Cut a stream file into ≤budget parts at blank lines; parts after the first restate the heading they continue. */
+export function splitDoc(text: string, budget: number): string[] {
+  const parts: string[] = []
+  let rest = text
+  let heading = ''
+  while (rest.length > budget) {
+    let cut = rest.lastIndexOf('\n\n', budget)
+    if (cut < budget / 4) cut = rest.lastIndexOf('\n', budget)
+    if (cut < budget / 4) cut = budget
+    const part = rest.slice(0, cut)
+    heading = lastHeading(part) ?? heading
+    parts.push(part)
+    rest = rest.slice(cut).replace(/^\n+/, '')
+    if (rest) rest = `${heading ? `${heading}\n\n` : ''}(…continued)\n\n${rest}`
+  }
+  if (rest) parts.push(rest)
+  return parts
+}
+
+/** The last stream heading block in a part: `### who — when`, its id comment, and the permalink line if any. */
+function lastHeading(part: string): string | undefined {
+  const m = [...part.matchAll(/^### [^\n]+\n<!-- id: [^\n]*-->\n(?:\[permalink\]\([^\n]*\)\n)?/gm)].pop()
+  return m?.[0].trimEnd()
+}
+
+/** What the weekly report sees of a stream file: everything, except documents beyond REPORT_DOC_CHARS. */
+export function reportExcerpt(f: StreamFile, limit = REPORT_DOC_CHARS): string {
+  if (!f.path.startsWith('context/streams/docs/') || f.text.length <= limit) return f.text
+  return `${f.text.slice(0, limit)}\n\n[… document truncated for the report: ${(f.text.length - limit).toLocaleString()} more characters in ${f.path}]`
 }
 
 function readYamlList(root: string, rel: string): unknown[] {

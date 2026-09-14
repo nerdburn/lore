@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -72,6 +72,10 @@ history, say so, and never present it as current state.
      email between the team and the client (subject, from/to/cc, body with
      quoted history trimmed, attachment names); replies are threaded, and
      `mailboxes` in the id comment says whose inboxes it was found in
+   - `context/streams/docs/<title-slug>/YYYY-MM-DD.md` — a document someone
+     attached with `lore doc add` / `lore_doc_add` (a spec, brief, deck,
+     handoff package), the sender as author and its link as permalink; a
+     re-added, changed document is a newer entry in the same folder
    Search with `lore_grep`, read with `lore_read`.
 
 Every doc carries an id comment with machine ids (Slack user/channel ids,
@@ -158,3 +162,31 @@ that, the document text as `text`. Call `lore_sow_add` with that plus the
 numbers the user or the document states: `weeks`, `start`, `end`, and
 `signed`/`source`/`scope` when known.
 Never estimate weeks or dates; ask. Re-adding the same `name` updates it.
+
+## Adding a document — including a link someone shares with you in Slack
+
+A Google Docs, Slides, Sheets, or Drive link that someone hands you *for the
+project* is a document to file: "here's the spec", "the client sent this
+brief", "add this to lore", a link dropped in a DM or a thread you are in
+with a line of context. Call `lore_doc_add` with the link as `url` — lore
+reads it itself through the Workspace service account (Docs, Slides, Sheets,
+Drive-hosted PDFs and text), so do not open it, paste its text, or ask for
+sharing to be changed. If lore cannot read it (the person it reads as has
+no access), report that error plainly. Failing a link, pass the text as
+`text` with a `title`.
+
+- `from` is who sent or authored the document — the person who shared it,
+  unless they say it came from someone else ("Julie sent this"); the title
+  defaults to the Google Doc's name.
+- `date` only when it arrived on a day other than today.
+- Do not file a link merely mentioned in passing in a channel conversation
+  you are reading, and never one from a synced stream on your own
+  initiative — someone shares it *with you*, you add it.
+- Re-adding the same link is safe: identical content is a no-op, an edited
+  document lands as a new version.
+
+Reply with what happened: the title, roughly how long it is, and that it is
+searchable now and will be folded into requests/decisions/roadmap on the
+next extract (`lore_sync_now` with `fold: true` if they want it sooner). The
+document is raw material, never authoritative — a commitment goes through
+`lore_sow_add`, a fact through `lore_remember`.
