@@ -169,6 +169,18 @@ test('work move / set / rank: every change needs a reason and lands in history; 
   assert.deepEqual(set.result.external, { system: 'jira', id: 'jira:ACM-7', key: 'ACM-7', url: '', status: 'unknown', category: 'unknown' })
   assert.deepEqual(set.result.history[1].change, { external: [null, 'jira:ACM-7'], priority: [null, 'P1'], assignee: [null, 'cory'], labels: [[], ['builder']] })
   await assert.rejects(captureConsole(() => workSet(root, 'ACM-2', { priority: 'P1' }, { reason: 'same' }, opts(root))), /nothing changed/)
+  const evidence = await captureConsole(() =>
+    workSet(root, 'ACM-2', { sources: ['https://notion.so/transfer-checklist', 'https://notion.so/transfer-checklist'] }, { reason: 'the checklist Priya sent' }, opts(root)),
+  )
+  assert.deepEqual(evidence.result.sources, ['https://notion.so/transfer-checklist'], 'a source on its own is a change: it lands on the item')
+  assert.deepEqual(evidence.result.history.at(-1)!.change, { sources: [[], ['https://notion.so/transfer-checklist']] })
+  assert.deepEqual(evidence.result.history.at(-1)!.sources, ['https://notion.so/transfer-checklist'])
+  assert.match(evidence.out, /set ACM-2 sources \(the checklist Priya sent\)/)
+  await assert.rejects(
+    captureConsole(() => workSet(root, 'ACM-2', { sources: ['https://notion.so/transfer-checklist'] }, { reason: 'again' }, opts(root))),
+    /nothing changed/,
+    'an already-attached source is not a change',
+  )
   await assert.rejects(captureConsole(() => workSet(root, 'ACM-1', { external: 'jira:ACM-7' }, { reason: 'dup' }, opts(root))), /already linked to ACM-2/)
 
   const ranked = await captureConsole(() => workRank(root, 'ACM-3', { top: true }, { reason: 'ship first' }, opts(root)))

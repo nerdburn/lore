@@ -288,7 +288,11 @@ export function workSet(cwd: string, key: string, fields: WorkSetInput, input: C
         if (ext.url && !item.sources.includes(ext.url)) item.sources.push(ext.url)
       }
     }
-    const sources = [...(cleanList(input.sources) ?? []), ...(cleanList(fields.sources) ?? [])]
+    const sources = [...new Set([...(cleanList(input.sources) ?? []), ...(cleanList(fields.sources) ?? [])])]
+    // Attaching evidence is a change in its own right — a link with no other
+    // field alongside it must still land on the item (and in its history).
+    const added = sources.filter((s) => !item.sources.includes(s))
+    if (added.length) extra.sources = [item.sources.slice(), [...item.sources, ...added]]
     const change = applyChange(
       item,
       {
@@ -300,7 +304,7 @@ export function workSet(cwd: string, key: string, fields: WorkSetInput, input: C
       { at, by: actor, via: opts.via ?? 'cli', reason, sources: sources.length ? sources : undefined },
       extra,
     )
-    if (Object.keys(change).length === 0) throw new Error(`work set: nothing changed on ${item.key}`)
+    if (Object.keys(change).length === 0) throw new Error(`work set: nothing changed on ${item.key} (every field already has that value; every source is already attached)`)
     return { item, message: `set ${item.key} ${Object.keys(change).join(', ')} (${reason})`, source: sources[0] }
   })
 }
