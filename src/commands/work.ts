@@ -80,17 +80,54 @@ function mutate(
   const { item, message, source } = fn(items, prefix, actor, at)
   const rel = writeWorkItems(ctx.root, prefix, items)
   appendAudit(ctx.root, { at, action: 'work', actor, via, id: item.key, ...(source ? { source } : {}) })
-  if (ctx.mode === 'cache') {
-    git(ctx.root, 'add', rel, AUDIT_FILE)
-    git(ctx.root, 'commit', '--quiet', '-m', `lore: work ${message}`)
+  commitWork(ctx, rel, `lore: work ${message}`)
+  if (via === 'cli') console.log(`${message}${ctx.repo ? ` → ${ctx.repo}` : ''}`)
+  return item
+}
+
+/**
+ * Commit and push a tracker change in cache mode. The host's timer may have
+ * pushed a sync commit meanwhile, so a rejected push is rebased once and
+ * retried before giving up — a ticket move must not be lost to timing.
+ */
+export function commitWork(ctx: ResolvedContext, rel: string, message: string): void {
+  if (ctx.mode !== 'cache') return
+  git(ctx.root, 'add', rel, AUDIT_FILE)
+  git(ctx.root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', message)
+  try {
+    git(ctx.root, 'push', '--quiet')
+  } catch {
     try {
+      git(ctx.root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'pull', '--rebase', '--quiet')
       git(ctx.root, 'push', '--quiet')
     } catch {
       throw new Error(`wrote ${rel} and committed to the cache, but push to ${ctx.repo} failed — check access, then run \`git -C ${ctx.root} push\``)
     }
   }
-  if (via === 'cli') console.log(`${message}${ctx.repo ? ` → ${ctx.repo}` : ''}`)
-  return item
+}
+
+/**
+ * The batch form of `mutate` for commands that touch several tickets in one
+ * pass (`work push`): one write, one audit line per touched ticket, one
+ * commit. `fn` may call out (Jira) between reading and returning.
+ */
+export async function mutateBatch(
+  cwd: string,
+  opts: WorkWriteOptions,
+  noun: string,
+  fn: (items: LoreWorkItem[], prefix: string, actor: string, at: string, ctx: ResolvedContext) => Promise<{ touched: { key: string; source?: string }[]; message: string }>,
+): Promise<void> {
+  const ctx = resolveContext(cwd, opts)
+  const via = opts.via ?? 'cli'
+  const actor = authorizeWrite(ctx, opts, noun)
+  const at = opts.at ?? new Date().toISOString()
+  const prefix = workPrefix(ctx.config)
+  const items = readWorkItems(ctx.root, prefix)
+  const { touched, message } = await fn(items, prefix, actor, at, ctx)
+  if (touched.length === 0) return
+  const rel = writeWorkItems(ctx.root, prefix, items)
+  for (const t of touched) appendAudit(ctx.root, { at, action: 'work', actor, via, id: t.key, ...(t.source ? { source: t.source } : {}) })
+  commitWork(ctx, rel, `lore: work ${message}`)
 }
 
 function requireStatus(s: string | undefined): WorkStatus | undefined {

@@ -387,6 +387,28 @@ Statuses: `todo`, `in_progress`, `blocked`, `done`, `archived`. Priorities
 `P1`–`P3`; file order is rank. Tickets deliberately carry no estimates or
 SOW weeks — they are delivery tracking, not capacity burn.
 
+**Pushing to Jira.** Lore's state flows back out only when someone asks:
+
+```sh
+lore work push --all --dry-run          # what would change in Jira, changing nothing
+lore work push JNT-3 JNT-7              # these tickets
+lore work push --all                    # every ticket that differs from Jira
+```
+
+A ticket linked to a Jira issue whose status disagrees with lore's gets the
+matching workflow transition (chosen by status category, so "In Review"
+still counts as in progress and a "Blocked" transition is used when the
+workflow has one). An open ticket with no Jira issue gets one created in the
+client's project and scoped onto their board — the board filter's clauses
+(`"Client Project" = Jointly`) are resolved to the create screen's field and
+option ids — then linked back as `external`. `sources.jira.push` in
+`lore.json` overrides the project, issue type, and scoping fields when
+inference cannot. Archived tickets and done tickets without an issue are
+never pushed. Every push is a history entry on the ticket and an audit line.
+Jira is reachable only from the lore host, so from a laptop or agent the
+command runs itself there over SSH (like `lore refresh --trigger`) and pulls
+the result back. The timer never pushes.
+
 ### Commitments — statements of work
 
 An SOW in lore is a *capacity commitment*: how many human-weeks were sold,
@@ -473,7 +495,8 @@ removing @lore from the Slack channels.
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
 `lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`,
 `lore_doc_add`, and the tracker verbs `lore_work_add`, `lore_work_promote`,
-`lore_work_move`, `lore_work_set` (each requires a reason). `lore_recall`
+`lore_work_move`, `lore_work_set` (each requires a reason), and
+`lore_work_push` (write ticket state to Jira, on request only). `lore_recall`
 returns exactly what the CLI does — pins, every derived artifact, the lore
 tracker and the external work tables, recent reports, and sync/extract
 timestamps so an agent can say how fresh its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
@@ -544,6 +567,7 @@ cites sources, never pins uninvited); run them with
 | `lore work set <key> [--title] [--priority] [--assignee] [--labels] [--source] [--external] --reason why` | change fields or link a tracker issue |
 | `lore work rank <key> (--above key \| --top \| --bottom) --reason why` | move in the priority order |
 | `lore work list [--all] [--json]` / `lore work show <key> [--json]` | open tickets in rank order / one ticket with its history |
+| `lore work push [keys...] [--all] [--dry-run] [--json] [--by who]` | write lore's ticket state to Jira: transition linked issues, create issues for open unlinked tickets; runs on the host |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore sow add <file-or-gdoc-link> --name n --weeks n --start d [--end d] [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
 | `lore sow list [--json]` | attached SOWs |
@@ -614,8 +638,8 @@ Code plugin with skills and evals, client lifecycle (`archive`), statements of w
 commitments layer, fail-safe sync with per-source health, secret scrubbing,
 and an audit log. Next (see
 [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): contact
-identity resolution, `lore push` (write lore's tracker state back to
-Jira/GitHub), client-scoped MCP tools, remote MCP.
+identity resolution, GitHub write-back (Jira has `lore work push`),
+client-scoped MCP tools, remote MCP.
 
 ## Principles
 

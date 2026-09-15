@@ -11,6 +11,7 @@ import { remember } from './remember.js'
 import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
 import { workAdd, workMove, workPromote, workRank, workSet } from './work.js'
+import { workPush } from './work-push.js'
 import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -34,6 +35,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
+  { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones (explicit only)' },
 ]
 
 export interface McpCommandOptions extends ResolveOptions {
@@ -318,6 +320,24 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       }
       if (notes.length === 0) throw new Error('lore_work_set: give at least one field to change')
       return text(notes.join('; '))
+    },
+  )
+
+  server.registerTool(
+    'lore_work_push',
+    {
+      description: archived
+        ? unavailable
+        : 'Write lore\'s tracker state to Jira for the given tickets: a ticket linked to a Jira issue whose status disagrees with lore\'s gets the matching workflow transition; an open ticket with no Jira issue gets one created on the client\'s board and linked back. Only when a person asks ("push this to Jira", "create the Jira ticket for JNT-3", "sync Jira"); never on your own initiative. Use dry_run first when the person is unsure what will change. Runs on the lore host; takes a few seconds per ticket.',
+      inputSchema: {
+        keys: z.array(z.string().min(1)).optional().describe('ticket keys, e.g. ["JNT-3"] — or all: true'),
+        all: z.boolean().optional().describe('every ticket that differs from Jira'),
+        dry_run: z.boolean().optional().describe('report what would change without changing Jira'),
+      },
+    },
+    async ({ keys, all, dry_run }) => {
+      const r = await workPush(rememberOpts.cwd, { keys, all, dryRun: dry_run }, workVia)
+      return text(r)
     },
   )
 

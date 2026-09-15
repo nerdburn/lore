@@ -26,7 +26,7 @@ async function connect(root: string) {
   return { client, call, close: () => Promise.all([client.close(), server.close()]) }
 }
 
-test('mcp: exposes the eleven tools', async () => {
+test('mcp: exposes the twelve tools', async () => {
   const s = await connect(fullFixtureRepo())
   const tools = (await s.client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
@@ -40,6 +40,7 @@ test('mcp: exposes the eleven tools', async () => {
     'lore_work_add',
     'lore_work_move',
     'lore_work_promote',
+    'lore_work_push',
     'lore_work_set',
   ])
   // The static table behind `lore mcp --list-tools` is what provisioning

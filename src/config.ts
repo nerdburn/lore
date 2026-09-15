@@ -111,6 +111,21 @@ export const sourceSchemas = {
       api_base: z.string().url().optional(),
       /** Default: issues + comments. */
       include: z.array(z.enum(['issues', 'comments'])).optional(),
+      /**
+       * Where `lore work push` creates issues for lore tickets that have none.
+       * Defaults: `project` = the project the mirrored issues live in,
+       * `issuetype` = "Task", `fields` = the board filter's equality clauses
+       * (e.g. "Client Project" = Jointly) resolved against the create screen.
+       * Set `fields` explicitly (raw Jira field payloads, e.g.
+       * {"customfield_10034": {"id": "10434"}}) when inference can't.
+       */
+      push: z
+        .object({
+          project: z.string().regex(/^[A-Z][A-Z0-9_]+$/).optional(),
+          issuetype: z.string().optional(),
+          fields: z.record(z.string(), z.unknown()).optional(),
+        })
+        .optional(),
       /** Days re-read on every sync (default 1). */
       overlap_days: z.number().min(0).optional(),
     })

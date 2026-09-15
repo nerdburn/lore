@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add, lore_work_add/promote/move/set) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -55,7 +55,8 @@ history, say so, and never present it as current state.
    from the lore ticket and cite the external issue as its source. A
    ticket with `drift: true` is one where lore and the tracker disagree
    (lore says done, Jira still In Progress, or the reverse): say both, and
-   that lore's status carries the reason. Do not infer delivery state from
+   that lore's status carries the reason; offer `lore_work_push` to bring
+   Jira in line, but only run it when asked. Do not infer delivery state from
    Slack or from `derived` when a ticket covers the work.
 3. **Derived artifacts** (`derived`: `requests`, `decisions`, `roadmap`,
    `contradictions`) — LLM-extracted from the raw material; every item cites
@@ -193,6 +194,17 @@ not a paraphrase of the command.
 - **`lore_work_set`** — priority, assignee, labels, title, evidence links,
   the linked tracker issue, or rank (`rank_above`: a key, "top", or
   "bottom"). Reprioritise only on a decision-maker's word, and cite it.
+
+- **`lore_work_push`** — write lore's state out to Jira, **only when a
+  person asks** ("push this to Jira", "create the Jira ticket for JNT-3",
+  "sync Jira with lore"). A linked ticket whose status differs gets the
+  matching Jira transition; an open ticket with no Jira issue gets one
+  created on the client's board and linked back. Pass `keys` for specific
+  tickets or `all: true`; use `dry_run: true` first when the person is
+  unsure what will change, and read back the result — it lists what was
+  created, moved, skipped and why. It runs on the lore host and takes a few
+  seconds per ticket. Never push on your own initiative, and never to
+  "fix" `drift` you noticed — report drift, offer the push.
 
 Tickets carry no estimates or SOW weeks — never add hours or weeks to a
 ticket, and never derive SOW burn from tickets. Reply with the key and what

@@ -74,7 +74,7 @@ export const jira: Connector = {
     const includeComments = !((ctx.config.include as string[] | undefined)?.length) || (ctx.config.include as string[]).includes('comments')
     const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
 
-    const api = jiraClient(apiBase, email && token ? { email, token } : undefined)
+    const api: JiraApi = jiraClient(apiBase, email && token ? { email, token } : undefined)
     const cursor = { ...(ctx.cursor as JiraCursor) }
     const docs: Doc[] = []
     const errors: string[] = []
@@ -388,20 +388,52 @@ function numberOr(value: unknown, fallback: number): number {
 
 // ---- API client ----
 
-class JiraError extends Error {
+export class JiraError extends Error {
   constructor(public status: number, message: string) {
     super(message)
   }
 }
 
-interface Api {
+export interface JiraTransition {
+  id: string
+  name: string
+  to: { name: string; statusCategory: { key: 'new' | 'indeterminate' | 'done'; name?: string } }
+}
+
+export interface JiraCreateField {
+  fieldId: string
+  name: string
+  required?: boolean
+  allowedValues?: { id?: string; value?: string; name?: string; key?: string }[]
+}
+
+export interface JiraApi {
   search(jql: string): Promise<JiraIssue[]>
   comments(key: string): Promise<JiraComment[]>
   /** Board name + the JQL of its saved filter (Jira Agile API). */
   board(id: number): Promise<{ name: string; jql: string }>
+  /** Workflow transitions available from the issue's current status. */
+  transitions(key: string): Promise<JiraTransition[]>
+  transition(key: string, id: string): Promise<void>
+  /** Issue types a project accepts (create-meta). */
+  issueTypes(projectKey: string): Promise<{ id: string; name: string; subtask?: boolean }[]>
+  /** The fields (with allowed values) the create screen has for one issue type. */
+  createFields(projectKey: string, issueTypeId: string): Promise<JiraCreateField[]>
+  createIssue(fields: Record<string, unknown>): Promise<{ id: string; key: string }>
 }
 
-function jiraClient(apiBase: string, basic: { email: string; token: string } | undefined): Api {
+/** Build a client from a resolved `sources.jira` config (env refs already resolved). */
+export function jiraApiFromConfig(cfg: Record<string, unknown>): { api: JiraApi; site: string } {
+  const email = cfg.email as string | undefined
+  const token = cfg.token as string | undefined
+  const site = ((cfg.site as string | undefined) ?? '').replace(/\/$/, '')
+  const apiBase = ((cfg.api_base as string | undefined) ?? (site ? `${site}/rest/api/3` : '')).replace(/\/$/, '')
+  if (!apiBase) throw new Error('jira: set site (https://x.atlassian.net) or api_base')
+  if (!(email && token) && cfg.api_base === undefined) throw new Error('jira: no credentials (set email + token, or api_base to a proxy that injects them)')
+  return { api: jiraClient(apiBase, email && token ? { email, token } : undefined), site }
+}
+
+export function jiraClient(apiBase: string, basic: { email: string; token: string } | undefined): JiraApi {
   const headers: Record<string, string> = { Accept: 'application/json', 'content-type': 'application/json' }
   if (basic) headers.Authorization = `Basic ${Buffer.from(`${basic.email}:${basic.token}`).toString('base64')}`
   async function request<T>(path: string, init: RequestInit = {}, base = apiBase): Promise<T> {
@@ -413,6 +445,7 @@ function jiraClient(apiBase: string, basic: { email: string; token: string } | u
         continue
       }
       if (!res.ok) throw new JiraError(res.status, `jira ${res.status} ${path.split('?')[0]}: ${(await res.text()).slice(0, 200)}`)
+      if (res.status === 204) return undefined as T
       return (await res.json()) as T
     }
   }
@@ -438,6 +471,26 @@ function jiraClient(apiBase: string, basic: { email: string; token: string } | u
         nextPageToken = page.isLast === false ? page.nextPageToken : undefined
       } while (nextPageToken)
       return out
+    },
+    async transitions(key) {
+      const r = await request<{ transitions?: JiraTransition[] }>(`/issue/${key}/transitions`)
+      return r.transitions ?? []
+    },
+    async transition(key, id) {
+      await request<unknown>(`/issue/${key}/transitions`, { method: 'POST', body: JSON.stringify({ transition: { id } }) })
+    },
+    async issueTypes(projectKey) {
+      const r = await request<{ issueTypes?: { id: string; name: string; subtask?: boolean }[]; values?: { id: string; name: string; subtask?: boolean }[] }>(
+        `/issue/createmeta/${projectKey}/issuetypes?maxResults=100`,
+      )
+      return r.issueTypes ?? r.values ?? []
+    },
+    async createFields(projectKey, issueTypeId) {
+      const r = await request<{ fields?: JiraCreateField[]; values?: JiraCreateField[] }>(`/issue/createmeta/${projectKey}/issuetypes/${issueTypeId}?maxResults=200`)
+      return r.fields ?? r.values ?? []
+    },
+    async createIssue(fields) {
+      return request<{ id: string; key: string }>('/issue', { method: 'POST', body: JSON.stringify({ fields }) })
     },
     async comments(key) {
       const out: JiraComment[] = []

@@ -39,7 +39,7 @@ reviews tickets against the conversation and may move them with high
 confidence and a cited source; people and agents move them through
 `lore work` / `lore_work_*`; every change is in the ticket's history. The
 external tables below remain as snapshots of what the tracker says.
-`lore push` (write-back from lore to the tracker) is the open item. The
+`lore work push` writes lore's state to Jira (transitions + issue creation, explicit only); GitHub write-back is the open item. The
 original design, kept for context:
 
 Each project can have a canonical work tracker, but it is not required.

@@ -21,6 +21,7 @@ import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
 import { docAdd, docList } from './commands/doc.js'
 import { workAdd, workList, workMove, workPromote, workRank, workSet, workShow } from './commands/work.js'
+import { printPush, workPush } from './commands/work-push.js'
 import { exportGoogleDoc } from './gdoc.js'
 
 function splitList(value: unknown): string[] | undefined {
@@ -275,6 +276,20 @@ contextual(
 ).action((key: string, o) => {
   workRank(root, key, { above: o.above, top: o.top, bottom: o.bottom }, { reason: o.reason }, o)
 })
+contextual(
+  work
+    .command('push')
+    .description('write lore\'s tracker state to Jira: transition linked issues that disagree with lore, create issues for open tickets that have none (explicit only — never from the timer; runs on the lore host)')
+    .argument('[keys...]', 'ticket keys, e.g. JNT-3 JNT-7')
+    .option('--all', 'every ticket that differs from Jira')
+    .option('--dry-run', 'show what would change, change nothing')
+    .option('--json', 'machine-readable result')
+    .option('--by <who>', 'who is pushing (defaults to OS username)'),
+).action(async (keys: string[], o) => {
+  const r = await workPush(root, { keys, all: o.all, dryRun: o.dryRun }, o)
+  if (o.json) console.log(JSON.stringify(r, null, 2))
+  else printPush(r)
+})
 contextual(work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--json', 'machine-readable output')).action((o) => void workList(root, o))
 contextual(work.command('show').description('one item with its full history').argument('<key>').option('--json', 'machine-readable output')).action((key: string, o) => void workShow(root, key, o))
 
@@ -327,7 +342,7 @@ contextual(
 contextual(
   program
     .command('mcp')
-    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_work_*)')
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_work_*/lore_work_push)')
     .option('--list-tools', 'print the tool table as JSON ({name, writes, summary}) and exit — for provisioning scripts building allow lists; needs no context or network'),
 ).action((opts) => mcp(root, opts))
 
