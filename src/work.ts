@@ -273,10 +273,10 @@ function externalDone(ext: Pick<ExternalRef, 'system' | 'category'>): boolean {
   return ext.system === 'github' ? ext.category === 'closed' : /^done$/i.test(ext.category)
 }
 
-/** Tracker state → lore status. A "blocked" label wins while the item is open. */
-export function mapExternalStatus(ext: Pick<ExternalRef, 'system' | 'category'>, labels: string[]): WorkStatus {
+/** Tracker state → lore status. A status named "Blocked" or a "blocked" label wins while the item is open. */
+export function mapExternalStatus(ext: Pick<ExternalRef, 'system' | 'category' | 'status'>, labels: string[]): WorkStatus {
   if (externalDone(ext)) return 'done'
-  if (labels.some((l) => /^blocked$/i.test(l))) return 'blocked'
+  if (/block/i.test(ext.status) || labels.some((l) => /^blocked$/i.test(l))) return 'blocked'
   if (ext.system === 'jira' && /in progress/i.test(ext.category)) return 'in_progress'
   return 'todo'
 }
@@ -390,10 +390,15 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
     const extra: Record<string, unknown> = {}
     const ext = known.external!
     const moved = ext.status !== issue.ref.status || ext.category !== issue.ref.category
+    const mapped = mapExternalStatus(issue.ref, issue.labels)
     if (moved) {
       extra.external_status = [ext.status, issue.ref.status]
-      const mapped = mapExternalStatus(issue.ref, issue.labels)
       if (mapped !== known.status && known.status !== 'archived') fields.status = mapped
+    } else if (mapped !== known.status && known.history.every((h) => h.via === 'sync')) {
+      // Lore has never formed its own opinion on this ticket (only sync has
+      // touched it), so it simply follows the tracker — this is how a
+      // mapping fix reaches tickets mirrored before it.
+      fields.status = mapped
     }
     if (issue.title !== known.title && !lastHumanChange(known, 'title')) fields.title = issue.title
     if ((issue.assignee ?? undefined) !== (known.assignee ?? undefined) && !lastHumanChange(known, 'assignee')) fields.assignee = issue.assignee

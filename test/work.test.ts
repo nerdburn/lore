@@ -265,6 +265,30 @@ test('work mirror: a tracker move is one history event that moves lore once; fol
   assert.deepEqual(archived.history.at(-1)!.change, { external_status: ['Selected for Development', 'Done'] })
 })
 
+test('work mirror: a status named Blocked maps to blocked; a ticket only sync has touched follows a corrected mapping without a tracker move', () => {
+  const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('Blocked', 'In Progress') })
+  mirrorExternal(root, ACME, AT)
+  assert.equal(readWorkItems(root, 'ACM')[0].status, 'blocked')
+  // Simulate a ticket mirrored by an older build that recorded in_progress: same tracker state, no human/fold history.
+  const items = readWorkItems(root, 'ACM')
+  items[0].status = 'in_progress'
+  writeWorkItems(root, 'ACM', items)
+  const m = mirrorExternal(root, ACME, '2026-09-15T11:00:00.000Z')
+  assert.equal(m.updated, 1)
+  const fixed = readWorkItems(root, 'ACM')[0]
+  assert.equal(fixed.status, 'blocked')
+  assert.deepEqual(fixed.history.at(-1)!.change, { status: ['in_progress', 'blocked'] })
+  assert.equal(fixed.history.at(-1)!.reason, 'Jira ACM-7 updated')
+  // Once a person has weighed in, the tracker no longer overrides without a move.
+  items.length = 0
+  const again = readWorkItems(root, 'ACM')
+  again[0].status = 'in_progress'
+  again[0].history.push({ at: '2026-09-15T12:00:00.000Z', by: 'shawn', via: 'cli', change: { status: ['blocked', 'in_progress'] }, reason: 'unblocked in the call' })
+  writeWorkItems(root, 'ACM', again)
+  assert.equal(mirrorExternal(root, ACME, '2026-09-15T13:00:00.000Z').updated, 0)
+  assert.equal(readWorkItems(root, 'ACM')[0].status, 'in_progress')
+})
+
 test('work fold: guardrails — high confidence with a source only, never archived, never over a newer human call', () => {
   const base = (): LoreWorkItem[] => [
     { key: 'ACM-1', title: 'a', status: 'todo', state: 'open', labels: [], sources: [], created: '2026-09-01', updated: '2026-09-01', history: [] },
