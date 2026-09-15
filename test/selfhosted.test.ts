@@ -95,6 +95,8 @@ test('setup: buildSources writes proxy bases (no tokens) when proxies are config
   })
   assert.deepEqual(buildSources(['#acme'], [], undefined), { slack: { channels: ['#acme'], token: 'env:SLACK_TOKEN' } })
   assert.deepEqual(buildSources(['#acme'], [], undefined, ['Acme', 'Acme Ops']).granola, { folders: ['Acme', 'Acme Ops'] })
+  assert.deepEqual(buildSources([], [], undefined, [], [], [], undefined, [], undefined, ['https://www.figma.com/design/abc12345/App']).figma, { files: ['https://www.figma.com/design/abc12345/App'], token: 'env:FIGMA_TOKEN' })
+  assert.deepEqual(buildSources([], [], { figma: 'https://figma.int.exe.xyz/v1' }, [], [], [], undefined, [], undefined, ['abc12345']).figma, { files: ['abc12345'], api_base: 'https://figma.int.exe.xyz/v1' })
   assert.deepEqual(buildSources(['#acme'], [], undefined, [], ['abc']).notion, { roots: ['abc'], token: 'env:NOTION_TOKEN' })
   assert.deepEqual(buildSources(['#acme'], [], { notion: 'https://notion.int.exe.xyz/v1' }, [], ['abc']).notion, { roots: ['abc'], api_base: 'https://notion.int.exe.xyz/v1' })
   assert.deepEqual(buildSources(['#acme'], [], { jira: 'https://jira.int.exe.xyz/rest/api/3' }, [], [], ['ACM'], 'https://acme.atlassian.net').jira, { projects: ['ACM'], api_base: 'https://jira.int.exe.xyz/rest/api/3', site: 'https://acme.atlassian.net' })

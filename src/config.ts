@@ -96,6 +96,22 @@ export const sourceSchemas = {
       settle_minutes: z.number().min(0).optional(),
     })
     .refine((n) => n.token || n.api_base, { message: 'notion needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
+  figma: baseSource
+    .extend({
+      /** File URLs or keys — design files, FigJam boards, Slides decks. */
+      files: z.array(z.string().min(1)).optional(),
+      /** Figma project ids; every file in them is in scope. */
+      projects: z.array(z.union([z.string().min(1), z.number().int().positive()])).optional(),
+      /** Personal access token (env:FIGMA_TOKEN), sent as X-Figma-Token; optional when api_base is a proxy that injects it. */
+      token: envRef.optional(),
+      /** REST base (default https://api.figma.com/v1); a proxy URL when the token lives off-host. */
+      api_base: z.string().url().optional(),
+      /** Default: frames + comments. */
+      include: z.array(z.enum(['frames', 'comments'])).optional(),
+      overlap_days: z.number().min(0).optional(),
+    })
+    .refine((f) => (f.files?.length ?? 0) > 0 || (f.projects?.length ?? 0) > 0, { message: 'figma needs files and/or projects', path: ['files'] })
+    .refine((f) => f.token || f.api_base, { message: 'figma needs token (env:FIGMA_TOKEN) or an api_base proxy that injects it', path: ['token'] }),
   jira: baseSource
     .extend({
       /** Project keys, e.g. ["JNT"]. */

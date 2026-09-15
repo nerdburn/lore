@@ -14,6 +14,7 @@ to an agent with the lore plugin and it will walk you through this.
 | GitHub repos, `owner/repo` | `inputlogic/jointly` | `sources.github.repos` + one exe.dev integration each |
 | Granola folder title | `Jointly` | `sources.granola.folders` |
 | Notion root page(s) or database(s) | the client's top-level Notion page URL | `sources.notion.roots` |
+| Figma file(s), if the client has designs | `https://www.figma.com/design/<key>/…` (design, FigJam, or Slides) | `sources.figma.files` |
 | Jira project key(s), if the client tracks work in Jira | `ACM` + `https://acme.atlassian.net` | `sources.jira.projects` |
 | Email — whose inboxes, if the client works by email (no Slack) | `all` (every Workspace mailbox), or `kaity@…, shawn@…` (default: team-side contacts) | `sources.gmail.users` |
 | Backfill window | 3 months | first sync only; after that everything is incremental |
@@ -56,6 +57,17 @@ proxy. Per client: open the client's top-level Notion page (or teamspace
 root) → `···` → Connections → add **lore**. Everything beneath it becomes
 readable. Copy that page's URL for `--notion` below.
 
+## 3b′. Figma — share the files with the token's account
+
+Once per workspace a personal access token (any teammate with view access to
+the client's designs; Figma → Settings → Security → Personal access tokens,
+read-only `file_content:read` + `file_comments:read`) lives as the `figma`
+exe.dev http-proxy (`--header "X-Figma-Token:figd_…"` to
+`https://api.figma.com`). Per client: make sure that account can open the
+file(s), copy the file URL(s) for `--figma` below. Design files, FigJam
+boards and Slides decks all work; a Figma *project* id in
+`sources.figma.projects` takes every file in it.
+
 ## 3c. Jira — nothing per project once the site is connected
 
 One Atlassian API token per Jira site lives as the `jira` exe.dev proxy
@@ -85,13 +97,14 @@ From inside the client's code repo (links it, derives the name):
 cd ~/Sites/<client>
 lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
            --notion "https://www.notion.so/inputlogic/Acme-<id>" \
+           --figma "https://www.figma.com/design/<key>/Acme-App" \
            --jira "ACM" --jira-site https://acme.atlassian.net \
            --client "Acme" --domains "acme.com" --backfill 3 --yes
 ```
 
 From anywhere, with an explicit name and no linking: `lore setup lore-acme --channels …`.
 A client without Slack: drop `--channels` and pass `--gmail` (plus
-`--granola`/`--notion` as they apply); the name then comes from `--client`.
+`--granola`/`--notion`/`--figma` as they apply); the name then comes from `--client`.
 
 What it does: creates the bare repo on the host, scaffolds `lore.json` with
 proxy-based sources (no tokens anywhere), pushes, and — when run inside a
@@ -213,6 +226,7 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 - `✗ github: repo … not found or token lacks access` — add the exe.dev GitHub integration for that repo (step 2).
 - `✗ granola: folder "X" not found` — match the folder title exactly, or pass the folder id.
 - Notion pages missing — the integration hasn't been connected to that page (or an ancestor); Notion → page `···` → Connections.
+- `✗ figma: file X: figma 403/404` — the token's account can't open that file (or the key is wrong); share the file with that account.
 - `✗ jira: project X: jira 400 …` — wrong key, or the API token's account can't see that project.
 - `✗ gmail: mailbox x@…: … unauthorized_client` — domain-wide delegation isn't granted for the service account (Admin console → Security → API controls), or x@… isn't a Workspace user. `gmail: no service account key` — the key JSON is missing from `~/.lore/gmail-sa.json` on the host.
 - Gmail synced 0 docs on a busy client — check `client.domains`: the search is from/to/cc those domains (and client-side contacts) in each mailbox, nothing else.
@@ -223,7 +237,7 @@ derived (LLM, cited) → reports → raw streams. Meetings are evidence, not dec
 ## One-time prerequisites (already done for this workspace)
 
 - `lore-host` VM with the timer (`deploy/exe/setup.sh`), LLM via `llm.int.exe.xyz`
-- exe.dev integrations on tag `lore`: `slack` (bot token), `notion` (internal integration token, proxy to https://api.notion.com), `jira` (Basic email:token, proxy to the Atlassian site — when a client uses Jira), GitHub App connected to the org
+- exe.dev integrations on tag `lore`: `slack` (bot token), `notion` (internal integration token, proxy to https://api.notion.com), `figma` (personal access token as X-Figma-Token, proxy to https://api.figma.com), `jira` (Basic email:token, proxy to the Atlassian site — when a client uses Jira), GitHub App connected to the org
 - `lore auth granola` run once on the host
 - For email: a Google Cloud service account (Gmail API enabled) with domain-wide delegation for `gmail.readonly` (plus `admin.directory.user.readonly` for `users: "all"`) granted in the Workspace Admin console, its key JSON at `~/.lore/gmail-sa.json` on the host — see `docs/DEPLOY_EXE.md`
 - Laptop `~/.lore/config.json` with `remote` and `proxy` — see `docs/DEPLOY_EXE.md`

@@ -63,6 +63,7 @@ program
   .option('--notion <roots>', 'comma-separated Notion page/database ids or URLs scoping this client\'s docs')
   .option('--jira <scopes>', 'comma-separated Jira project keys and/or board:<id> entries, e.g. "JNT" or "board:293"')
   .option('--jira-site <url>', 'https://<site>.atlassian.net (permalinks; the API too when no proxy)')
+  .option('--figma <files>', 'comma-separated Figma file URLs or keys (design files, FigJam boards, Slides decks) — the design as evidence, frame by frame')
   .option('--gmail [mailboxes]', 'sync client email from the team\'s Gmail inboxes: comma-separated teammate addresses, "all" for every Workspace mailbox, or no value for the team-side contacts')
   .option('--client <name>', 'client display name (default: project name)')
   .option('--owner <email>', 'team-side account lead → client.owner (default: saved once in ~/.lore/config.json)')

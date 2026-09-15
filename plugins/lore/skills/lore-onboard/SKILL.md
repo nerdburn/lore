@@ -1,6 +1,6 @@
 ---
 name: lore-onboard
-description: Set up lore project memory for a client — gather the five facts, create the context repo, wire Slack/GitHub/Granola/Notion/Jira/Gmail, verify, and point an agent at it. Use when asked to "set up lore for <client>", "onboard <client>", "add project memory", link a repo to existing memory, connect a Slack agent to lore, or archive a client.
+description: Set up lore project memory for a client — gather the five facts, create the context repo, wire Slack/GitHub/Granola/Notion/Jira/Gmail/Figma, verify, and point an agent at it. Use when asked to "set up lore for <client>", "onboard <client>", "add project memory", link a repo to existing memory, connect a Slack agent to lore, or archive a client.
 ---
 
 # Onboarding a client to lore
@@ -58,7 +58,7 @@ relay the human steps, and verify before declaring success.
 
    ```sh
    lore setup --channels "#acme,#acme-team" --github "acme/web" --granola "Acme" \
-              --notion "<client's Notion page URL>" [--jira ACM --jira-site https://acme.atlassian.net] \
+              --notion "<client's Notion page URL>" [--figma "<file URLs>"] [--jira ACM --jira-site https://acme.atlassian.net] \
               [--gmail | --gmail all | --gmail "kaity@inputlogic.ca,shawn@inputlogic.ca"] \
               --client "Acme" --domains "acme.com" --backfill 3 --yes
    ```

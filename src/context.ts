@@ -55,7 +55,7 @@ export interface GlobalConfig {
   /** Team-side account lead (a Workspace user), written as `client.owner` into every new context repo; the identity the service account acts as for Gmail directory and Google Doc export. */
   owner?: string
   remote?: string
-  proxy?: { slack?: string; github?: string; granola?: string; notion?: string; jira?: string }
+  proxy?: { slack?: string; github?: string; granola?: string; notion?: string; jira?: string; figma?: string }
 }
 
 export function readGlobalConfig(): GlobalConfig {

@@ -1,6 +1,6 @@
 # lore
 
-**Git-native project memory for agents.** Everything is derived from sources of truth — Slack, GitHub, Jira, Granola meetings, Notion, and the client's email — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
+**Git-native project memory for agents.** Everything is derived from sources of truth — Slack, GitHub, Jira, Granola meetings, Notion, Figma, and the client's email — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
 
 No server, no database service. Text in git is the source of truth; a timer keeps it fresh; the CLI is the interface — the repo is just the database.
 
@@ -220,6 +220,17 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   clients as boards inside one project, by board ids (`boards`; a board
   resolves to its saved filter's JQL — `lore setup --jira board:293`).
   `site` is the Atlassian URL for permalinks and, without a proxy, the API.
+- **Figma** syncs the design as evidence: for each configured file (design
+  file, FigJam board, Slides deck) one doc per top-level frame per page —
+  its text layers in reading order under nested-frame headings, component
+  instances by name, a deep link to the node — re-emitted only when that
+  frame's content changes; an index of pages and frames per file version;
+  and design comments as threaded docs anchored to the frame they were left
+  on. So an agent can check a request or ticket against what the design
+  actually says and link the screen. It is design intent, not the shipped
+  UI. Scope by `files` (URLs or keys) and/or `projects`; auth is a personal
+  access token as `token` (`env:FIGMA_TOKEN`, sent as X-Figma-Token) or an
+  `api_base` proxy that injects it.
 - **Gmail** reads the client's email out of your team's inboxes — for the
   client who doesn't use Slack. Documents the client links (Google Docs,
   Sheets, Slides, uploaded Word/PowerPoint/Excel, Drive-hosted PDFs) or
@@ -569,7 +580,7 @@ cites sources, never pins uninvited); run them with
 
 | Command | What it does |
 |---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys\|board:id --jira-site url] [--gmail [mailboxes]] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secrets (GitHub mode), first sync, link cwd |
+| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys\|board:id --jira-site url] [--gmail [mailboxes]] [--figma files] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secrets (GitHub mode), first sync, link cwd |
 | `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
 | `lore refresh [--trigger] [--fold] [--force]` | pull the latest memory; `--trigger` asks the self-hosted host to sync now and waits (~1 min); `--fold` also runs the LLM fold so derived artifacts update (1–2 min more); `--force` overrides the 5-minute rate limit |
 | `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
@@ -641,7 +652,7 @@ statements of work (add, recall layer, MCP tool, PDF extraction), and the
 
 ## Status
 
-Connectors: Slack, GitHub, Jira, Granola, Notion, Gmail — GitHub and Jira
+Connectors: Slack, GitHub, Jira, Granola, Notion, Gmail, Figma — GitHub and Jira
 each with a source-owned work table, mirrored into the lore work tracker
 (the tracker of record, with per-ticket history; moved by people, agents,
 sync, and the fold). `extract` (delta fold into

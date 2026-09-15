@@ -6,7 +6,7 @@ description: Query project memory through the lore MCP server (lore_grep, lore_r
 # Using lore over MCP
 
 Lore is git-native project memory for one client at a time: Slack history,
-GitHub and Jira activity, Granola meetings, Notion pages, and client email synced into a private context repo,
+GitHub and Jira activity, Granola meetings, Notion pages, Figma designs, and client email synced into a private context repo,
 plus LLM-derived artifacts and explicitly pinned facts. The MCP server
 exposes the query surface so you never touch the repo directly. Full docs:
 https://github.com/nerdburn/lore
@@ -85,6 +85,17 @@ history, say so, and never present it as current state.
      email between the team and the client (subject, from/to/cc, body with
      quoted history trimmed, attachment names); replies are threaded, and
      `mailboxes` in the id comment says whose inboxes it was found in
+   - `context/streams/figma/<file-slug>/YYYY-MM-DD.md` — the design, frame
+     by frame: one entry per top-level frame per page (its text layers in
+     order under nested-frame headings, components by name, `Figma node …`
+     deep link), re-emitted when the frame changes so the newest entry for a
+     node is the current design; an index of pages and frames per version
+     (`kind: index`); and design comments as threaded entries anchored
+     `On **Page / Frame**`. **Validating against the UI** means: grep the
+     figma stream for the screen or the label, read the frame's newest
+     entry, compare to the request/ticket/decision, and cite the node link.
+     Say plainly that this is the design, not the shipped product — a frame
+     showing a button is not proof it was built.
    - `context/streams/docs/<title-slug>/YYYY-MM-DD.md` — a document someone
      attached with `lore doc add` / `lore_doc_add` (a spec, brief, deck,
      handoff package), **or that the client linked or attached in a synced
@@ -116,6 +127,12 @@ look for that in Slack or a pin before stating it as settled.
   ticket the fold or sync moved recently, say so with the reason.
 - **"What do we know / what was decided"**: `lore_recall` (no category, or
   `decisions`). Check `pins` first, then `derived`.
+- **Design questions** ("does the onboarding screen ask for age", "what
+  does the empty state say", "is there a screen for X", "does the ticket
+  match the design"): `lore_grep` with `channel: "figma"` for the label or
+  screen name, then `lore_read` the frame entry; answer with the node link.
+  No hit means the design doesn't say it (or the file isn't synced) — say
+  which.
 - **Anything specific** — quotes, dates, "did they mention X", "what did
   the client say in Tuesday's call": `lore_grep` → `lore_read`. The pattern
   is a regex (falls back to literal if it doesn't parse); `channel` is a
@@ -242,8 +259,10 @@ brief", "add this to lore", a link dropped in a DM or a thread you are in
 with a line of context. Call `lore_doc_add` with the link as `url` — lore
 reads it itself through the Workspace service account (Docs, Slides, Sheets,
 uploaded Word/PowerPoint/Excel, Drive-hosted PDFs and text), so do not open
-it, paste its text, or ask for sharing to be changed. Figma links and Drive
-*folders* are not documents — say so, and ask for the files inside a folder. If lore cannot read it (the person it reads as has
+it, paste its text, or ask for sharing to be changed. Drive *folders* are not documents — say so, and ask for the files inside a
+folder. A Figma link is a *source*, not a document: it belongs in
+`sources.figma.files` (ask the person to run `lore setup --figma` or add it),
+after which every frame is in the figma stream. If lore cannot read it (the person it reads as has
 no access), report that error plainly. Failing a link, pass the text as
 `text` with a `title`.
 

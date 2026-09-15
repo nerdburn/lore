@@ -16,6 +16,8 @@ export interface SetupFlags {
   granola?: string
   /** Comma-separated Notion page/database ids or URLs scoping this client's docs — adds a notion source. */
   notion?: string
+  /** Comma-separated Figma file URLs/keys (design, FigJam, Slides) — adds a figma source. */
+  figma?: string
   /** Adds a gmail source: `true` reads the team-side contacts' mailboxes, "all" every Workspace mailbox, a comma-separated list names them. */
   gmail?: string | boolean
   /** Comma-separated Jira project keys and/or "board:<id>" entries — adds a jira source. */
@@ -101,6 +103,10 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       .split(',')
       .map((f) => f.trim())
       .filter(Boolean)
+    const figmaFiles = (flags.figma ?? '')
+      .split(/[;,]/)
+      .map((f) => f.trim())
+      .filter(Boolean)
     const notionRoots = (flags.notion ?? '')
       .split(/[,\s]+/)
       .map((r) => r.trim())
@@ -124,8 +130,8 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u)) throw new Error(`--gmail: "${u}" is not an email address (or "all")`)
     }
     // A client that doesn't use Slack is fine, as long as something else is a source.
-    if (channels.length === 0 && !repos.length && !folders.length && !notionRoots.length && !jiraEntries.length && gmailUsers === undefined) {
-      throw new Error('no sources — pass --channels "#acme,#acme-dev", or --github/--granola/--notion/--jira/--gmail')
+    if (channels.length === 0 && !repos.length && !folders.length && !notionRoots.length && !jiraEntries.length && gmailUsers === undefined && !figmaFiles.length) {
+      throw new Error('no sources — pass --channels "#acme,#acme-dev", or --github/--granola/--notion/--jira/--gmail/--figma')
     }
 
     // Name: explicit arg > the project repo we're standing in > first channel.
@@ -150,14 +156,14 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [], ...(owner ? { owner } : {}) },
       work: { prefix: deriveWorkPrefix(flags.client ?? project) },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers),
+      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers, figmaFiles),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
 
     const where = mode === 'remote' ? `${global.remote}/${name}.git` : `private ${ref}`
     console.log(
-      `\nPlan: create ${where} · project "${project}" · ${channels.length ? channels.join(', ') : 'no slack'}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''}${gmailUsers ? ` · gmail: ${gmailUsers === 'all' ? 'every mailbox in the Workspace' : gmailUsers.length ? gmailUsers.join(', ') : 'team contacts'}` : ''} · ${config.backfill.months}mo backfill`,
+      `\nPlan: create ${where} · project "${project}" · ${channels.length ? channels.join(', ') : 'no slack'}${repos.length ? ` · github: ${repos.join(', ')}` : ''}${folders.length ? ` · granola: ${folders.join(', ')}` : ''}${notionRoots.length ? ` · notion: ${notionRoots.length} root(s)` : ''}${figmaFiles.length ? ` · figma: ${figmaFiles.length} file(s)` : ''}${jiraProjects.length || jiraBoards.length ? ` · jira: ${[...jiraProjects, ...jiraBoards.map((b) => `board ${b}`)].join(', ')}` : ''}${gmailUsers ? ` · gmail: ${gmailUsers === 'all' ? 'every mailbox in the Workspace' : gmailUsers.length ? gmailUsers.join(', ') : 'team contacts'}` : ''} · ${config.backfill.months}mo backfill`,
     )
     if (interactive && (await ask('Proceed? (y/n)', 'y')).toLowerCase() !== 'y') {
       console.log('aborted')
@@ -214,6 +220,7 @@ export function buildSources(
   jiraBoards: number[] = [],
   /** undefined = no gmail source; [] = the team-side contacts' mailboxes; "all" = every Workspace mailbox; else these. */
   gmailUsers?: string[] | 'all',
+  figmaFiles: string[] = [],
 ): Record<string, Record<string, unknown>> {
   const sources: Record<string, Record<string, unknown>> = {}
   if (channels.length) {
@@ -238,6 +245,9 @@ export function buildSources(
   if (gmailUsers !== undefined) {
     // Auth is the service account key on the syncing host (~/.lore/gmail-sa.json); no token here.
     sources.gmail = gmailUsers === 'all' ? { users: 'all' } : gmailUsers.length ? { users: gmailUsers } : {}
+  }
+  if (figmaFiles.length) {
+    sources.figma = proxy?.figma ? { files: figmaFiles, api_base: proxy.figma } : { files: figmaFiles, token: 'env:FIGMA_TOKEN' }
   }
   return sources
 }
