@@ -6,7 +6,7 @@ import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
 import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
-import { applyFoldChanges, describeWorkForPrompt, describeWorkHistory, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal } from '../work.js'
+import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
 import type { Pin } from '../types.js'
 
@@ -138,8 +138,28 @@ const FOLD_SCHEMA: Record<string, unknown> = {
         additionalProperties: false,
       },
     },
+    work_new: {
+      type: 'array',
+      description: 'new tickets for committed work not yet tracked; empty when nothing new was committed',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'short, imperative, self-contained — a ticket title' },
+          request: { type: 'string', description: 'the request id this tracks (req-0007), when there is one' },
+          status: { type: 'string', enum: ['todo', 'in_progress', 'blocked'] },
+          priority: { type: 'string', enum: ['P1', 'P2', 'P3'] },
+          assignee: { type: 'string', description: 'who is on it, when the material says' },
+          reason: { type: 'string', description: 'one sentence: who committed to it, when, where' },
+          sources: { type: 'array', items: { type: 'string' } },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          evidence_date: { type: 'string', description: 'YYYY-MM-DD of the evidence' },
+        },
+        required: ['title', 'reason', 'sources', 'confidence', 'evidence_date'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['requests', 'decisions', 'roadmap', 'contradictions', 'work_changes'],
+  required: ['requests', 'decisions', 'roadmap', 'contradictions', 'work_changes', 'work_new'],
   additionalProperties: false,
 }
 
@@ -155,7 +175,8 @@ Rules:
 - Never delete a request, decision, or roadmap item; items are only ever added or updated. When new evidence shows a request was completed, return it with status done. A request older than ~30 days with no activity is returned once with status "stale", never left "open".
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.
-- Tracked work: when a "Tracked work" list is given, those items are the project's tracker of record — lore's own tickets, some mirrored from Jira or GitHub. Review them against the material and return work_changes for items the material moves: status (a merged PR, "shipped", "done", "blocked on X", someone starting on it), priority (a decision-maker calling it urgent or deferring it), or rank_above (an explicit reprioritisation). Only with high confidence and a citable source; medium or low confidence proposals are recorded as skipped, so return them only when they are worth a human's glance. Never propose archived, never invent items or keys, and never repeat a tracked item as a new roadmap item — a request that has a ticket takes its status from the ticket. An empty work_changes list is the normal case.`
+- Tracked work: when a "Tracked work" list is given, those items are the project's tracker of record — lore's own tickets, some mirrored from Jira or GitHub. Review them against the material and return work_changes for items the material moves: status (a merged PR, "shipped", "done", "blocked on X", someone starting on it), priority (a decision-maker calling it urgent or deferring it), or rank_above (an explicit reprioritisation). Only with high confidence and a citable source; medium or low confidence proposals are recorded as skipped, so return them only when they are worth a human's glance. Never propose archived, never invent keys, and never repeat a tracked item as a new roadmap item — a request that has a ticket takes its status from the ticket. An empty work_changes list is the normal case.
+- New tickets: return work_new for work that is *committed* and not yet tracked — the team agreed to do it, someone is doing it, it is scheduled, or it is planned roadmap the client signed off on — whether the commitment is in this batch's material or visible in the current requests/roadmap. Reference the request id when one exists (request: req-0007) so the two stay linked. A ticket title is short and imperative. Not a ticket: a bare ask nobody agreed to, an open question, a decision, a meeting mention, anything already in the Tracked work list under other words (Jira/GitHub issues are mirrored there — do not duplicate them), or finished work (that is a request marked done). High confidence and a cited source only. A ticket is never proposed as done or archived. An empty work_new list is the normal case.`
 
 const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, attached documents, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, effective date) — never compute or estimate weeks used or remaining. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
 
@@ -165,11 +186,12 @@ interface FoldResult {
   roadmap: unknown[]
   contradictions: { pin_id: string; conflict: string; source: string }[]
   work_changes?: WorkChangeProposal[]
+  work_new?: WorkCreateProposal[]
 }
 
 type Backend = 'sdk' | 'cli'
 
-export async function extract(root: string, opts: { report?: boolean } = {}): Promise<void> {
+export async function extract(root: string, opts: { report?: boolean; review?: boolean } = {}): Promise<void> {
   const config = loadConfig(root)
   if (config.lifecycle === 'archived') {
     console.log(`${config.project} is archived — nothing to extract`)
@@ -188,16 +210,20 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
   // sufficient fingerprint and cheap to keep in state.json.
   state.extracted ??= {}
   const newFiles = streamFiles(root).filter((f) => state.extracted![f.path] !== f.text.length)
+  // --review: one fold pass with no new material, so the model reviews the
+  // current artifacts and tracker under the current rules (after a rule
+  // change, or to open tickets for work already committed in memory).
+  const review = opts.review === true && newFiles.length === 0
 
-  if (wantArtifacts.length > 0 && newFiles.length > 0) {
+  if (wantArtifacts.length > 0 && (newFiles.length > 0 || review)) {
     const artifacts: Record<string, unknown[]> = {}
     for (const name of wantArtifacts) artifacts[name] = readYamlList(root, `context/derived/${name}.yaml`)
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
 
-    const batches = pack(newFiles, BATCH_CHARS)
+    const batches = review ? [{ text: '(no new material — review the current artifacts and tracked work under the rules)', files: [] as { path: string; length: number }[] }] : pack(newFiles, BATCH_CHARS)
     const newChars = newFiles.reduce((n, f) => n + f.text.length, 0)
-    const model = pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0), process.env, newChars)
-    console.log(`extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${model}]…`)
+    const model = review ? (process.env.LORE_MODEL ?? MODEL) : pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0), process.env, newChars)
+    console.log(review ? `review fold over current artifacts [${llm}:${model}]…` : `extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${model}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
     mkdirSync(join(root, 'context/derived'), { recursive: true })
@@ -213,7 +239,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     const prefix = workPrefix(config)
     const workItems = readWorkItems(root, prefix)
     for (let i = 0; i < batches.length; i++) {
-      const workNote = workItems.length ? `\n\n# Tracked work (lore tracker ${prefix}: key | rank | status | priority | assignee | title | external tracker state)\n${describeWorkForPrompt(workItems, today)}` : ''
+      const workNote = `\n\n# Tracked work (lore tracker ${prefix}: key | rank | status | priority | assignee | title | external tracker state)\n${workItems.length ? describeWorkForPrompt(workItems, today) : '(no tickets yet)'}`
       const user = `Today is ${today}.${clientNote}${commitments}${workNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
@@ -228,7 +254,7 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
-      if (workItems.length > 0) {
+      if (workItems.length > 0 || (result.work_changes?.length ?? 0) > 0) {
         const at = new Date().toISOString()
         const w = applyFoldChanges(workItems, result.work_changes, at)
         if (w.applied.length > 0) {
@@ -242,6 +268,21 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
           changes.push(`work ~${w.applied.length}`)
         }
         for (const line of w.skipped) if (!/: no change$/.test(line)) console.log(`  work skipped: ${line}`)
+      }
+      {
+        const at = new Date().toISOString()
+        const c = applyFoldCreations(workItems, prefix, result.work_new, at)
+        if (c.created.length > 0) {
+          writeWorkItems(root, prefix, workItems)
+          for (const line of c.created) {
+            const key = line.slice(0, line.indexOf(':'))
+            const proposal = (result.work_new ?? []).find((n) => line.startsWith(`${key}: "${n.title?.trim()}"`))
+            appendAudit(root, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: key, ...(proposal?.sources?.[0] ? { source: proposal.sources[0] } : {}) })
+            console.log(`  work: new ${line}`)
+          }
+          changes.push(`work +${c.created.length}`)
+        }
+        for (const line of c.skipped) console.log(`  work not created: ${line}`)
       }
       // Checkpoint after every batch — artifacts to disk, consumed files to
       // state.extracted — so a killed fold resumes at the next batch instead
@@ -447,6 +488,7 @@ export function parseFoldOutput(text: string): FoldResult {
     if (!Array.isArray(obj[key])) throw new Error(`extract: model output missing array "${key}"`)
   }
   if (!Array.isArray(obj.work_changes)) obj.work_changes = []
+  if (!Array.isArray(obj.work_new)) obj.work_new = []
   return obj as unknown as FoldResult
 }
 

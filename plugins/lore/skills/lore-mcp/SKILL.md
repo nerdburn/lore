@@ -193,7 +193,12 @@ not a paraphrase of the command.
   schedule, or "put it on the board".
 - **`lore_work_add`** — a new ticket for work that is not a derived request.
   Check `lore_recall` first: if a ticket or request already covers it, say
-  so instead of adding a duplicate. Link an existing Jira/GitHub issue with
+  so instead of adding a duplicate. The fold also opens tickets on its own
+  for work the synced material shows is committed (agreed, scheduled,
+  someone on it), linked to the request they came from — so an ask that
+  turned into real work usually has a ticket within an hour of the
+  conversation; an empty tracker means nothing has been committed yet, not
+  that tracking is off. Link an existing Jira/GitHub issue with
   `external` ("jira:INPT-9", "github:owner/repo#42") rather than creating a
   parallel ticket.
 - **`lore_work_set`** — priority, assignee, labels, title, evidence links,

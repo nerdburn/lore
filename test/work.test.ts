@@ -13,10 +13,12 @@ import { resolveContext } from '../src/context.js'
 import { recallData } from '../src/recall.js'
 import {
   applyFoldChanges,
+  applyFoldCreations,
   deriveWorkPrefix,
   mirrorExternal,
   readWorkItems,
   summarizeForRecall,
+  titleSimilarity,
   workPrefix,
   writeWorkItems,
   type LoreWorkItem,
@@ -405,4 +407,44 @@ test('work mcp: the four tools write with via mcp and never take an actor; a mov
   assert.equal(one.history[1].reason, 'Cory said he started')
   assert.ok(readAudit(root).every((a) => a.action === 'work' && a.via === 'mcp' && a.actor === me))
   await Promise.all([client.close(), server.close()])
+})
+
+test('work fold: creates tickets for committed work — high confidence, cited, never done, never a duplicate of a request or a similar title', () => {
+  const items: LoreWorkItem[] = [
+    { key: 'ACM-1', title: 'Start 10DLC carrier registration', status: 'todo', state: 'open', labels: [], request: 'req-0021', sources: [], created: '2026-09-01', updated: '2026-09-01', history: [] },
+    { key: 'ACM-2', title: 'Family portal login', status: 'in_progress', state: 'open', labels: [], external: { system: 'jira', id: 'jira:INPT-5', key: 'INPT-5', url: '', status: 'In Progress', category: 'In Progress' }, sources: [], created: '2026-09-01', updated: '2026-09-01', history: [] },
+  ]
+  const ok = { reason: 'Shawn agreed in the 09-14 kickoff', sources: ['https://slack.com/x'], confidence: 'high', evidence_date: '2026-09-14' }
+  const r = applyFoldCreations(items, 'ACM', [
+    { title: 'Run a 10–20 parent friends-and-family alpha', request: 'req-0024', priority: 'P1', ...ok },
+    { title: 'Register with the 10DLC carriers', request: 'req-0021', ...ok }, // request already tracked
+    { title: 'Login for the family portal', ...ok }, // reads like ACM-2 (mirrored from Jira)
+    { title: 'Ship the SMS opening flow', status: 'done', ...ok },
+    { title: 'Cost the trial model', ...ok, confidence: 'medium' },
+    { title: 'Clinical sign-off before launch', ...ok, sources: [] },
+    { title: '  ', ...ok },
+    { title: 'Instrument product metrics from day one', status: 'in_progress', assignee: 'Cory', priority: 'P9', ...ok },
+  ], '2026-09-15T12:00:00.000Z')
+  assert.deepEqual(r.created, [
+    'ACM-3: "Run a 10–20 parent friends-and-family alpha" (req-0024) [todo] — Shawn agreed in the 09-14 kickoff',
+    'ACM-4: "Instrument product metrics from day one" [in_progress] — Shawn agreed in the 09-14 kickoff',
+  ])
+  assert.deepEqual(r.skipped, [
+    '"Register with the 10DLC carriers": req-0021 is already ACM-1',
+    '"Login for the family portal": reads like ACM-2 "Family portal login"',
+    '"Ship the SMS opening flow": a ticket is not created as done',
+    '"Cost the trial model": confidence medium — only high applies',
+    '"Clinical sign-off before launch": no source cited',
+    '(untitled): no title',
+  ])
+  const alpha = items.find((i) => i.key === 'ACM-3')!
+  assert.equal(alpha.request, 'req-0024')
+  assert.equal(alpha.priority, 'P1')
+  assert.deepEqual(alpha.history, [{ at: '2026-09-15T12:00:00.000Z', by: 'lore-extract', via: 'fold', change: { created: true }, reason: 'Shawn agreed in the 09-14 kickoff', sources: ['https://slack.com/x'], confidence: 'high', evidence_date: '2026-09-14' }])
+  const metrics = items.find((i) => i.key === 'ACM-4')!
+  assert.equal(metrics.assignee, 'Cory')
+  assert.equal(metrics.priority, undefined, 'an unknown priority is dropped, not invented')
+  assert.equal(metrics.state, 'open')
+  assert.ok(titleSimilarity('Family portal login', 'Login for the family portal') >= 0.7)
+  assert.ok(titleSimilarity('Family portal login', 'Run a parent alpha') < 0.3)
 })

@@ -492,6 +492,101 @@ export function applyFoldChanges(items: LoreWorkItem[], proposals: WorkChangePro
   return { applied, skipped }
 }
 
+export interface WorkCreateProposal {
+  title: string
+  /** The derived request this tracks, when there is one (req-0007). */
+  request?: string
+  status?: string
+  priority?: string
+  assignee?: string
+  reason: string
+  sources: string[]
+  confidence: string
+  evidence_date: string
+}
+
+export interface FoldCreateResult {
+  created: string[]
+  skipped: string[]
+}
+
+/** Word-set overlap, for "is this already tracked under other words". */
+export function titleSimilarity(a: string, b: string): number {
+  const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))
+  const A = words(a)
+  const B = words(b)
+  if (A.size === 0 || B.size === 0) return 0
+  let both = 0
+  for (const w of A) if (B.has(w)) both++
+  return both / Math.max(A.size, B.size)
+}
+const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'are', 'was', 'were', 'has', 'have', 'not', 'but', 'its', 'our', 'their', 'before', 'after', 'about'])
+
+/**
+ * The fold may open tickets for work the material shows is committed —
+ * someone on the team agreed to do it, it is scheduled, or it is planned
+ * roadmap — under the same guardrails as a move (high confidence, a cited
+ * source) plus two of its own: a request that already has a ticket, or a
+ * title that is essentially an existing ticket's, is not tracked twice; and
+ * a ticket is never born done or archived — finished work is a request
+ * marked done, not a ticket.
+ */
+export function applyFoldCreations(items: LoreWorkItem[], prefix: string, proposals: WorkCreateProposal[] | undefined, at = new Date().toISOString()): FoldCreateResult {
+  const created: string[] = []
+  const skipped: string[] = []
+  for (const p of proposals ?? []) {
+    const title = p.title?.trim()
+    if (!title) {
+      skipped.push('(untitled): no title')
+      continue
+    }
+    if (p.confidence !== 'high') {
+      skipped.push(`"${title}": confidence ${p.confidence ?? 'unset'} — only high applies`)
+      continue
+    }
+    if (!Array.isArray(p.sources) || p.sources.length === 0) {
+      skipped.push(`"${title}": no source cited`)
+      continue
+    }
+    const status = p.status ?? 'todo'
+    if (!(['todo', 'in_progress', 'blocked'] as string[]).includes(status)) {
+      skipped.push(`"${title}": a ticket is not created as ${status}`)
+      continue
+    }
+    const request = p.request?.trim()
+    const byRequest = request ? items.find((i) => i.request === request) : undefined
+    if (byRequest) {
+      skipped.push(`"${title}": ${request} is already ${byRequest.key}`)
+      continue
+    }
+    const similar = items.find((i) => i.status !== 'archived' && titleSimilarity(i.title, title) >= 0.7)
+    if (similar) {
+      skipped.push(`"${title}": reads like ${similar.key} "${similar.title}"`)
+      continue
+    }
+    const evidence = /^\d{4}-\d{2}-\d{2}$/.test(p.evidence_date ?? '') ? p.evidence_date : at.slice(0, 10)
+    const priority = (WORK_PRIORITIES as string[]).includes(String(p.priority)) ? (p.priority as WorkPriority) : undefined
+    const sources = p.sources.map(String).filter(Boolean)
+    const item: LoreWorkItem = {
+      key: nextKey(items, prefix),
+      title,
+      status: status as WorkStatus,
+      state: stateFor(status as WorkStatus),
+      ...(priority ? { priority } : {}),
+      ...(p.assignee?.trim() ? { assignee: p.assignee.trim() } : {}),
+      labels: [],
+      ...(request ? { request } : {}),
+      sources,
+      created: at.slice(0, 10),
+      updated: at.slice(0, 10),
+      history: [{ at, by: 'lore-extract', via: 'fold', change: { created: true }, reason: p.reason || 'fold', sources, confidence: 'high', evidence_date: evidence }],
+    }
+    items.push(item)
+    created.push(`${item.key}: "${title}"${request ? ` (${request})` : ''} [${status}] — ${p.reason}`)
+  }
+  return { created, skipped }
+}
+
 /** The tracker as the fold and the report see it: open items plus anything touched in the last two weeks. */
 export function describeWorkForPrompt(items: LoreWorkItem[], today: string): string {
   const cutoff = new Date(new Date(today).getTime() - 14 * 86_400_000).toISOString().slice(0, 10)

@@ -372,11 +372,19 @@ for clients with Jira or GitHub Issues and for clients with nothing.
   lore never tracked are not imported. PRs stay delivery evidence.
 - **Reviewed by the fold.** `lore extract` sees the tracker next to the new
   material and may move, reprioritise, or re-rank a ticket when the
-  evidence is unambiguous — a merged PR, "shipped", "blocked on X". Only
-  with high confidence and a cited source; never to `archived`; and never
-  over a person's more recent call on the same field. Skipped proposals are
-  logged. Where lore and the external tracker disagree, recall marks the
-  ticket `drift: true` — what a future `lore push` would write back.
+  evidence is unambiguous — a merged PR, "shipped", "blocked on X" — and
+  may **open a ticket** for work that is committed but not yet tracked: the
+  team agreed to it, someone is doing it, it is scheduled, or it is
+  signed-off roadmap. New tickets keep the request they came from
+  (`request: req-0007`). Only with high confidence and a cited source; never
+  to `archived` and never born `done`; never over a person's more recent
+  call on the same field; never a second ticket for a request already
+  tracked or a title that reads like an existing one (Jira and GitHub
+  issues are mirrored in, so the fold sees them). Skipped proposals are
+  logged. `lore extract --review` runs one fold with no new material, to
+  apply the current rules to what memory already holds. Where lore and the
+  external tracker disagree, recall marks the ticket `drift: true` — what
+  `lore work push` writes back.
 - **Moved by people and agents** with `lore work` or the `lore_work_*` MCP
   tools. A reason is required on every move; it is the paper trail.
 
@@ -583,7 +591,7 @@ cites sources, never pins uninvited); run them with
 | `lore gdoc export <url> --as <email> [--json]` | export a Google Doc (Slides, Sheet, Drive-hosted PDF/text) as text via the service account (used by `sow add` / `doc add` on the host) |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
-| `lore extract [--report]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
+| `lore extract [--report] [--review]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
 | `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
 | `lore init` | scaffold a context repo by hand |

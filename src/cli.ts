@@ -91,6 +91,7 @@ program
   .command('extract')
   .description('LLM fold: streams → derived artifacts (requests, decisions, roadmap, weekly report)')
   .option('--report', 'generate the weekly report now, regardless of the configured day')
+  .option('--review', 'fold once even with no new material: review current artifacts and the tracker under the current rules (opens tickets for committed work)')
   .action((opts) => extract(root, opts))
 
 program
