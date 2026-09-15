@@ -87,8 +87,13 @@ history, say so, and never present it as current state.
      `mailboxes` in the id comment says whose inboxes it was found in
    - `context/streams/docs/<title-slug>/YYYY-MM-DD.md` — a document someone
      attached with `lore doc add` / `lore_doc_add` (a spec, brief, deck,
-     handoff package), the sender as author and its link as permalink; a
-     re-added, changed document is a newer entry in the same folder
+     handoff package), **or that the client linked or attached in a synced
+     email** (sync reads Google Docs/Sheets/Slides, uploaded Word/PowerPoint/
+     Excel, PDFs and text attachments automatically, dated and attributed like
+     the email), the sender as author and its link as permalink; a re-added,
+     changed document is a newer entry in the same folder. So "the doc Julie
+     emailed on the 9th" is usually already here — grep for it before saying
+     it isn't in memory.
    Search with `lore_grep`, read with `lore_read`.
 
 Every doc carries an id comment with machine ids (Slack user/channel ids,
@@ -231,8 +236,9 @@ project* is a document to file: "here's the spec", "the client sent this
 brief", "add this to lore", a link dropped in a DM or a thread you are in
 with a line of context. Call `lore_doc_add` with the link as `url` — lore
 reads it itself through the Workspace service account (Docs, Slides, Sheets,
-Drive-hosted PDFs and text), so do not open it, paste its text, or ask for
-sharing to be changed. If lore cannot read it (the person it reads as has
+uploaded Word/PowerPoint/Excel, Drive-hosted PDFs and text), so do not open
+it, paste its text, or ask for sharing to be changed. Figma links and Drive
+*folders* are not documents — say so, and ask for the files inside a folder. If lore cannot read it (the person it reads as has
 no access), report that error plainly. Failing a link, pass the text as
 `text` with a `title`.
 

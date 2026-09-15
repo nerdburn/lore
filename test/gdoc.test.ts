@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { sowAdd } from '../src/commands/sow.js'
 import { exportGoogleDoc, googleDocId } from '../src/gdoc.js'
+import { DOCX_XML, zipStored } from './helpers.js'
 import { readSows } from '../src/sow.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
 
@@ -91,7 +92,7 @@ test('gdoc: failures name the fix', async () => {
   const key = fakeKeyFile()
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ tokenError: 'unauthorized_client' }).fetchFn, keyFile: key }), /domain-wide delegation .* lacks https:\/\/www\.googleapis\.com\/auth\/drive\.readonly/)
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ missing: true }).fetchFn, keyFile: key }), /not found, or x@y cannot see it/)
-  await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ mime: 'image/png' }).fetchFn, keyFile: key }), /not a Google Doc — download it/)
+  await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ mime: 'image/png' }).fetchFn, keyFile: key }), /not a readable document — download it/)
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { fetch: fakeDrive({ apiDisabled: true }).fetchFn, keyFile: key }), /Drive API is not enabled/)
   await assert.rejects(exportGoogleDoc('https://example.com/x', 'x@y', { keyFile: key }), /not a Google Doc link/)
   await assert.rejects(exportGoogleDoc(URL, 'x@y', { keyFile: join(tmpdir(), 'nope.json') }), /no service account key/)
@@ -119,4 +120,25 @@ test('sow add: a Google Doc link is exported as client.owner, and becomes the so
   // No owner and no --as: refuse rather than guess whose Drive to read.
   const bare = makeContextRepo()
   await assert.rejects(sowAdd(bare, { name: 'x', weeks: 1, start: '2026-06-02', end: '2026-07-02', file: URL }, { context: bare, exportDoc }), /needs --as/)
+})
+
+test('gdoc: an uploaded .docx on Drive is downloaded and read as text, keeping the docs.google.com link shape', async () => {
+  const key = fakeKeyFile()
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  const zip = zipStored({ 'word/document.xml': DOCX_XML })
+  const calls: string[] = []
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input)
+    calls.push(url)
+    if (url === 'https://oauth2.test/token') return new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 })
+    if (url.includes(`/files/${DOC_ID}?alt=media`)) return new Response(new Uint8Array(zip), { status: 200, headers: { 'content-type': DOCX } })
+    if (url.includes(`/files/${DOC_ID}?`)) return new Response(JSON.stringify({ name: 'Merrin-Comprehensive-Product-Specification.docx', mimeType: DOCX, owners: [{ displayName: 'Julie Harsh' }] }), { status: 200 })
+    return new Response('nope', { status: 500 })
+  }) as typeof fetch
+  const doc = await exportGoogleDoc(`https://docs.google.com/document/d/${DOC_ID}/edit`, 'shawn@inputlogic.ca', { fetch: fetchFn, keyFile: key })
+  assert.equal(doc.name, 'Merrin-Comprehensive-Product-Specification.docx')
+  assert.equal(doc.url, `https://docs.google.com/document/d/${DOC_ID}`)
+  assert.equal(doc.owner, 'Julie Harsh')
+  assert.match(doc.markdown, /^# Product Spec\nMerrin helps parents\./)
+  assert.ok(!calls.some((c) => c.includes('/export')), 'no export call for a non-native file')
 })

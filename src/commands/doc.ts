@@ -1,12 +1,11 @@
-import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, resolveContext, readGlobalConfig, type ResolveOptions } from '../context.js'
-import { readDocument, slugify } from '../document.js'
+import { readDocument } from '../document.js'
 import { googleDocId, resolveGoogleDoc, type GoogleDoc } from '../gdoc.js'
-import { streamRelPath, writeDocs } from '../streams.js'
-import type { Doc } from '../types.js'
+import { writeDocs } from '../streams.js'
+import { buildStreamDoc, DOCS_SOURCE } from '../docs-stream.js'
 import { authorizeWrite } from '../write.js'
 
 /**
@@ -24,7 +23,7 @@ import { authorizeWrite } from '../write.js'
  * stream doc, not a pin.
  */
 
-export const DOCS_SOURCE = 'docs'
+export { DOCS_SOURCE }
 
 export interface DocAddInput {
   /** Path to a .md/.txt/.pdf on this machine, or a Docs/Drive link (read via the Workspace service account). */
@@ -97,21 +96,9 @@ export async function docAdd(cwd: string, input: DocAddInput, opts: DocAddOption
   from ||= actor
 
   const date = input.date ?? new Date().toISOString().slice(0, 10)
-  const slug = slugify(title)
-  const digest = createHash('sha256').update(body).digest('hex').slice(0, 12)
-  const id = `doc-${meta.gdoc ? `${meta.gdoc}-` : ''}${digest}`
-  const text = `# ${title}\n\n${body.trim()}`
-  const doc: Doc = {
-    id,
-    source: DOCS_SOURCE,
-    channel: slug,
-    author: from,
-    timestamp: `${date}T00:00:00.000Z`,
-    ...(source ? { permalink: source } : {}),
-    meta: { title: slug, ...meta, added_by: actor.replace(/\s+/g, '_') },
-    text,
-  }
-  const rel = streamRelPath(DOCS_SOURCE, slug, doc.timestamp)
+  const { gdoc: gdocId, ...restMeta } = meta
+  const { doc, rel, slug, id } = buildStreamDoc({ title, body, from, date, source, gdocId, meta: restMeta, addedBy: actor })
+  const text = doc.text
   const result = writeDocs(ctx.root, [doc])
   const written = result.written === 1
   if (written) {

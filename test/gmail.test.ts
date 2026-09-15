@@ -4,7 +4,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { buildQuery, gmail, htmlToText, normalizeMessageId, parseAddress, signJwt, splitAddresses, trimQuoted, type GmailMessage } from '../src/connectors/gmail.js'
+import { buildQuery, gmail, gmailDeps, googleLinks, htmlToText, normalizeMessageId, parseAddress, signJwt, splitAddresses, trimQuoted, type GmailMessage } from '../src/connectors/gmail.js'
+import type { GoogleDoc } from '../src/gdoc.js'
+import { DOCX_XML, zipStored } from './helpers.js'
 import type { ConnectorContext } from '../src/types.js'
 
 // One RSA key pair for the whole file (generation is the slow part).
@@ -48,6 +50,8 @@ function fakeGoogle() {
     queries: [] as string[],
     tokensMinted: [] as string[],
     rateLimitOnce: false,
+    /** attachmentId → bytes */
+    attachments: {} as Record<string, Buffer>,
   }
   const json = (b: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(b), { status: 200, headers: { 'content-type': 'application/json' }, ...init })
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -97,6 +101,11 @@ function fakeGoogle() {
       const size = 2
       const slice = all.slice(page * size, page * size + size)
       return json({ messages: slice.map((m) => ({ id: m.id, threadId: m.threadId })), ...(all.length > (page + 1) * size ? { nextPageToken: String(page + 1) } : {}), resultSizeEstimate: all.length })
+    }
+    const att = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/.exec(path)
+    if (att) {
+      const bytes = state.attachments[att[2]]
+      return bytes ? json({ size: bytes.length, data: bytes.toString('base64').replace(/\+/g, '-').replace(/\//g, '_') }) : json({ error: { code: 404, message: 'Not Found' } }, { status: 404 })
     }
     const m = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/.exec(path)
     if (m) {
@@ -295,4 +304,63 @@ test('gmail: key_file on disk works; missing key, no mailboxes, and no scope are
   const noScope = ctx({ config: { ...ctx().config, users: ['shawn@inputlogic.ca'] } })
   noScope.client = { name: 'Acme', domains: [], contacts: [] }
   await assert.rejects(gmail.fetch(noScope), /nothing scopes mail to this client/)
+})
+
+test('gmail: documents the client links or attaches are read into the docs stream, attributed and dated like the email', async () => {
+  const g = fakeGoogle()
+  const DOC = 'https://docs.google.com/document/d/1_DDc8AR_2KNWAxy8R4eIhLDyk0_57wwRJ1zBwtIPOq8/edit?tab=t.0#heading=h.x'
+  const FOLDER = 'https://drive.google.com/drive/folders/1aEwalIaY37bR9b7i1PPmIqEl7jmn76NP'
+  const SHEET = 'https://docs.google.com/spreadsheets/d/1kxtyIU_3uZwnFpY9j5KvEruPBPU0RPqffwfVLUIFMh4/edit?gid=0#gid=0'
+  const body = `A ton of items below.\n\nZ1 Discovery Insights\n<${DOC}>\n\nBrand Assets\n<${FOLDER}>\n\nCompetitive Landscape\n<${SHEET}>,\nsame doc again ${DOC}\n`
+  assert.deepEqual(googleLinks(body), [DOC, SHEET], 'folders are not documents; a repeated link counts once')
+
+  const m = msg('m1', { from: 'Julie Harsh <julie@acme.com>', subject: 'Merrin Items', text: body, date: '2026-09-09T18:27:50Z' })
+  m.payload.parts!.push(
+    { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename: 'Merrin Spec.docx', body: { attachmentId: 'att-spec', size: 1200 } },
+    { mimeType: 'image/png', filename: 'Merrin Pipeline.png', body: { attachmentId: 'att-png', size: 90_000 } },
+    { mimeType: 'text/csv', filename: 'metrics.csv', body: { attachmentId: 'att-csv', size: 40 } },
+  )
+  g.mailboxes['shawn@inputlogic.ca'] = [m]
+  g.attachments['att-spec'] = zipStored({ 'word/document.xml': DOCX_XML })
+  g.attachments['att-csv'] = Buffer.from('metric,target\nweekly actives,500\n')
+
+  const exported: string[] = []
+  const realExport = gmailDeps.exportDoc
+  gmailDeps.exportDoc = async (url, as, keyFile): Promise<GoogleDoc> => {
+    exported.push(`${as} ${keyFile ?? ''} ${url}`)
+    if (url.includes('spreadsheets')) throw new Error('google: document 1kxtyIU not found, or shawn@inputlogic.ca cannot see it')
+    return { id: '1_DDc8AR_2KNWAxy8R4eIhLDyk0_57wwRJ1zBwtIPOq8', name: 'Z1 Discovery Insights', markdown: '# Insights\n\nParents want SMS.', url: 'https://docs.google.com/document/d/1_DDc8AR_2KNWAxy8R4eIhLDyk0_57wwRJ1zBwtIPOq8', mimeType: 'application/vnd.google-apps.document', modified: '2026-09-08T10:00:00.000Z' }
+  }
+  const logs: string[] = []
+  try {
+    const r = await gmail.fetch(ctx({ log: (l) => logs.push(l) }))
+    const docsStream = r.docs.filter((d) => d.source === 'docs')
+    assert.equal(r.docs.filter((d) => d.source === 'gmail').length, 1)
+    assert.deepEqual(docsStream.map((d) => d.channel).sort(), ['merrin-spec', 'metrics', 'z1-discovery-insights'])
+    const insights = docsStream.find((d) => d.channel === 'z1-discovery-insights')!
+    assert.equal(insights.author, 'Julie Harsh')
+    assert.equal(insights.timestamp, '2026-09-09T00:00:00.000Z')
+    assert.equal(insights.permalink, 'https://docs.google.com/document/d/1_DDc8AR_2KNWAxy8R4eIhLDyk0_57wwRJ1zBwtIPOq8')
+    assert.match(insights.id, /^doc-1_DDc8AR_2KNWAxy8R4eIhLDyk0_57wwRJ1zBwtIPOq8-[0-9a-f]{12}$/)
+    assert.equal(insights.meta?.added_by, 'lore-sync')
+    assert.equal(insights.meta?.email, r.docs.find((d) => d.source === 'gmail')!.id)
+    assert.match(insights.text, /^# Z1 Discovery Insights\n\n# Insights/)
+    const spec = docsStream.find((d) => d.channel === 'merrin-spec')!
+    assert.match(spec.text, /^# Merrin Spec\n\n# Product Spec\nMerrin helps parents\./)
+    assert.equal(spec.meta?.attachment, 'Merrin_Spec.docx')
+    assert.match(spec.permalink ?? '', /^https:\/\/mail\.google\.com\/mail\/#search\/rfc822msgid:/)
+    assert.match(docsStream.find((d) => d.channel === 'metrics')!.text, /weekly actives,500/)
+    assert.deepEqual(exported, [`shawn@inputlogic.ca  ${DOC}`, `shawn@inputlogic.ca  ${SHEET}`], 'read as the mailbox owner, each link once')
+    assert.ok(logs.some((l) => /3 linked\/attached document\(s\) filed to the docs stream; 1 unreadable/.test(l)), logs.join('\n'))
+    assert.ok(logs.some((l) => /could not read https:\/\/docs\.google\.com\/spreadsheets.*cannot see it/.test(l)))
+    assert.equal(r.errors, undefined, 'an unreadable link is not a source failure')
+
+    // Opt out per source.
+    exported.length = 0
+    const off = await gmail.fetch(ctx({ config: { ...ctx().config, documents: false } }))
+    assert.equal(off.docs.filter((d) => d.source === 'docs').length, 0)
+    assert.deepEqual(exported, [])
+  } finally {
+    gmailDeps.exportDoc = realExport
+  }
 })

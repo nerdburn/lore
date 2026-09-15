@@ -106,8 +106,8 @@ test('sow add: validation, write.allow, archived', async () => {
   await assert.rejects(sowAdd(root, { ...META, text: 'x', status: 'paused' as never }, { context: root }), /status must be one of/)
   await assert.rejects(sowAdd(root, { ...META }, { context: root }), /file path, a Google Doc link, or as text/)
   await assert.rejects(sowAdd(root, { ...META, file: join(root, 'nope.docx') }, { context: root }), /file not found/)
-  writeFileSync(join(root, 'x.docx'), 'z')
-  await assert.rejects(sowAdd(root, { ...META, file: join(root, 'x.docx') }, { context: root }), /unsupported file type/)
+  writeFileSync(join(root, 'x.zip'), 'z')
+  await assert.rejects(sowAdd(root, { ...META, file: join(root, 'x.zip') }, { context: root }), /unsupported file type/)
 
   const gated = makeContextRepo({}, { project: 'acme', write: { allow: ['someone-else'] } })
   await assert.rejects(sowAdd(gated, { ...META, text: 'x' }, { context: gated }), /not in lore.json write.allow — sow refused/)

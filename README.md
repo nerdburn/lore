@@ -221,7 +221,14 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   resolves to its saved filter's JQL — `lore setup --jira board:293`).
   `site` is the Atlassian URL for permalinks and, without a proxy, the API.
 - **Gmail** reads the client's email out of your team's inboxes — for the
-  client who doesn't use Slack. Mailboxes default to the `team`-side contacts
+  client who doesn't use Slack. Documents the client links (Google Docs,
+  Sheets, Slides, uploaded Word/PowerPoint/Excel, Drive-hosted PDFs) or
+  attaches (PDF, Word, PowerPoint, Excel, text) are read too — Drive as the
+  mailbox owner, attachments from Gmail — and filed into the `docs` stream
+  dated and attributed like the email, so the content is in memory, not just
+  the link. A link the owner cannot open is logged, never fatal; folders,
+  images and Figma links stay links. `documents: false` on the source opts
+  out. Mailboxes default to the `team`-side contacts
   in the `client` block; `users` names them, or `users: "all"` reads every
   active mailbox in the Workspace (listed through the Directory API as
   `admin`, default `client.owner`), so a teammate the client emails for the

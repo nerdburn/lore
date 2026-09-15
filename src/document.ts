@@ -1,17 +1,21 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { extname } from 'node:path'
+import { officeKind, officeText } from './office.js'
 
 /**
  * Local documents as text. Shared by `sow add` and `doc add`: a Markdown or
- * text file as-is, a PDF through pdf.js text extraction. `verb` prefixes
+ * text file as-is, a PDF through pdf.js text extraction, Word/PowerPoint/
+ * Excel through the Office reader. `verb` prefixes
  * error messages so each command reads naturally.
  */
 export async function readDocument(file: string, verb = 'doc'): Promise<string> {
   if (!existsSync(file)) throw new Error(`${verb}: file not found: ${file}`)
   const ext = extname(file).toLowerCase()
   if (ext === '.pdf') return pdfText(readFileSync(file))
-  if (ext === '.md' || ext === '.txt' || ext === '.markdown' || ext === '') return readFileSync(file, 'utf8')
-  throw new Error(`${verb}: unsupported file type "${ext}" — export the document as Markdown (Google Docs: File → Download → Markdown) or PDF`)
+  if (ext === '.md' || ext === '.txt' || ext === '.markdown' || ext === '.csv' || ext === '') return readFileSync(file, 'utf8')
+  const office = officeKind(ext)
+  if (office) return officeText(office, readFileSync(file))
+  throw new Error(`${verb}: unsupported file type "${ext}" — give a .md, .txt, .csv, .pdf, .docx, .pptx, or .xlsx (Google Docs: File → Download → Markdown)`)
 }
 
 /** One paragraph per line run; runs joined by their real horizontal gap. */

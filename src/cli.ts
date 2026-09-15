@@ -193,8 +193,8 @@ const doc = program.command('doc').description('documents as a stream — specs,
 contextual(
   doc
     .command('add')
-    .description('add a document to the `docs` stream: a Google Docs/Drive link (Doc, Slides, Sheet, PDF, text — read via the Workspace service account) or a local .md/.txt/.pdf; commits and pushes')
-    .argument('<file>', 'path to a .md, .txt, or .pdf — or a docs.google.com / drive.google.com link')
+    .description('add a document to the `docs` stream: a Google Docs/Drive link (Doc, Slides, Sheet, uploaded Word/PowerPoint/Excel, PDF, text — read via the Workspace service account) or a local .md/.txt/.csv/.pdf/.docx/.pptx/.xlsx; commits and pushes')
+    .argument('<file>', 'path to a .md, .txt, .csv, .pdf, .docx, .pptx, or .xlsx — or a docs.google.com / drive.google.com link')
     .option('--title <title>', 'document title (default: the Google Doc name or the file name); becomes the stream channel')
     .option('--from <who>', 'who sent or authored it (default: the Drive owner, else you)')
     .option('--date <date>', 'YYYY-MM-DD the document belongs to (default today)')

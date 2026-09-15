@@ -3,6 +3,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loreHome } from '../context.js'
 import type { Connector, ConnectorContext, Doc } from '../types.js'
+import { buildStreamDoc } from '../docs-stream.js'
+import { pdfText } from '../document.js'
+import { exportGoogleDoc, googleDocId, type GoogleDoc } from '../gdoc.js'
+import { officeKind, officeText } from '../office.js'
 
 /**
  * Gmail connector — client email across the team's inboxes.
@@ -66,6 +70,15 @@ const MAX_ATTEMPTS = 5
 export function defaultKeyFile(): string {
   return join(loreHome(), 'gmail-sa.json')
 }
+
+/** Test seam: how a Google link becomes text (the Drive export, as the mailbox owner). */
+export const gmailDeps = {
+  exportDoc: (url: string, as: string, keyFile?: string): Promise<GoogleDoc> => exportGoogleDoc(url, as, keyFile ? { keyFile } : {}),
+}
+
+/** Attachments bigger than this stay a name in the email; a deck of screenshots is not text. */
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
+const TEXT_ATTACHMENT = /^text\/(?:plain|markdown|x-markdown|csv)\b|\.(?:md|txt|csv|markdown)$/i
 
 export const gmail: Connector = {
   name: 'gmail',
@@ -143,6 +156,76 @@ export const gmail: Connector = {
     }
 
     ctx.log(`gmail: ${users.length} mailbox(es) ${how}, ${listed} message(s) matched, ${byMessageId.size} unique → ${docs.length} docs`)
+
+    // Documents the client linked or attached are content, not just a URL or
+    // a filename in the email: read each one (Drive as the mailbox owner, the
+    // attachment bytes from Gmail) into the docs stream, dated and attributed
+    // like the email. A link the owner cannot open is logged, never fatal.
+    if (ctx.config.documents !== false) {
+      const keyFile = ctx.config.key_file as string | undefined
+      let filed = 0
+      const unread: string[] = []
+      for (const [mid, { msg, mailboxes }] of byMessageId) {
+        const ms = Number(msg.internalDate)
+        if (!Number.isFinite(ms) || ms < sinceMs) continue
+        const from = parseAddress(headersOf(msg).from ?? '')
+        const author = from.name || from.email || 'unknown'
+        const date = new Date(ms).toISOString().slice(0, 10)
+        const owner = mailboxes[0]
+        const { text, attachmentParts } = bodyOf(msg.payload)
+        const emailMeta = { email: `gmail-${shortHash(mid)}` }
+        for (const url of googleLinks(text)) {
+          try {
+            const g = await gmailDeps.exportDoc(url, owner, keyFile)
+            if (!g.markdown.trim()) continue
+            const built = buildStreamDoc({
+              title: g.name,
+              body: g.markdown,
+              from: author,
+              date,
+              source: g.url,
+              gdocId: g.id,
+              meta: { ...emailMeta, ...(g.modified ? { modified: g.modified } : {}), ...(g.mimeType ? { mime: g.mimeType } : {}) },
+              addedBy: 'lore-sync',
+            })
+            docs.push(built.doc)
+            filed++
+          } catch (err) {
+            unread.push(`${url} (as ${owner}): ${err instanceof Error ? err.message.split('\n')[0] : err}`)
+          }
+        }
+        for (const part of attachmentParts) {
+          const kind = officeKind(part.mimeType) ?? officeKind(part.filename)
+          const isPdf = part.mimeType === 'application/pdf' || /\.pdf$/i.test(part.filename)
+          const isText = TEXT_ATTACHMENT.test(part.mimeType) || TEXT_ATTACHMENT.test(part.filename)
+          if (!kind && !isPdf && !isText) continue
+          if (part.size > MAX_ATTACHMENT_BYTES) {
+            unread.push(`${part.filename}: ${Math.round(part.size / 1_048_576)} MB, too large`)
+            continue
+          }
+          try {
+            const bytes = await api.getAttachment(owner, msg.id, part.attachmentId)
+            const body = kind ? officeText(kind, bytes) : isPdf ? await pdfText(bytes) : bytes.toString('utf8')
+            if (!body.trim()) continue
+            const built = buildStreamDoc({
+              title: part.filename.replace(/\.[A-Za-z0-9]+$/, ''),
+              body,
+              from: author,
+              date,
+              source: `https://mail.google.com/mail/#search/rfc822msgid:${encodeURIComponent(mid)}`,
+              meta: { ...emailMeta, attachment: part.filename.replace(/\s+/g, '_'), ...(part.mimeType ? { mime: part.mimeType } : {}) },
+              addedBy: 'lore-sync',
+            })
+            docs.push(built.doc)
+            filed++
+          } catch (err) {
+            unread.push(`${part.filename}: ${err instanceof Error ? err.message.split('\n')[0] : err}`)
+          }
+        }
+      }
+      if (filed || unread.length) ctx.log(`gmail: ${filed} linked/attached document(s) filed to the docs stream${unread.length ? `; ${unread.length} unreadable` : ''}`)
+      for (const u of unread) ctx.log(`  gmail: could not read ${u}`)
+    }
     return {
       docs,
       nextCursor: { since: new Date(newest || sinceMs).toISOString() } as Record<string, unknown>,
@@ -288,21 +371,46 @@ function formatAddress(a: Address): string {
   return a.name ? `${a.name} <${a.email}>` : a.email
 }
 
-/** Prefer text/plain; fall back to stripped HTML; collect attachment names. */
-export function bodyOf(payload: GmailPart | undefined): { text: string; attachments: string[] } {
+/** Every distinct Google Docs/Sheets/Slides/Drive-file link in an email body, in order. Folders are not documents. */
+export function googleLinks(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const m of text.matchAll(/https?:\/\/(?:docs|drive)\.google\.com\/[^\s<>()"'\]]+/g)) {
+    const url = m[0].replace(/[.,;:]+$/, '')
+    const id = googleDocId(url)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(url)
+  }
+  return out
+}
+
+export interface AttachmentPart {
+  filename: string
+  mimeType: string
+  attachmentId: string
+  size: number
+}
+
+/** Prefer text/plain; fall back to stripped HTML; collect attachment names (and the parts, for reading them). */
+export function bodyOf(payload: GmailPart | undefined): { text: string; attachments: string[]; attachmentParts: AttachmentPart[] } {
   const plain: string[] = []
   const html: string[] = []
   const attachments: string[] = []
+  const attachmentParts: AttachmentPart[] = []
   const walk = (p: GmailPart | undefined) => {
     if (!p) return
-    if (p.filename && p.body?.attachmentId) attachments.push(p.filename)
+    if (p.filename && p.body?.attachmentId) {
+      attachments.push(p.filename)
+      attachmentParts.push({ filename: p.filename, mimeType: p.mimeType ?? '', attachmentId: p.body.attachmentId, size: p.body.size ?? 0 })
+    }
     else if (p.mimeType === 'text/plain' && p.body?.data) plain.push(decodeBody(p.body.data))
     else if (p.mimeType === 'text/html' && p.body?.data) html.push(decodeBody(p.body.data))
     for (const c of p.parts ?? []) walk(c)
   }
   walk(payload)
   const text = plain.length ? plain.join('\n') : html.map(htmlToText).join('\n')
-  return { text: text.replace(/\r\n/g, '\n'), attachments }
+  return { text: text.replace(/\r\n/g, '\n'), attachments, attachmentParts }
 }
 
 function decodeBody(data: string): string {
@@ -379,6 +487,8 @@ interface Api {
   getMessage(user: string, id: string): Promise<GmailMessage | undefined>
   /** Every active, non-archived user's primary address, listed as `admin`. */
   listDomainUsers(admin: string): Promise<string[]>
+  /** An attachment's bytes. */
+  getAttachment(user: string, messageId: string, attachmentId: string): Promise<Buffer>
 }
 
 function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey, directoryBase: string = DIRECTORY_API): Api {
@@ -448,6 +558,10 @@ function gmailClient(apiBase: string, tokenUrl: string, key: ServiceAccountKey, 
         if (err instanceof Error && /gmail 404/.test(err.message)) return undefined // deleted between list and get
         throw err
       }
+    },
+    async getAttachment(user, messageId, attachmentId) {
+      const r = await request<{ data?: string }>(user, `/gmail/v1/users/me/messages/${messageId}/attachments/${attachmentId}`)
+      return Buffer.from((r.data ?? '').replace(/-/g, '+').replace(/_/g, '/'), 'base64')
     },
     async listDomainUsers(admin) {
       const out: string[] = []

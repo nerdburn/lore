@@ -144,6 +144,8 @@ export const sourceSchemas = {
     admin: z.string().email().optional(),
     /** Mailboxes never read, whoever is in `users`/contacts — a teammate's opt-out. */
     exclude: z.array(z.string().email()).optional(),
+    /** File documents the client links (Google Docs/Sheets/Slides/Drive files) or attaches (PDF, Word, PowerPoint, Excel, text) into the `docs` stream (default true). */
+    documents: z.boolean().optional(),
     /** Extra client domains to match, on top of `client.domains`. */
     domains: z.array(z.string().min(1)).optional(),
     /** Extra Gmail search terms appended to the scope query, e.g. "-label:newsletters". */

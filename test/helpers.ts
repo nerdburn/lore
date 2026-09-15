@@ -132,3 +132,47 @@ export function fullFixtureRepo(): string {
     'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-08-14T06:23:00.000Z', lastExtract: '2026-08-14T06:30:00.000Z' }),
   })
 }
+
+/** A minimal zip (stored entries, no CRC) — enough for the Office reader, which ignores checksums. */
+export function zipStored(entries: Record<string, string>): Buffer {
+  const locals: Buffer[] = []
+  const centrals: Buffer[] = []
+  let offset = 0
+  for (const [name, content] of Object.entries(entries)) {
+    const n = Buffer.from(name, 'utf8')
+    const d = Buffer.from(content, 'utf8')
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0, 8) // stored
+    local.writeUInt32LE(d.length, 18)
+    local.writeUInt32LE(d.length, 22)
+    local.writeUInt16LE(n.length, 26)
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(0, 10)
+    central.writeUInt32LE(d.length, 20)
+    central.writeUInt32LE(d.length, 24)
+    central.writeUInt16LE(n.length, 28)
+    central.writeUInt32LE(offset, 42)
+    locals.push(local, n, d)
+    centrals.push(central, n)
+    offset += local.length + n.length + d.length
+  }
+  const cd = Buffer.concat(centrals)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(centrals.length / 2, 8)
+  eocd.writeUInt16LE(centrals.length / 2, 10)
+  eocd.writeUInt32LE(cd.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, cd, eocd])
+}
+
+export const DOCX_XML = `<?xml version="1.0"?><w:document xmlns:w="w"><w:body>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Product Spec</w:t></w:r></w:p>
+<w:p><w:r><w:t xml:space="preserve">Merrin helps </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>parents</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>SMS first &amp; app later</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Phase</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Weeks</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Alpha</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>6</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:p><w:r><w:t>After the table.</w:t></w:r></w:p>
+</w:body></w:document>`

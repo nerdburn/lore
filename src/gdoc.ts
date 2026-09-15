@@ -4,6 +4,7 @@ import { sshTargetFromRemote } from './commands/refresh.js'
 import { defaultKeyFile, signJwt } from './connectors/gmail.js'
 import { readGlobalConfig } from './context.js'
 import { pdfText } from './document.js'
+import { officeKind, officeText } from './office.js'
 
 /**
  * Google Docs and Drive files as text. A pasted docs.google.com or
@@ -105,6 +106,16 @@ export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = 
     return { ...common, markdown: native.mime === 'text/markdown' ? tidyExport(text) : text.trim(), url: `https://docs.google.com/${native.path}/d/${id}` }
   }
 
+  const office = officeKind(meta.mimeType)
+  if (office) {
+    // An uploaded .docx/.pptx/.xlsx: Drive opens it under docs.google.com but cannot export it — download and read the archive.
+    const dl = await fetchFn(`${DRIVE_API}/files/${id}?alt=media&supportsAllDrives=true`, { headers })
+    if (!dl.ok) throw new Error(await driveError(dl, id, as))
+    const text = officeText(office, new Uint8Array(await dl.arrayBuffer()))
+    const path = office === 'docx' ? 'document' : office === 'pptx' ? 'presentation' : 'spreadsheets'
+    return { ...common, markdown: text.trim(), url: `https://docs.google.com/${path}/d/${id}` }
+  }
+
   const fileUrl = `https://drive.google.com/file/d/${id}`
   if (meta.mimeType === 'application/pdf' || TEXT_MIMES.test(meta.mimeType)) {
     const dl = await fetchFn(`${DRIVE_API}/files/${id}?alt=media&supportsAllDrives=true`, { headers })
@@ -112,7 +123,7 @@ export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = 
     const body = meta.mimeType === 'application/pdf' ? await pdfText(new Uint8Array(await dl.arrayBuffer())) : await dl.text()
     return { ...common, markdown: body.trim(), url: fileUrl }
   }
-  throw new Error(`google: ${meta.name} is ${meta.mimeType}, not a Google Doc — download it and pass the file instead (Docs, Slides, Sheets, PDF, Markdown, and text are read from Drive directly)`)
+  throw new Error(`google: ${meta.name} is ${meta.mimeType}, not a readable document — download it and pass the file instead (Docs, Slides, Sheets, Word, PowerPoint, Excel, PDF, Markdown, and text are read from Drive directly)`)
 }
 
 /**
