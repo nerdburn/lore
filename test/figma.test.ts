@@ -26,6 +26,15 @@ function file(version = '101', over: Partial<FigmaFile> = {}): FigmaFile {
         ], 'CANVAS'),
         frame('2:1', 'Archive', [frame('2:10', 'Old', [text('2:11', 'gone')])], 'CANVAS', { visible: false }),
         frame('3:1', 'Home', [frame('3:10', 'Empty state', [text('3:11', 'Nothing here yet — ask Merrin anything')])], 'CANVAS'),
+        frame('4:1', 'Flows', [
+          frame('4:10', 'For Launch', [
+            frame('4:11', 'Section Headers', [], 'INSTANCE'),
+            text('4:12', 'Launch scope — v1'),
+            frame('4:20', 'Sign in', [text('4:21', 'Sign in to Jointly')]),
+            frame('4:30', 'Dashboard', [text('4:31', 'Your agreements')]),
+            frame('4:40', 'Later', [frame('4:41', 'Paywall', [text('4:42', 'Unlock the full agreement')])], 'SECTION'),
+          ], 'SECTION'),
+        ], 'CANVAS'),
       ],
     },
     ...over,
@@ -79,7 +88,21 @@ test('figma: file keys from every URL form; node links use dashes; slugs', () =>
 
 test('figma: a frame renders as headings + text in order, components by name, hidden and loose text skipped, invisible pages skipped', () => {
   const { frames, names } = walkFile(file(), KEY)
-  assert.deepEqual(frames.map((f) => `${f.page} / ${f.name}`), ['Onboarding / Welcome', 'Onboarding / Six questions', 'Home / Empty state'])
+  assert.deepEqual(frames.map((f) => `${f.page} / ${f.name}`), [
+    'Onboarding / Welcome',
+    'Onboarding / Six questions',
+    'Home / Empty state',
+    'Flows / For Launch / Sign in',
+    'Flows / For Launch / Dashboard',
+    'Flows / For Launch / Later / Paywall',
+    'Flows / For Launch (section notes)',
+  ])
+  const signIn = frames.find((f) => f.name === 'For Launch / Sign in')!
+  assert.match(signIn.text, /^# Merrin App › Flows › For Launch › Sign in\nFigma node 4:20 — .*node-id=4-20\n\n- Sign in to Jointly$/)
+  assert.equal(names.get('4:41'), 'Flows / For Launch / Later / Paywall')
+  assert.equal(names.get('4:10'), 'Flows / For Launch')
+  const notes = frames.find((f) => f.name.endsWith('(section notes)'))!
+  assert.match(notes.text, /\(section notes\)\n.*\n\n- \[component: Section Headers\]\n- Launch scope — v1$/)
   assert.equal(
     frames[0].text,
     [
@@ -106,12 +129,13 @@ test('figma: a frame renders as headings + text in order, components by name, hi
   assert.match(index, /^# Merrin App — pages and frames\n/)
   assert.match(index, /## Onboarding\n- Welcome — https:\/\/www\.figma\.com\/design\/.*node-id=1-10\n- Six questions/)
   assert.match(index, /## Home\n- Empty state/)
+  assert.match(index, /## Flows\n- For Launch \/ Sign in — /)
 })
 
 test('figma: first sync emits every frame + an index; an unchanged version emits nothing; an edited frame emits only itself', async () => {
   const g = fakeFigma()
   const r1 = await figma.fetch(ctx())
-  assert.deepEqual(r1.docs.map((d) => d.meta?.node ?? d.meta?.kind), ['1:10', '1:20', '3:10', 'index'])
+  assert.deepEqual(r1.docs.map((d) => d.meta?.node ?? d.meta?.kind), ['1:10', '1:20', '3:10', '4:20', '4:30', '4:41', '4:10', 'index'])
   const welcome = r1.docs[0]
   assert.equal(welcome.channel, 'merrin-app')
   assert.equal(welcome.author, 'Julie')
@@ -122,7 +146,7 @@ test('figma: first sync emits every frame + an index; an unchanged version emits
   assert.ok(g.calls.some((c) => c === `/files/${KEY}?depth=1`) && g.calls.some((c) => c === `/files/${KEY}`), 'cheap head, then the full tree')
   const cursor1 = r1.nextCursor as Record<string, { version: string; frames: Record<string, string> }>
   assert.equal(cursor1[KEY].version, '101')
-  assert.deepEqual(Object.keys(cursor1[KEY].frames).sort(), ['1:10', '1:20', '3:10', '__index'])
+  assert.deepEqual(Object.keys(cursor1[KEY].frames).sort(), ['1:10', '1:20', '3:10', '4:10', '4:20', '4:30', '4:41', '__index'])
 
   // Same version: only the head request, no docs.
   g.calls.length = 0

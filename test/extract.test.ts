@@ -62,6 +62,8 @@ test('extract: the weekly report excerpts long documents but never other streams
   assert.equal(reportExcerpt({ ...doc, text: 'short' }, 20), 'short')
   const mail = { path: 'context/streams/gmail/x/2026-09-14.md', day: '2026-09-14', text: 'm'.repeat(50) }
   assert.equal(reportExcerpt(mail, 20), mail.text)
+  const design = { path: 'context/streams/figma/app/2026-09-14.md', day: '2026-09-14', text: 'f'.repeat(50) }
+  assert.match(reportExcerpt(design, 20), /^f{20}\n\n\[… document truncated/)
 })
 
 test('extract: acceptFold applies a delta — omitted items are kept silently, returned ids update, new ids append', () => {

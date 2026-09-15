@@ -223,22 +223,48 @@ export interface FrameDoc {
 /** Text nodes are leaves; anything else with children is a container worth a heading. */
 const CONTAINERS = new Set(['FRAME', 'SECTION', 'GROUP', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE', 'SLIDE', 'SLIDE_ROW', 'TABLE', 'SHAPE_WITH_TEXT', 'STICKY', 'BOOLEAN_OPERATION'])
 
-/** Every top-level frame on every page as a markdown doc, plus node id → "Page / Frame" names for anchoring comments. */
+/**
+ * Every screen on every page as a markdown doc, plus node id → "Page / …"
+ * names for anchoring comments. A screen is a top-level frame — or, inside a
+ * SECTION (designers group a flow's screens in one), each frame the section
+ * holds, with the section in its path; a section's own loose text and
+ * headers become one short notes doc.
+ */
 export function walkFile(file: FigmaFile, key: string): { frames: FrameDoc[]; names: Map<string, string> } {
   const frames: FrameDoc[] = []
   const names = new Map<string, string>()
+  const emit = (node: FigmaNode, page: string, path: string, heading: string) => {
+    names.set(node.id, path)
+    for (const [id, p] of descendants(node, path)) names.set(id, p)
+    const lines: string[] = [`# ${file.name} › ${heading}`, `Figma node ${node.id}${dims(node)} — ${nodeUrl(key, file.name, node.id)}`, '']
+    renderChildren(node, lines, 2)
+    frames.push({ id: node.id, page, name: path.slice(page.length + 3), text: lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() })
+  }
+  const visit = (node: FigmaNode, page: string, path: string, heading: string) => {
+    if (node.visible === false) return
+    if (node.type === 'SECTION') {
+      names.set(node.id, path)
+      const loose: FigmaNode[] = []
+      for (const c of node.children ?? []) {
+        if (c.visible === false) continue
+        if (c.type === 'SECTION' || CONTAINERS.has(c.type) || c.children?.length) {
+          if (c.type === 'INSTANCE' && !(c.children ?? []).some(hasText)) loose.push(c)
+          else visit(c, page, `${path} / ${c.name}`, `${heading} › ${c.name}`)
+        } else if (c.type === 'TEXT') loose.push(c)
+      }
+      if (loose.some((n) => n.type === 'TEXT' && n.characters?.trim())) {
+        const lines: string[] = [`# ${file.name} › ${heading} (section notes)`, `Figma node ${node.id} — ${nodeUrl(key, file.name, node.id)}`, '']
+        renderChildren({ ...node, children: loose }, lines, 2)
+        frames.push({ id: node.id, page, name: `${path.slice(page.length + 3)} (section notes)`, text: lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() })
+      }
+      return
+    }
+    if (node.type === 'TEXT' || !(CONTAINERS.has(node.type) || node.children?.length)) return
+    emit(node, page, path, heading)
+  }
   for (const page of file.document.children ?? []) {
     if (page.type !== 'CANVAS' || page.visible === false) continue
-    for (const top of page.children ?? []) {
-      if (top.visible === false) continue
-      if (top.type === 'TEXT' || !(CONTAINERS.has(top.type) || top.children?.length)) continue
-      const label = `${page.name} / ${top.name}`
-      names.set(top.id, label)
-      for (const [id, path] of descendants(top, label)) names.set(id, path)
-      const lines: string[] = [`# ${file.name} › ${page.name} › ${top.name}`, `Figma node ${top.id}${dims(top)} — ${nodeUrl(key, file.name, top.id)}`, '']
-      renderChildren(top, lines, 2)
-      frames.push({ id: top.id, page: page.name, name: top.name, text: lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() })
-    }
+    for (const top of page.children ?? []) visit(top, page.name, `${page.name} / ${top.name}`, `${page.name} › ${top.name}`)
   }
   return { frames, names }
 }

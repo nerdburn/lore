@@ -55,7 +55,7 @@ const MODEL_INCREMENTAL = process.env.LORE_MODEL_INCREMENTAL ?? 'claude-sonnet-5
 /** Above this much new material a "one batch" fold is a backfill (a new source, a re-fold), not an hourly delta — the full model handles it. */
 const INCREMENTAL_MAX_CHARS = 60_000
 const BATCH_CHARS = 300_000
-/** A document in the weekly report is evidence that it arrived, not material to summarise in full — this much of it is plenty. */
+/** A document (or a day of design frames) in the weekly report is evidence that it arrived, not material to summarise in full — this much of it is plenty. */
 const REPORT_DOC_CHARS = 12_000
 const ARTIFACTS = ['requests', 'decisions', 'roadmap'] as const
 
@@ -175,6 +175,7 @@ Rules:
 - Never delete a request, decision, or roadmap item; items are only ever added or updated. When new evidence shows a request was completed, return it with status done. A request older than ~30 days with no activity is returned once with status "stale", never left "open".
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.
+- Figma frames (source figma) are the design: what a screen contains, what a label says. They are evidence for confirming or contradicting a request, decision or ticket, not requests or roadmap in themselves — do not turn screen names into roadmap items or requests. Figma *comments* are like Slack messages: a request or decision when someone with authority makes one.
 - Tracked work: when a "Tracked work" list is given, those items are the project's tracker of record — lore's own tickets, some mirrored from Jira or GitHub. Review them against the material and return work_changes for items the material moves: status (a merged PR, "shipped", "done", "blocked on X", someone starting on it), priority (a decision-maker calling it urgent or deferring it), or rank_above (an explicit reprioritisation). Only with high confidence and a citable source; medium or low confidence proposals are recorded as skipped, so return them only when they are worth a human's glance. Never propose archived, never invent keys, and never repeat a tracked item as a new roadmap item — a request that has a ticket takes its status from the ticket. An empty work_changes list is the normal case.
 - New tickets: return work_new for work that is *committed* and not yet tracked — the team agreed to do it, someone is doing it, it is scheduled, or it is planned roadmap the client signed off on — whether the commitment is in this batch's material or visible in the current requests/roadmap. Reference the request id when one exists (request: req-0007) so the two stay linked. A ticket title is short and imperative. Not a ticket: a bare ask nobody agreed to, an open question, a decision, a meeting mention, anything already in the Tracked work list under other words (Jira/GitHub issues are mirrored there — do not duplicate them), or finished work (that is a request marked done). High confidence and a cited source only. A ticket is never proposed as done or archived. An empty work_new list is the normal case.`
 
@@ -601,7 +602,7 @@ function lastHeading(part: string): string | undefined {
 
 /** What the weekly report sees of a stream file: everything, except documents beyond REPORT_DOC_CHARS. */
 export function reportExcerpt(f: StreamFile, limit = REPORT_DOC_CHARS): string {
-  if (!f.path.startsWith('context/streams/docs/') || f.text.length <= limit) return f.text
+  if (!/^context\/streams\/(docs|figma)\//.test(f.path) || f.text.length <= limit) return f.text
   return `${f.text.slice(0, limit)}\n\n[… document truncated for the report: ${(f.text.length - limit).toLocaleString()} more characters in ${f.path}]`
 }
 
