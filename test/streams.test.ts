@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { hasDoc, writeDocs } from '../src/streams.js'
+import { docStreamIds, hasDoc, writeDocs } from '../src/streams.js'
 import type { Doc } from '../src/types.js'
 import { makeContextRepo } from './helpers.js'
 
@@ -83,4 +83,22 @@ test('streams: secrets never reach the stream file', () => {
   assert.ok(!text.includes(token))
   assert.ok(!text.includes('Hunter2Hunter2'))
   assert.ok(text.includes('[redacted:slack-token]'))
+})
+
+test('streams: the docs stream dedupes by id across channels and days — one copy of a document however it arrived', () => {
+  const root = makeContextRepo()
+  const base = { source: 'docs', author: 'Julie', text: '# Spec\n\nbody', meta: { title: 'spec' } }
+  const first = writeDocs(root, [{ ...base, id: 'doc-ABC-1111', channel: 'spec', timestamp: '2026-09-09T00:00:00.000Z' }])
+  assert.equal(first.written, 1)
+  // Same content-derived id, filed later under Google's own title on another day: skipped.
+  const again = writeDocs(root, [{ ...base, id: 'doc-ABC-1111', channel: 'merrin-spec-docx', timestamp: '2026-09-14T00:00:00.000Z' }])
+  assert.deepEqual([again.written, again.skipped], [0, 1])
+  assert.equal(existsSync(join(root, 'context/streams/docs/merrin-spec-docx')), false)
+  // A changed document (new digest) is a new version.
+  const v2 = writeDocs(root, [{ ...base, id: 'doc-ABC-2222', channel: 'spec', timestamp: '2026-09-14T00:00:00.000Z', text: '# Spec\n\nbody v2' }])
+  assert.equal(v2.written, 1)
+  assert.deepEqual([...docStreamIds(root)].sort(), ['doc-ABC-1111', 'doc-ABC-2222'])
+  // Other streams keep per-file semantics.
+  const slack = writeDocs(root, [{ ...base, source: 'slack', id: 'slack-1', channel: '#a', timestamp: '2026-09-09T00:00:00.000Z' }, { ...base, source: 'slack', id: 'slack-1', channel: '#a', timestamp: '2026-09-10T00:00:00.000Z' }])
+  assert.equal(slack.written, 2)
 })

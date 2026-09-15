@@ -174,7 +174,8 @@ export const gmail: Connector = {
         const owner = mailboxes[0]
         const { text, attachmentParts } = bodyOf(msg.payload)
         const emailMeta = { email: `gmail-${shortHash(mid)}` }
-        for (const url of googleLinks(text)) {
+        // Only what this message itself says: a reply quoting the original would re-file every link in it.
+        for (const url of googleLinks(trimQuoted(text))) {
           try {
             const g = await gmailDeps.exportDoc(url, owner, keyFile)
             if (!g.markdown.trim()) continue

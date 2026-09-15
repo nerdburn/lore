@@ -311,8 +311,10 @@ test('gmail: documents the client links or attaches are read into the docs strea
   const DOC = 'https://docs.google.com/document/d/1_DDc8AR_2KNWAxy8R4eIhLDyk0_57wwRJ1zBwtIPOq8/edit?tab=t.0#heading=h.x'
   const FOLDER = 'https://drive.google.com/drive/folders/1aEwalIaY37bR9b7i1PPmIqEl7jmn76NP'
   const SHEET = 'https://docs.google.com/spreadsheets/d/1kxtyIU_3uZwnFpY9j5KvEruPBPU0RPqffwfVLUIFMh4/edit?gid=0#gid=0'
-  const body = `A ton of items below.\n\nZ1 Discovery Insights\n<${DOC}>\n\nBrand Assets\n<${FOLDER}>\n\nCompetitive Landscape\n<${SHEET}>,\nsame doc again ${DOC}\n`
-  assert.deepEqual(googleLinks(body), [DOC, SHEET], 'folders are not documents; a repeated link counts once')
+  const QUOTED = 'https://docs.google.com/document/d/1QUOTEDQUOTEDQUOTEDQUOTEDQUOTED/edit'
+  const body = `A ton of items below.\n\nZ1 Discovery Insights\n<${DOC}>\n\nBrand Assets\n<${FOLDER}>\n\nCompetitive Landscape\n<${SHEET}>,\nsame doc again ${DOC}\n\nOn Tue, Sep 9, 2026 at 10:00 AM Someone <s@x.com> wrote:\n> earlier link ${QUOTED}\n`
+  assert.deepEqual(googleLinks(body), [DOC, SHEET, QUOTED], 'folders are not documents; a repeated link counts once')
+  assert.deepEqual(googleLinks(trimQuoted(body)), [DOC, SHEET], 'the connector reads only what the message itself says')
 
   const m = msg('m1', { from: 'Julie Harsh <julie@acme.com>', subject: 'Merrin Items', text: body, date: '2026-09-09T18:27:50Z' })
   m.payload.parts!.push(
@@ -350,7 +352,7 @@ test('gmail: documents the client links or attaches are read into the docs strea
     assert.equal(spec.meta?.attachment, 'Merrin_Spec.docx')
     assert.match(spec.permalink ?? '', /^https:\/\/mail\.google\.com\/mail\/#search\/rfc822msgid:/)
     assert.match(docsStream.find((d) => d.channel === 'metrics')!.text, /weekly actives,500/)
-    assert.deepEqual(exported, [`shawn@inputlogic.ca  ${DOC}`, `shawn@inputlogic.ca  ${SHEET}`], 'read as the mailbox owner, each link once')
+    assert.deepEqual(exported, [`shawn@inputlogic.ca  ${DOC}`, `shawn@inputlogic.ca  ${SHEET}`], 'read as the mailbox owner, each link once, quoted links never')
     assert.ok(logs.some((l) => /3 linked\/attached document\(s\) filed to the docs stream; 1 unreadable/.test(l)), logs.join('\n'))
     assert.ok(logs.some((l) => /could not read https:\/\/docs\.google\.com\/spreadsheets.*cannot see it/.test(l)))
     assert.equal(r.errors, undefined, 'an unreadable link is not a source failure')

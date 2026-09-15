@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { scrub } from './scrub.js'
 import type { Doc } from './types.js'
@@ -23,9 +23,24 @@ export function writeDocs(root: string, docs: Doc[]): WriteResult {
   const redacted: Record<string, number> = {}
   const sorted = [...docs].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
 
+  let docsStreamIds: Set<string> | undefined
+
   for (const doc of sorted) {
     const day = doc.timestamp.slice(0, 10)
     const path = join(root, streamRelPath(doc.source, doc.channel, doc.timestamp))
+
+    // The docs stream dedupes across the whole stream, not per day file: the
+    // same document reaches lore by several routes (a person filing it, the
+    // email that linked it, a reply quoting that email) under different
+    // titles and dates, and its id is content-derived — one copy is enough.
+    if (doc.source === DOCS_STREAM) {
+      docsStreamIds ??= docStreamIds(root)
+      if (docsStreamIds.has(doc.id)) {
+        skipped++
+        continue
+      }
+      docsStreamIds.add(doc.id)
+    }
 
     if (existsSync(path)) {
       if (hasDoc(readFileSync(path, 'utf8'), doc.id)) {
@@ -46,6 +61,23 @@ export function writeDocs(root: string, docs: Doc[]): WriteResult {
     written++
   }
   return { written, skipped, redacted }
+}
+
+const DOCS_STREAM = 'docs'
+
+/** Every doc id already in the docs stream, across channels and days. */
+export function docStreamIds(root: string): Set<string> {
+  const ids = new Set<string>()
+  const dir = join(root, 'context', 'streams', DOCS_STREAM)
+  if (!existsSync(dir)) return ids
+  for (const channel of readdirSync(dir, { withFileTypes: true })) {
+    if (!channel.isDirectory()) continue
+    for (const f of readdirSync(join(dir, channel.name))) {
+      if (!f.endsWith('.md')) continue
+      for (const m of readFileSync(join(dir, channel.name, f), 'utf8').matchAll(/<!-- id: (doc-[A-Za-z0-9_-]+)(?: |-->)/g)) ids.add(m[1])
+    }
+  }
+  return ids
 }
 
 /** Context-relative path of the stream file a doc with this source/channel/timestamp lands in. */
