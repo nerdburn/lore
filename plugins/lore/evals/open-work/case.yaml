@@ -1,12 +1,12 @@
 schema_version: "1.0"
 name: open-work
-description: Status questions are answered from the source-owned GitHub work table, with freshness.
+description: Status questions are answered from the lore tracker (the tracker of record), with the GitHub snapshot as evidence and freshness stated.
 tags: [status, work-table]
 context:
   scaffold_script: scaffold.sh
 execution:
   prompt: |
-    What is open right now in this project's GitHub repo, and when was this memory last synced?
+    What work is open right now for this project, and when was this memory last synced?
   max_turns: 14
   allowed_tools: [Skill, mcp__plugin_lore_lore__lore_recall, mcp__plugin_lore_lore__lore_grep, mcp__plugin_lore_lore__lore_read]
 graders:
@@ -18,10 +18,12 @@ graders:
     type: llm
     weight: 1
     criteria: |
-      PASS if the response (a) says exactly one item is open in the GitHub tracker —
-      PR #42, the Black Friday landing page — attributing that to GitHub's own work
-      table / tracker state, and (b) gives the time or date the memory was last synced
-      (2026-08-21). Additional context about requests or the roadmap is acceptable as
-      long as it is presented as distinct from tracker state.
-      FAIL if it invents other open items, says it cannot reach the data, omits the
-      last-synced time, or claims to have pinned/saved anything.
+      PASS if the response (a) says exactly one ticket is open in the tracker —
+      ACM-1, the Black Friday landing page, in progress — attributing that to lore's
+      work tracker (not to a guess from Slack), ideally noting it moved to in progress
+      because PR #42 was opened, and (b) gives the time or date the memory was last
+      synced (2026-08-21). Mentioning the open PR #42 from GitHub's table as evidence,
+      or requests/roadmap presented as distinct from tracker state, is acceptable.
+      FAIL if it invents other open tickets, presents the closed ACM-2 as open, says
+      it cannot reach the data, omits the last-synced time, or claims to have
+      pinned/saved/moved anything.

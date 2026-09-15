@@ -5,6 +5,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
 import { describeSows, readSows, summarizeSow } from '../sow.js'
+import { appendAudit } from '../audit.js'
+import { applyFoldChanges, describeWorkForPrompt, describeWorkHistory, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
 import type { Pin } from '../types.js'
 
@@ -117,8 +119,27 @@ const FOLD_SCHEMA: Record<string, unknown> = {
         additionalProperties: false,
       },
     },
+    work_changes: {
+      type: 'array',
+      description: 'changes to tracked work items the material is unambiguous evidence for; empty when no tracked work is listed or nothing moved',
+      items: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'the item key exactly as listed, e.g. CAR-3' },
+          status: { type: 'string', enum: ['todo', 'in_progress', 'blocked', 'done'] },
+          priority: { type: 'string', enum: ['P1', 'P2', 'P3'] },
+          rank_above: { type: 'string', description: 'key of the item this should now sit directly above' },
+          reason: { type: 'string', description: 'one sentence: who said or did what, when' },
+          sources: { type: 'array', items: { type: 'string' }, description: 'permalinks to the evidence' },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          evidence_date: { type: 'string', description: 'YYYY-MM-DD of the evidence' },
+        },
+        required: ['key', 'reason', 'sources', 'confidence', 'evidence_date'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['requests', 'decisions', 'roadmap', 'contradictions'],
+  required: ['requests', 'decisions', 'roadmap', 'contradictions', 'work_changes'],
   additionalProperties: false,
 }
 
@@ -133,7 +154,8 @@ Rules:
 - Every new or changed item cites the most relevant source permalink from the material.
 - Never delete a request, decision, or roadmap item; items are only ever added or updated. When new evidence shows a request was completed, return it with status done. A request older than ~30 days with no activity is returned once with status "stale", never left "open".
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
-- Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.`
+- Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.
+- Tracked work: when a "Tracked work" list is given, those items are the project's tracker of record — lore's own tickets, some mirrored from Jira or GitHub. Review them against the material and return work_changes for items the material moves: status (a merged PR, "shipped", "done", "blocked on X", someone starting on it), priority (a decision-maker calling it urgent or deferring it), or rank_above (an explicit reprioritisation). Only with high confidence and a citable source; medium or low confidence proposals are recorded as skipped, so return them only when they are worth a human's glance. Never propose archived, never invent items or keys, and never repeat a tracked item as a new roadmap item — a request that has a ticket takes its status from the ticket. An empty work_changes list is the normal case.`
 
 const REPORT_SYSTEM = `You write the weekly status report for a client project, derived from the past week of synced history (Slack, email, meetings, attached documents, issues) and the project's tracked artifacts. Markdown, these sections in order: Done, In progress, Blockers, Bugs, Decisions, New requests, Next, Budget. Budget only when a Commitments section is given: one line per active SOW restating the figures given (weeks sold, effective date) — never compute or estimate weeks used or remaining. Every claim cites a source permalink. Be specific and factual — name who did or said what. Omit a section (heading and all) if there is genuinely nothing for it. No preamble.`
 
@@ -142,6 +164,7 @@ interface FoldResult {
   decisions: unknown[]
   roadmap: unknown[]
   contradictions: { pin_id: string; conflict: string; source: string }[]
+  work_changes?: WorkChangeProposal[]
 }
 
 type Backend = 'sdk' | 'cli'
@@ -187,8 +210,11 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
         }\nAttribute requests and decisions to the client side vs the team accordingly.`
       : ''
     const commitments = sowNote ? `\n\n# Commitments (statements of work — authoritative, human-attached)\n${sowNote}\nWhere an SOW names scope items, note in a request's text whether it falls inside or outside them; never invent budget figures.` : ''
+    const prefix = workPrefix(config)
+    const workItems = readWorkItems(root, prefix)
     for (let i = 0; i < batches.length; i++) {
-      const user = `Today is ${today}.${clientNote}${commitments}\n\n# Current artifacts\n${Object.entries(artifacts)
+      const workNote = workItems.length ? `\n\n# Tracked work (lore tracker ${prefix}: key | rank | status | priority | assignee | title | external tracker state)\n${describeWorkForPrompt(workItems, today)}` : ''
+      const user = `Today is ${today}.${clientNote}${commitments}${workNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = await withRetry(() => (llm === 'sdk' ? sdkFold(model, user) : Promise.resolve(cliFold(model, user))), 2, (attempt, err) =>
@@ -202,6 +228,21 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
+      if (workItems.length > 0) {
+        const at = new Date().toISOString()
+        const w = applyFoldChanges(workItems, result.work_changes, at)
+        if (w.applied.length > 0) {
+          writeWorkItems(root, prefix, workItems)
+          for (const line of w.applied) {
+            const key = line.slice(0, line.indexOf(':'))
+            const proposal = (result.work_changes ?? []).find((c) => c.key?.toUpperCase() === key.toUpperCase())
+            appendAudit(root, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: key, ...(proposal?.sources?.[0] ? { source: proposal.sources[0] } : {}) })
+            console.log(`  work: ${line}`)
+          }
+          changes.push(`work ~${w.applied.length}`)
+        }
+        for (const line of w.skipped) if (!/: no change$/.test(line)) console.log(`  work skipped: ${line}`)
+      }
       // Checkpoint after every batch — artifacts to disk, consumed files to
       // state.extracted — so a killed fold resumes at the next batch instead
       // of refolding from the start.
@@ -236,7 +277,11 @@ export async function extract(root: string, opts: { report?: boolean } = {}): Pr
     } else {
       const artifactContext = ARTIFACTS.map((n) => `## ${n}\n${readRaw(root, `context/derived/${n}.yaml`)}`).join('\n')
       const sowNote = commitmentsNote(root)
-      const user = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
+      const reportItems = readWorkItems(root, workPrefix(config))
+      const workNote = reportItems.length
+        ? `\n\n# Tracked work (lore tracker — the tracker of record; open items and recent closes)\n${describeWorkForPrompt(reportItems, today)}\n\n## Work moved this week\n${describeWorkHistory(reportItems, weekAgo) || '(nothing moved)'}`
+        : ''
+      const user = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}${workNote}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
         .map((f) => reportExcerpt(f))
         .join('\n\n')}`
       const report = llm === 'sdk' ? await sdkText(MODEL, REPORT_SYSTEM, user) : cliCall(MODEL, REPORT_SYSTEM, user)
@@ -401,6 +446,7 @@ export function parseFoldOutput(text: string): FoldResult {
   for (const key of ['requests', 'decisions', 'roadmap', 'contradictions']) {
     if (!Array.isArray(obj[key])) throw new Error(`extract: model output missing array "${key}"`)
   }
+  if (!Array.isArray(obj.work_changes)) obj.work_changes = []
   return obj as unknown as FoldResult
 }
 

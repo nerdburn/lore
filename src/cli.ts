@@ -20,7 +20,12 @@ import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
 import { docAdd, docList } from './commands/doc.js'
+import { workAdd, workList, workMove, workPromote, workRank, workSet, workShow } from './commands/work.js'
 import { exportGoogleDoc } from './gdoc.js'
+
+function splitList(value: unknown): string[] | undefined {
+  return value === undefined ? undefined : String(value).split(/[;,]/).map((s) => s.trim()).filter(Boolean)
+}
 
 /** Options shared by every command that reads or writes a context repo. */
 function contextual(cmd: Command): Command {
@@ -200,6 +205,79 @@ contextual(
 })
 contextual(doc.command('list').description('list documents in the `docs` stream').option('--json', 'machine-readable output')).action((o) => void docList(root, o))
 
+const work = program.command('work').description('the work tracker of record: tickets mirrored from Jira/GitHub, moved by people, agents, and the fold — every move recorded with who and why')
+contextual(
+  work
+    .command('add')
+    .description('add a work item; commits and pushes')
+    .argument('<title>', 'what the work is')
+    .option('--status <s>', `${['todo', 'in_progress', 'blocked', 'done', 'archived'].join(' | ')} (default todo)`)
+    .option('--priority <p>', 'P1 | P2 | P3')
+    .option('--assignee <who>', 'who is on it')
+    .option('--labels <list>', 'comma-separated labels')
+    .option('--source <urls>', 'comma-separated evidence links (a Slack permalink, an email)')
+    .option('--external <ref>', 'link an existing tracker issue: "jira:INPT-9" or "github:owner/repo#42"')
+    .option('--reason <why>', 'why this is being tracked (recorded in history)')
+    .option('--by <who>', 'who is adding this (defaults to OS username)'),
+).action((title: string, o) => {
+  workAdd(root, { title, status: o.status, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external, reason: o.reason }, o)
+})
+contextual(
+  work
+    .command('promote')
+    .description('turn a derived request (req-0007) into a tracked item, keeping its evidence')
+    .argument('<request-id>', 'id from `lore recall requests`')
+    .option('--title <title>', 'ticket title (default: the request text)')
+    .option('--priority <p>', 'P1 | P2 | P3')
+    .option('--reason <why>', 'why now (recorded in history)')
+    .option('--by <who>', 'who is promoting this'),
+).action((id: string, o) => {
+  workPromote(root, id, { title: o.title, priority: o.priority, reason: o.reason }, o)
+})
+contextual(
+  work
+    .command('move')
+    .description('change an item\'s status')
+    .argument('<key>', 'e.g. CAR-3')
+    .argument('<status>', 'todo | in_progress | blocked | done | archived')
+    .requiredOption('--reason <why>', 'why it moved — recorded in history')
+    .option('--source <urls>', 'comma-separated evidence links')
+    .option('--by <who>', 'who is moving it'),
+).action((key: string, status: string, o) => {
+  workMove(root, key, status, { reason: o.reason, sources: splitList(o.source) }, o)
+})
+contextual(
+  work
+    .command('set')
+    .description('change title, priority, assignee, labels, evidence, or the linked tracker issue')
+    .argument('<key>', 'e.g. CAR-3')
+    .option('--title <title>')
+    .option('--priority <p>', 'P1 | P2 | P3')
+    .option('--assignee <who>', 'who is on it ("" to clear)')
+    .option('--labels <list>', 'comma-separated, replaces the list')
+    .option('--source <urls>', 'comma-separated evidence links to add')
+    .option('--external <ref>', '"jira:INPT-9" or "github:owner/repo#42"')
+    .requiredOption('--reason <why>', 'why — recorded in history')
+    .option('--by <who>', 'who is changing it'),
+).action((key: string, o) => {
+  workSet(root, key, { title: o.title, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external }, { reason: o.reason }, o)
+})
+contextual(
+  work
+    .command('rank')
+    .description('move an item in the priority order (file order is rank)')
+    .argument('<key>', 'e.g. CAR-3')
+    .option('--above <key>', 'place it directly above this item')
+    .option('--top', 'place it first')
+    .option('--bottom', 'place it last')
+    .requiredOption('--reason <why>', 'why — recorded in history')
+    .option('--by <who>', 'who is ranking it'),
+).action((key: string, o) => {
+  workRank(root, key, { above: o.above, top: o.top, bottom: o.bottom }, { reason: o.reason }, o)
+})
+contextual(work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--json', 'machine-readable output')).action((o) => void workList(root, o))
+contextual(work.command('show').description('one item with its full history').argument('<key>').option('--json', 'machine-readable output')).action((key: string, o) => void workShow(root, key, o))
+
 program
   .command('link')
   .description('point this project repo at a context repo (writes a one-line lore.json pointer + AGENTS.md section)')
@@ -249,7 +327,7 @@ contextual(
 contextual(
   program
     .command('mcp')
-    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add)'),
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_work_*)'),
 ).action((opts) => mcp(root, opts))
 
 program.parseAsync().catch((err) => {

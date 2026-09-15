@@ -138,3 +138,10 @@ test('config: client block — domains normalised, contacts default to the clien
   assert.throws(() => configSchema.parse({ project: 'x', client: { name: 'X', contacts: [{ name: 'A', email: 'not-an-email' }] } }))
   assert.equal(configSchema.parse({ project: 'x' }).client, undefined)
 })
+
+test('config: work.prefix is optional and must look like a ticket prefix', () => {
+  assert.equal(configSchema.parse({ project: 'acme' }).work, undefined)
+  assert.deepEqual(configSchema.parse({ project: 'acme', work: { prefix: 'CAR' } }).work, { prefix: 'CAR' })
+  assert.deepEqual(configSchema.parse({ project: 'acme', work: { prefix: 'A1' } }).work, { prefix: 'A1' })
+  for (const bad of ['car', 'C', '1AB', 'TOOLONGX', 'CA-R']) assert.throws(() => configSchema.parse({ project: 'acme', work: { prefix: bad } }), `prefix ${bad}`)
+})

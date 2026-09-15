@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add, lore_work_add/promote/move/set) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -38,13 +38,25 @@ history, say so, and never present it as current state.
 
 1. **Pinned facts** (`pins`) — a human explicitly stored these. They win over
    everything below on conflict.
-2. **Work tables** (`work`, e.g. `github/acme__web`, `jira/ACM`) — the
-   *source system's* own record, written by sync, never by an LLM. For anything about delivery
-   state — what is open, closed, merged, assigned, labelled, in which
-   milestone — this is the answer. Do not infer issue state from Slack or
-   from `derived` when a work table covers the repo. Recall returns open
-   items in full and closed/merged as counts; for a closed item's details,
-   `lore_read` the `file` it names.
+2. **The lore tracker** (`work["lore/<PREFIX>"]`, e.g. `lore/CAR`) — the
+   project's tracker of record, listed first. Tickets (CAR-3) with status
+   (`todo`, `in_progress`, `blocked`, `done`, `archived`), priority, assignee,
+   rank (list order), evidence links, and `last`: who moved it, through
+   which surface (`cli`/`mcp` a person or agent, `sync` the external
+   tracker, `fold` lore's own inference), and why. For "what is open / in
+   progress / blocked / done" this is the answer — say who moved a ticket
+   and why when it matters, and treat a `fold` move as lore's reading of
+   the evidence: state it with its reason. Recall returns open tickets in
+   full and closed ones as counts; `lore_read` the `file` for a ticket's
+   full history.
+   **External tracker snapshots** (`work["github/…"]`, `work["jira/…"]`) —
+   what Jira or GitHub itself says, written by sync. Their open issues are
+   mirrored into the lore tracker (`external` on the ticket), so answer
+   from the lore ticket and cite the external issue as its source. A
+   ticket with `drift: true` is one where lore and the tracker disagree
+   (lore says done, Jira still In Progress, or the reverse): say both, and
+   that lore's status carries the reason. Do not infer delivery state from
+   Slack or from `derived` when a ticket covers the work.
 3. **Derived artifacts** (`derived`: `requests`, `decisions`, `roadmap`,
    `contradictions`) — LLM-extracted from the raw material; every item cites
    a source. Good for "what has the client asked for" and "what was decided";
@@ -91,9 +103,11 @@ look for that in Slack or a pin before stating it as settled.
   `file`. "How much is left" cannot be answered until the scheduling source
   is connected — say so rather than reasoning from dates.
 - **Status questions** ("what's open / in progress / done", "what's
-  outstanding for the client"): `lore_recall` with `category: "work"` for
-  tracker state, then `category: "requests"` for asks that have no ticket
-  yet. Say which is which.
+  outstanding for the client"): `lore_recall` with `category: "work"` — the
+  lore tracker first, external snapshots as evidence — then
+  `category: "requests"` for asks that have no ticket yet (a request with a
+  ticket shows as the ticket's `request`). Say which is which, and for a
+  ticket the fold or sync moved recently, say so with the reason.
 - **"What do we know / what was decided"**: `lore_recall` (no category, or
   `decisions`). Check `pins` first, then `derived`.
 - **Anything specific** — quotes, dates, "did they mention X", "what did
@@ -152,6 +166,41 @@ and ask whether they still want a pin. When you do pin:
 
 The tool is unavailable on archived clients and may be refused by the repo's
 write allow-list; report either plainly rather than working around it.
+
+## Moving work — the tracker verbs
+
+The lore tracker is the tracker of record, so keeping it right is part of
+the job. Four tools, each recording you as the actor in the ticket's
+history with the `reason` you give — that reason is the paper trail, so
+make it the fact ("Cory said in #acme he started Tuesday", "PR #42 merged"),
+not a paraphrase of the command.
+
+- **`lore_work_move`** — change status. Do it when a person asks ("mark
+  CAR-3 done", "this is blocked on the API keys"), or when the evidence in
+  front of you is unambiguous: a merged PR, a "shipped"/"live" message from
+  the team, a client confirming it works, someone saying they have started.
+  Pass `sources` (permalinks). A hunch, a plan, or a meeting mention is not
+  evidence — leave it, or ask. **Never move a ticket to `archived` on your
+  own initiative**; that is a person's decision.
+- **`lore_work_promote`** — a derived request (`req-0007`) becomes a
+  ticket, keeping its evidence. Use when someone says to track, ticket,
+  schedule, or "put it on the board".
+- **`lore_work_add`** — a new ticket for work that is not a derived request.
+  Check `lore_recall` first: if a ticket or request already covers it, say
+  so instead of adding a duplicate. Link an existing Jira/GitHub issue with
+  `external` ("jira:INPT-9", "github:owner/repo#42") rather than creating a
+  parallel ticket.
+- **`lore_work_set`** — priority, assignee, labels, title, evidence links,
+  the linked tracker issue, or rank (`rank_above`: a key, "top", or
+  "bottom"). Reprioritise only on a decision-maker's word, and cite it.
+
+Tickets carry no estimates or SOW weeks — never add hours or weeks to a
+ticket, and never derive SOW burn from tickets. Reply with the key and what
+changed ("moved CAR-3 → done"). The tools are unavailable on archived
+clients and may be refused by the repo's write allow-list; report either
+plainly. The fold also moves tickets on its own when the synced material is
+unambiguous — those show as `via: fold` with lore's reason; if a person
+disagrees with one, move it back with their reason, which then stands.
 
 ## Attaching a statement of work
 

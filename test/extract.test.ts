@@ -4,12 +4,16 @@ import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, reportExce
 import { makeContextRepo } from './helpers.js'
 
 const VALID = { requests: [], decisions: [{ id: 'dec-0001' }], roadmap: [], contradictions: [] }
+/** work_changes is optional in the model's output and defaults to empty. */
+const PARSED = { ...VALID, work_changes: [] }
 
 test('extract: parses bare JSON, JSON in prose, and fenced JSON', () => {
   const s = JSON.stringify(VALID)
-  assert.deepEqual(parseFoldOutput(s), VALID)
-  assert.deepEqual(parseFoldOutput(`Here are the artifacts:\n${s}\nDone.`), VALID)
-  assert.deepEqual(parseFoldOutput('```json\n' + s + '\n```'), VALID)
+  assert.deepEqual(parseFoldOutput(s), PARSED)
+  assert.deepEqual(parseFoldOutput(`Here are the artifacts:\n${s}\nDone.`), PARSED)
+  assert.deepEqual(parseFoldOutput('```json\n' + s + '\n```'), PARSED)
+  const withWork = { ...VALID, work_changes: [{ key: 'ACM-1', status: 'done', reason: 'r', sources: ['s'], confidence: 'high', evidence_date: '2026-08-03' }] }
+  assert.deepEqual(parseFoldOutput(JSON.stringify(withWork)), withWork)
 })
 
 test('extract: rejects output with no JSON, invalid JSON, or missing arrays', () => {

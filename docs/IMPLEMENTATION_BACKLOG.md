@@ -30,7 +30,17 @@ The source systems remain the source of record. Lore stores an attributable,
 queryable sync of source material plus derived summaries and explicitly
 confirmed facts.
 
-### Work tracking is optional
+### Work tracking — superseded 2026-09-15
+
+**Shipped differently from what follows:** lore is the work tracker of
+record for every project (`context/work/lore/<PREFIX>.yaml`). Jira and
+GitHub Issues are inputs, mirrored into that table on sync; the fold
+reviews tickets against the conversation and may move them with high
+confidence and a cited source; people and agents move them through
+`lore work` / `lore_work_*`; every change is in the ticket's history. The
+external tables below remain as snapshots of what the tracker says.
+`lore push` (write-back from lore to the tracker) is the open item. The
+original design, kept for context:
 
 Each project can have a canonical work tracker, but it is not required.
 

@@ -11,11 +11,11 @@ export const AUDIT_FILE = 'context/audit.jsonl'
 export interface AuditEntry {
   /** ISO 8601 */
   at: string
-  action: 'remember' | 'sow' | 'doc'
-  /** OS user (or --by on the CLI) — never a value supplied over MCP. */
+  action: 'remember' | 'sow' | 'doc' | 'work'
+  /** OS user (or --by on the CLI) — never a value supplied over MCP; `lore-extract` for a fold's inference. */
   actor: string
-  via: 'cli' | 'mcp'
-  /** The id of the record written (pin id, SOW slug, or document id). */
+  via: 'cli' | 'mcp' | 'fold'
+  /** The id of the record written (pin id, SOW slug, document id, or work item key). */
   id: string
   /** Supporting rationale or source link, when given. */
   source?: string

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { readSows, summarizeSow, type SowSummary } from './sow.js'
+import { summarizeForRecall, type LoreWorkItem } from './work.js'
 import type { Client, Lifecycle, LoreConfig } from './config.js'
 import type { Pin } from './types.js'
 
@@ -19,9 +20,12 @@ export interface Recalled {
   /** Derived YAML artifacts keyed by file stem: requests, decisions, roadmap, contradictions… */
   derived: Record<string, unknown>
   /**
-   * Source-owned work tables (context/work/<source>/<scope>.yaml), keyed
-   * "source/scope". The source system is authoritative for these — GitHub
-   * Issues state, not an LLM's reading of it. Compact by design: open items
+   * Work tables (context/work/<source>/<scope>.yaml), keyed "source/scope".
+   * "lore/<PREFIX>" is the lore tracker — the tracker of record, listed
+   * first; each open item carries `last` (who moved it, via what, why) and
+   * `drift` when lore and the external tracker disagree. "github/…" and
+   * "jira/…" are the external trackers' own tables, written by sync: what
+   * the tracker says, mirrored into lore's. Compact by design: open items
    * in full, closed ones as counts — a real repo has hundreds of closed
    * items and recall is the "what's outstanding" call. The full table is one
    * `lore_read` of `file` away.
@@ -80,14 +84,16 @@ export function recallData(
   const work: Record<string, WorkSummary> = {}
   const workDir = join(root, 'context/work')
   if ((!category || category === WORK_CATEGORY) && existsSync(workDir)) {
-    for (const source of readdirSync(workDir).sort()) {
+    // The lore tracker first — it is the tracker of record; external tables are what Jira/GitHub say.
+    for (const source of readdirSync(workDir).sort((a, b) => (a === 'lore' ? -1 : b === 'lore' ? 1 : a.localeCompare(b)))) {
       const dir = join(workDir, source)
       if (!statSync(dir).isDirectory()) continue
       for (const entry of readdirSync(dir).sort()) {
         if (!/\.ya?ml$/.test(entry)) continue
         const rel = `context/work/${source}/${entry}`
         const items = (parse(readFileSync(join(dir, entry), 'utf8')) as Record<string, unknown>[] | null) ?? []
-        const list = Array.isArray(items) ? items : []
+        const raw = Array.isArray(items) ? items : []
+        const list = source === 'lore' ? raw.map((i) => summarizeForRecall(i as unknown as LoreWorkItem) as unknown as Record<string, unknown>) : raw
         const open = list.filter((i) => i.state === 'open')
         work[`${source}/${entry.replace(/\.ya?ml$/, '')}`] = {
           file: rel,

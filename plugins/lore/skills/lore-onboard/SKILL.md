@@ -81,7 +81,11 @@ relay the human steps, and verify before declaring success.
 6. **Verify end-to-end** with a real query for something only the client's
    Slack (or email) would know: `lore grep -p <client> -i "<term>"`, then
    `lore recall -p <client>` (client block, derived artifacts, open work,
-   freshness). Zero hits on a busy channel means the sync didn't ingest it —
+   freshness). Open work is the lore tracker (`work["lore/<PREFIX>"]`;
+   `work.prefix` in lore.json is the ticket prefix, set by setup from the
+   client name) — a client's open Jira/GitHub issues are mirrored into it on
+   the first sync, so a Jira client with an empty tracker means the Jira
+   source did not sync. Zero hits on a busy channel means the sync didn't ingest it —
    investigate, don't hand off.
 7. **Point an agent at it** (optional, ask): Claude Code users get it from the
    linked repo or `claude mcp add lore -- lore mcp -p <client>`; an enso

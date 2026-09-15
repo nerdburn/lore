@@ -6,6 +6,7 @@ import { loadState, updateState, type SourceHealth } from '../state.js'
 import { writeDocs } from '../streams.js'
 import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
+import { mirrorExternal } from '../work.js'
 
 /** Connector-supplied paths must stay inside context/. */
 function safeRel(rel: string): string {
@@ -106,6 +107,17 @@ export async function sync(root: string, registry: Record<string, Connector> = c
       for (const e of errors) console.error(`✗ ${name}: ${e}`)
     }
     state.sources[name] = health
+  }
+
+  // Mirror Jira/GitHub issues into the lore tracker (context/work/lore/):
+  // new open issues become items, tracker moves become history. Runs after
+  // every connector so it sees this run's tables.
+  try {
+    const m = mirrorExternal(root, config)
+    if (m.created || m.updated) console.log(`work: ${m.created} mirrored, ${m.updated} updated → ${m.file}`)
+  } catch (err) {
+    console.error(`✗ work: ${err instanceof Error ? err.message : String(err)}`)
+    summary.ok = false
   }
 
   // Only sync's half of state.json — a fold may be checkpointing its own

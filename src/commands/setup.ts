@@ -6,6 +6,7 @@ import { CONFIG_FILE } from '../config.js'
 import { cachePath, git, readGlobalConfig, remoteUrl, writeGlobalConfig, type GlobalConfig } from '../context.js'
 import { scaffold, type ScaffoldConfig } from './init.js'
 import { link } from './link.js'
+import { deriveWorkPrefix } from '../work.js'
 
 export interface SetupFlags {
   channels?: string
@@ -148,6 +149,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       project,
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [], ...(owner ? { owner } : {}) },
+      work: { prefix: deriveWorkPrefix(flags.client ?? project) },
       sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],

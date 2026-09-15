@@ -1,0 +1,76 @@
+# Lore work tracker (ACM) — the tracker of record. Written by `lore work`, by `lore sync` (mirroring Jira/GitHub) and by the fold.
+# Never hand-edit: every change goes through a command so it lands in the item's history. File order is rank.
+- key: ACM-1
+  title: Black Friday landing page
+  status: in_progress
+  state: open
+  priority: P1
+  assignee: shawn
+  labels:
+    - launch
+  request: req-0001
+  sources:
+    - https://slack.com/archives/C0ACME/p1754229720000100
+    - https://github.com/acme/web/pull/42
+  created: 2026-08-04
+  updated: 2026-08-20
+  history:
+    - at: 2026-08-04T09:00:00.000Z
+      by: shawn
+      via: cli
+      change:
+        created: true
+      reason: promoted from req-0001 (asked by Priya, 2026-08-03)
+      sources:
+        - https://slack.com/archives/C0ACME/p1754229720000100
+    - at: 2026-08-20T19:00:00.000Z
+      by: lore-extract
+      via: fold
+      change:
+        status:
+          - todo
+          - in_progress
+      reason: Shawn opened PR #42 "Black Friday landing page" on 2026-08-20
+      sources:
+        - https://github.com/acme/web/pull/42
+      confidence: high
+      evidence_date: 2026-08-20
+- key: ACM-2
+  title: Checkout shows USD to Canadian visitors
+  status: done
+  state: closed
+  labels:
+    - bug
+  external:
+    system: github
+    id: github:acme/web#40
+    key: "#40"
+    url: https://github.com/acme/web/issues/40
+    status: closed
+    category: closed
+  sources:
+    - https://github.com/acme/web/issues/40
+  created: 2026-08-04
+  updated: 2026-08-20
+  history:
+    - at: 2026-08-04T09:30:00.000Z
+      by: lore-sync
+      via: sync
+      change:
+        created: true
+      reason: mirrored from GitHub #40 (open)
+      sources:
+        - https://github.com/acme/web/issues/40
+    - at: 2026-08-20T19:15:00.000Z
+      by: lore-sync
+      via: sync
+      change:
+        external_status:
+          - open
+          - closed
+        status:
+          - todo
+          - done
+      reason: GitHub #40 moved open → closed
+      sources:
+        - https://github.com/acme/web/issues/40

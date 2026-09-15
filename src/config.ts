@@ -208,6 +208,12 @@ export const configSchema = z.object({
     .optional(),
   /** Who may `remember`. Absent = anyone with push access (the default). */
   write: z.object({ allow: z.array(z.string().min(1)).min(1) }).optional(),
+  /**
+   * The lore work tracker (context/work/lore/<PREFIX>.yaml). `prefix` is
+   * the ticket key prefix (CAR-1, JOI-14); derived from the client name
+   * when absent. Written by `lore setup` for new clients.
+   */
+  work: z.object({ prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,5}$/, 'work.prefix must be 2–6 uppercase letters/digits starting with a letter, e.g. "CAR"') }).optional(),
 })
 
 export type LoreConfig = z.infer<typeof configSchema>

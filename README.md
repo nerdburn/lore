@@ -43,16 +43,21 @@ otherwise identical:
 
 Sync pulls raw material into `context/streams/` as permalinked markdown,
 scrubbing anything that looks like a token, key, or password on the way in
-(git history is forever). Sources that own delivery state — GitHub Issues,
-Jira — also write a table under `context/work/` that sync overwrites and the
-LLM never touches: what is open, in progress, or done comes from the
-tracker, not from a model's reading of the conversation. Extract folds the
-streams into structured artifacts — `derived/requests.yaml`,
-`decisions.yaml`, `roadmap.yaml`, weekly reports — every item citing its
-source. `facts.yaml` is the pinned layer: written only via `lore remember`,
-and it wins over derived data on conflict. Every pin also lands in
-`context/audit.jsonl` with who asked, through which surface, and the
-supporting source.
+(git history is forever). Lore is also the **work tracker of record**:
+`context/work/lore/<PREFIX>.yaml` holds the project's tickets (CAR-1,
+JOI-14…) in rank order. Jira and GitHub Issues are inputs — sync mirrors
+their open issues into that table and keeps their own snapshots under
+`context/work/jira/` and `context/work/github/` — and every ticket carries a
+history of who moved it, through which surface, why, and on what evidence:
+a person via `lore work`, an agent over MCP, sync when the external tracker
+moves, or the fold when the conversation is unambiguous evidence that
+something shipped, stalled, or changed priority. Extract folds the streams
+into structured artifacts — `derived/requests.yaml`, `decisions.yaml`,
+`roadmap.yaml`, weekly reports — every item citing its source, and reviews
+the tracker as part of the same pass. `facts.yaml` is the pinned layer:
+written only via `lore remember`, and it wins over derived data on conflict.
+Every explicit write lands in `context/audit.jsonl` with who asked, through
+which surface, and the supporting source.
 
 ## Setup
 
@@ -321,7 +326,9 @@ lore grep "black friday"                  # search everything
 lore grep -i --channel acme-dev "deploy"  # case-insensitive, one channel
 lore recall decisions                     # pinned facts + derived, one category
 lore recall reports                       # the latest weekly reports
-lore recall work                          # source-owned tables: live GitHub issues/PRs, Jira issues
+lore recall work                          # the lore tracker (open tickets, who moved each and why) + Jira/GitHub snapshots
+lore work list                            # open tickets in rank order
+lore work move CAR-3 done --reason "Cory shipped it Friday" --source https://slack.com/…
 lore remember "client wants launch before Black Friday" -c decisions
 lore refresh --trigger --fold             # self-hosted: sync + fold right now, wait for it
 ```
@@ -344,6 +351,41 @@ is disposable; delete `~/.lore/cache/` any time.
 `--fold` runs the timer's sync + LLM fold unit instead, so derived artifacts
 update too. Both are rate-limited to once per 5 minutes (`--force`), and a
 run already in flight is waited out rather than restarted.
+
+### Work — the tracker of record
+
+Every project has a lore tracker, `context/work/lore/<PREFIX>.yaml`
+(`work.prefix` in `lore.json`, derived from the client name: CareMobi →
+`CAR-1`). It is the answer to "what is open, in progress, blocked, done" —
+for clients with Jira or GitHub Issues and for clients with nothing.
+
+- **Mirrored on sync.** Each open Jira/GitHub issue becomes a ticket with
+  `external` pointing at it; when the tracker moves an issue, sync records
+  the move in the ticket's history and lore's status follows. Closed issues
+  lore never tracked are not imported. PRs stay delivery evidence.
+- **Reviewed by the fold.** `lore extract` sees the tracker next to the new
+  material and may move, reprioritise, or re-rank a ticket when the
+  evidence is unambiguous — a merged PR, "shipped", "blocked on X". Only
+  with high confidence and a cited source; never to `archived`; and never
+  over a person's more recent call on the same field. Skipped proposals are
+  logged. Where lore and the external tracker disagree, recall marks the
+  ticket `drift: true` — what a future `lore push` would write back.
+- **Moved by people and agents** with `lore work` or the `lore_work_*` MCP
+  tools. A reason is required on every move; it is the paper trail.
+
+```sh
+lore work add "Caregiver onboarding email sequence" --priority P1 --source https://slack.com/archives/…
+lore work promote req-0007                      # a derived request becomes a ticket, keeping its evidence
+lore work move CAR-2 in_progress --reason "Cory started the draft" --source https://slack.com/…
+lore work set CAR-2 --assignee cory --external jira:INPT-9 --reason "same work as the Jira story"
+lore work rank CAR-3 --top --reason "report is due Friday"
+lore work list --all
+lore work show CAR-2                            # the ticket with its full history
+```
+
+Statuses: `todo`, `in_progress`, `blocked`, `done`, `archived`. Priorities
+`P1`–`P3`; file order is rank. Tickets deliberately carry no estimates or
+SOW weeks — they are delivery tracking, not capacity burn.
 
 ### Commitments — statements of work
 
@@ -429,10 +471,12 @@ removing @lore from the Slack channels.
 ### For agents (MCP)
 
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
-`lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`, `lore_doc_add`. `lore_recall` returns
-exactly what the CLI does — pins, every derived artifact, the work tables,
-recent reports, and sync/extract timestamps so an agent can say how fresh
-its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
+`lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`,
+`lore_doc_add`, and the tracker verbs `lore_work_add`, `lore_work_promote`,
+`lore_work_move`, `lore_work_set` (each requires a reason). `lore_recall`
+returns exactly what the CLI does — pins, every derived artifact, the lore
+tracker and the external work tables, recent reports, and sync/extract
+timestamps so an agent can say how fresh its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
 triggers the host's sync (and fold) and waits, and reports before/after
 freshness — agents never run `lore sync` themselves. In a linked repo with
 Claude Code:
@@ -493,7 +537,13 @@ cites sources, never pins uninvited); run them with
 | `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
 | `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
 | `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
-| `lore recall [category] [--json]` | pinned facts + derived artifacts + work tables |
+| `lore recall [category] [--json]` | pinned facts + derived artifacts + the lore tracker + external work tables |
+| `lore work add <title> [--status s] [--priority p] [--assignee who] [--labels l] [--source urls] [--external ref] [--reason why] [--by who]` | add a ticket (`--external jira:KEY` / `github:owner/repo#n` links an existing issue) |
+| `lore work promote <req-id> [--title t] [--priority p] [--reason why]` | a derived request becomes a ticket, keeping its evidence |
+| `lore work move <key> <status> --reason why [--source urls]` | change status (`todo`, `in_progress`, `blocked`, `done`, `archived`) |
+| `lore work set <key> [--title] [--priority] [--assignee] [--labels] [--source] [--external] --reason why` | change fields or link a tracker issue |
+| `lore work rank <key> (--above key \| --top \| --bottom) --reason why` | move in the priority order |
+| `lore work list [--all] [--json]` / `lore work show <key> [--json]` | open tickets in rank order / one ticket with its history |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore sow add <file-or-gdoc-link> --name n --weeks n --start d [--end d] [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
 | `lore sow list [--json]` | attached SOWs |
@@ -553,8 +603,10 @@ statements of work (add, recall layer, MCP tool, PDF extraction), and the
 ## Status
 
 Connectors: Slack, GitHub, Jira, Granola, Notion, Gmail — GitHub and Jira
-each with a source-owned work table. `extract` (delta fold into
-requests/decisions/roadmap + weekly report + pin-contradiction audit), the
+each with a source-owned work table, mirrored into the lore work tracker
+(the tracker of record, with per-ticket history; moved by people, agents,
+sync, and the fold). `extract` (delta fold into
+requests/decisions/roadmap + tracker review + weekly report + pin-contradiction audit), the
 query surface — `grep`, `recall`, `remember`, `refresh`, `mcp` — with
 pointer resolution + `~/.lore/cache`, two hosting modes (self-hosted timer
 or GitHub Actions), a `lore setup` wizard covering every source, a Claude
@@ -562,8 +614,8 @@ Code plugin with skills and evals, client lifecycle (`archive`), statements of w
 commitments layer, fail-safe sync with per-source health, secret scrubbing,
 and an audit log. Next (see
 [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): contact
-identity resolution, `work_tracking` modes, client-scoped MCP tools, remote
-MCP.
+identity resolution, `lore push` (write lore's tracker state back to
+Jira/GitHub), client-scoped MCP tools, remote MCP.
 
 ## Principles
 

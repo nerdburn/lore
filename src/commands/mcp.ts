@@ -10,6 +10,8 @@ import { refresh } from './refresh.js'
 import { remember } from './remember.js'
 import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
+import { workAdd, workMove, workPromote, workRank, workSet } from './work.js'
+import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 
 const PULL_INTERVAL_MS = 60_000
 
@@ -89,7 +91,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), source-owned work tables (the live GitHub issue/PR list — authoritative for delivery state; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow.',
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), the lore work tracker (work["lore/<PREFIX>"] — the tracker of record for delivery state, each item with who last moved it and why; drift: true where lore and Jira/GitHub disagree), external tracker snapshots (work["github/…"], work["jira/…"] — what the tracker itself says; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow.',
       inputSchema: { category: z.string().optional() },
     },
     async ({ category }) => {
@@ -184,6 +186,106 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ url, text: body, title, from, date, source }) => {
       const d = await docAdd(rememberOpts.cwd, { file: url, text: body, title, from, date, source }, { ...rememberOpts.opts, via: 'mcp' })
       return text(d)
+    },
+  )
+
+  const unavailable = 'Unavailable: this client is archived and its memory is read-only.'
+  const workVia = { ...rememberOpts.opts, via: 'mcp' as const }
+  const reasonField = z.string().min(1).describe('why — recorded in the item\'s history with you as the actor; cite what the person said or the evidence')
+  const sourcesField = z.array(z.string()).optional().describe('permalinks to the evidence (Slack message, email, PR)')
+
+  server.registerTool(
+    'lore_work_add',
+    {
+      description: archived
+        ? unavailable
+        : 'Create a work item in the lore tracker (the tracker of record). Use when a person asks to track/ticket something new; to track an existing derived request use lore_work_promote instead. Give a title and a reason; link a Jira/GitHub issue with external ("jira:INPT-9" / "github:owner/repo#42") if one exists.',
+      inputSchema: {
+        title: z.string().min(1),
+        status: z.enum(WORK_STATUSES as [string, ...string[]]).optional().describe('default todo'),
+        priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
+        assignee: z.string().optional(),
+        labels: z.array(z.string()).optional(),
+        sources: sourcesField,
+        external: z.string().optional().describe('"jira:<KEY>" or "github:<owner>/<repo>#<n>"'),
+        reason: reasonField,
+      },
+    },
+    async ({ title, status, priority, assignee, labels, sources, external, reason }) => {
+      const item = workAdd(rememberOpts.cwd, { title, status: status as never, priority: priority as never, assignee, labels, sources, external, reason }, workVia)
+      return text(`added ${item.key}: ${item.title} [${item.status}]`)
+    },
+  )
+
+  server.registerTool(
+    'lore_work_promote',
+    {
+      description: archived
+        ? unavailable
+        : 'Promote a derived request (req-0007, from lore_recall category "requests") into a tracked work item, keeping its evidence. Use when a person says to track, ticket, or schedule a request.',
+      inputSchema: {
+        request_id: z.string().min(1),
+        title: z.string().optional().describe('ticket title (default: the request text)'),
+        priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
+        reason: z.string().optional().describe('why now'),
+      },
+    },
+    async ({ request_id, title, priority, reason }) => {
+      const item = workPromote(rememberOpts.cwd, request_id, { title, priority: priority as never, reason }, workVia)
+      return text(`promoted ${request_id} → ${item.key}: ${item.title}`)
+    },
+  )
+
+  server.registerTool(
+    'lore_work_move',
+    {
+      description: archived
+        ? unavailable
+        : 'Change a work item\'s status (todo | in_progress | blocked | done | archived). Move it when a person asks, or when the evidence in front of you is unambiguous (a merged PR, "shipped", "this is blocked on X") — always with the reason and sources. Never archive on your own initiative.',
+      inputSchema: {
+        key: z.string().min(1).describe('e.g. CAR-3'),
+        status: z.enum(WORK_STATUSES as [string, ...string[]]),
+        reason: reasonField,
+        sources: sourcesField,
+      },
+    },
+    async ({ key, status, reason, sources }) => {
+      const item = workMove(rememberOpts.cwd, key, status, { reason, sources }, workVia)
+      return text(`moved ${item.key} → ${item.status}: ${item.title}`)
+    },
+  )
+
+  server.registerTool(
+    'lore_work_set',
+    {
+      description: archived
+        ? unavailable
+        : 'Change a work item\'s title, priority, assignee, labels, evidence links, linked tracker issue, or rank (rank_above = the key it should sit directly above; "top" / "bottom" also accepted). Always with a reason.',
+      inputSchema: {
+        key: z.string().min(1),
+        title: z.string().optional(),
+        priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
+        assignee: z.string().optional().describe('"" clears it'),
+        labels: z.array(z.string()).optional().describe('replaces the list'),
+        sources: sourcesField,
+        external: z.string().optional().describe('"jira:<KEY>" or "github:<owner>/<repo>#<n>"'),
+        rank_above: z.string().optional().describe('a key, or "top" / "bottom"'),
+        reason: reasonField,
+      },
+    },
+    async ({ key, title, priority, assignee, labels, sources, external, rank_above, reason }) => {
+      const notes: string[] = []
+      if (title !== undefined || priority !== undefined || assignee !== undefined || labels !== undefined || sources !== undefined || external !== undefined) {
+        const item = workSet(rememberOpts.cwd, key, { title, priority: priority as never, assignee, labels, sources, external }, { reason }, workVia)
+        notes.push(`updated ${item.key}`)
+      }
+      if (rank_above !== undefined) {
+        const target = rank_above === 'top' ? { top: true } : rank_above === 'bottom' ? { bottom: true } : { above: rank_above }
+        const item = workRank(rememberOpts.cwd, key, target, { reason }, workVia)
+        notes.push(`ranked ${item.key} ${rank_above === 'top' || rank_above === 'bottom' ? rank_above : `above ${rank_above}`}`)
+      }
+      if (notes.length === 0) throw new Error('lore_work_set: give at least one field to change')
+      return text(notes.join('; '))
     },
   )
 

@@ -32,7 +32,7 @@ export function recall(cwd: string, category: string | undefined, opts: ResolveO
   }
   for (const [name, table] of Object.entries(recalled.work)) {
     const c = table.counts
-    console.log(`\n## work: ${name} (source-owned) — ${c.open} open, ${c.merged} merged, ${c.closed} closed; full table: ${table.file}`)
+    console.log(`\n## work: ${name} (${name.startsWith('lore/') ? 'lore tracker — the tracker of record' : 'external tracker snapshot'}) — ${c.open} open, ${c.merged} merged, ${c.closed} closed; full table: ${table.file}`)
     console.log(JSON.stringify(table.open, null, 2))
   }
   for (const s of recalled.sow) {
