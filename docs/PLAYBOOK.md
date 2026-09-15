@@ -151,10 +151,37 @@ Then in the policy's `claude/mcp.json`:
           "env": { "LORE_HOME": "/home/exedev/.lore", "HOME": "/home/exedev", "PATH": "/home/exedev/node/bin:/usr/bin:/bin" } }
 ```
 
-allow `mcp__lore__lore_recall`, `lore_grep`, `lore_read` (and `lore_remember`
-only if the channel's humans should be able to pin) in `claude/settings.json`,
-copy `plugins/lore/skills/lore-mcp/SKILL.md` into the workspace skills dir,
-and restart the agent service.
+Then the allow list in `claude/settings.json`. **Do not copy a list from
+memory or from an older VM** — three agents were provisioned with a stale
+four-tool list that way. Ask the installed binary:
+
+```sh
+lore mcp --list-tools      # JSON: [{ name, writes, summary }, …]; no context or network needed
+```
+
+Allow every tool it prints as `mcp__lore__<name>`, and put the ones the
+channel's humans must not trigger in `deny`. The table today (an older lore
+prints fewer; the test suite keeps this table equal to what the server
+registers):
+
+| tool | writes | what it does |
+|---|---|---|
+| `lore_grep` | no | regex search across synced memory |
+| `lore_read` | no | read a file or line range from the context repo |
+| `lore_recall` | no | pins, tracker, derived artifacts, reports, SOWs at once |
+| `lore_sync_now` | no | pull, and ask the host to sync (and fold) now |
+| `lore_remember` | yes | pin a fact — **deny for client-facing agents** unless the user says otherwise |
+| `lore_sow_add` | yes | attach a statement of work |
+| `lore_doc_add` | yes | attach a document or link the client sent |
+| `lore_work_add` | yes | open a tracker ticket |
+| `lore_work_promote` | yes | turn a derived request into a ticket |
+| `lore_work_move` | yes | change a ticket status, with a reason |
+| `lore_work_set` | yes | priority, assignee, labels, title, evidence, rank |
+
+enso-agent-bootstrap's `install.sh` does exactly this (it runs
+`lore mcp --list-tools` at route time; `LORE_DENY_TOOLS` in its conf is the
+deny list, default `lore_remember`). Copy `plugins/lore/skills/lore-mcp/SKILL.md`
+into the workspace skills dir, and restart the agent service.
 
 ## 8. When the engagement ends
 

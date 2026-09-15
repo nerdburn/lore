@@ -16,11 +16,43 @@ import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 const PULL_INTERVAL_MS = 60_000
 
 /**
+ * Every tool the server registers, and whether it writes to the context repo.
+ * `lore mcp --list-tools` prints this table, so anything that provisions an
+ * agent (enso-agent-bootstrap's channel routing, the onboarding playbook)
+ * derives its allow list from the installed binary instead of a hand copy
+ * that drifts. A test asserts the registered tools match this table exactly.
+ */
+export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: string }[] = [
+  { name: 'lore_grep', writes: false, summary: 'regex search across synced memory' },
+  { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
+  { name: 'lore_recall', writes: false, summary: 'pins, tracker, derived artifacts, reports, SOWs at once' },
+  { name: 'lore_sync_now', writes: false, summary: 'pull, and ask the host to sync (and fold) now' },
+  { name: 'lore_remember', writes: true, summary: 'pin a fact (explicit user instruction only)' },
+  { name: 'lore_sow_add', writes: true, summary: 'attach a statement of work' },
+  { name: 'lore_doc_add', writes: true, summary: 'attach a document or link the client sent' },
+  { name: 'lore_work_add', writes: true, summary: 'open a tracker ticket' },
+  { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
+  { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
+  { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
+]
+
+export interface McpCommandOptions extends ResolveOptions {
+  /** Print the tool table as JSON and exit without resolving a context. */
+  listTools?: boolean
+}
+
+/**
  * Expose the query surface as MCP tools over stdio, so agents get project
  * memory without knowing it's a git repo. The context is resolved once at
  * startup; reads re-pull at most once a minute.
  */
-export async function mcp(cwd: string, opts: ResolveOptions): Promise<void> {
+export async function mcp(cwd: string, opts: McpCommandOptions): Promise<void> {
+  if (opts.listTools) {
+    // No context needed: provisioning scripts call this on a VM whose lore
+    // key may not be registered yet, so it must never touch the network.
+    console.log(JSON.stringify(MCP_TOOLS, null, 2))
+    return
+  }
   const ctx = resolveContext(cwd, opts)
   const server = createServer(ctx, { cwd, opts })
   await server.connect(new StdioServerTransport())

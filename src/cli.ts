@@ -327,7 +327,8 @@ contextual(
 contextual(
   program
     .command('mcp')
-    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_work_*)'),
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_work_*)')
+    .option('--list-tools', 'print the tool table as JSON ({name, writes, summary}) and exit — for provisioning scripts building allow lists; needs no context or network'),
 ).action((opts) => mcp(root, opts))
 
 program.parseAsync().catch((err) => {

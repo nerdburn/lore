@@ -91,8 +91,11 @@ relay the human steps, and verify before declaring success.
    linked repo or `claude mcp add lore -- lore mcp -p <client>`; an enso
    Slack agent VM needs the tag-scoped SSH key, `~/.lore/config.json` remote,
    lore installed, a stdio `lore` server in the policy's `claude/mcp.json`,
-   `mcp__lore__*` allow rules, the `lore-mcp` skill in the workspace, and a
-   service restart — exact snippets in `docs/PLAYBOOK.md` §7.
+   `mcp__lore__<tool>` allow rules for every tool `lore mcp --list-tools`
+   prints on that VM (never a list from memory — it goes stale; deny
+   `lore_remember` for client-facing channels), the `lore-mcp` skill in the
+   workspace, and a service restart — exact snippets in `docs/PLAYBOOK.md` §7.
+   enso-agent-bootstrap's `install.sh` does all of this from its conf.
 8. **Report** what was set up, what is still human, and the first real
    answer you got from the memory.
 

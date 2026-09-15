@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { readAudit } from '../src/audit.js'
-import { createServer } from '../src/commands/mcp.js'
+import { createServer, MCP_TOOLS } from '../src/commands/mcp.js'
 import { resolveContext } from '../src/context.js'
 import { recallData } from '../src/recall.js'
 import { ACME, fullFixtureRepo, makeContextRepo } from './helpers.js'
@@ -42,6 +42,13 @@ test('mcp: exposes the eleven tools', async () => {
     'lore_work_promote',
     'lore_work_set',
   ])
+  // The static table behind `lore mcp --list-tools` is what provisioning
+  // scripts trust; it must name exactly the registered tools.
+  assert.deepEqual([...MCP_TOOLS.map((t) => t.name)].sort(), tools)
+  assert.deepEqual(
+    MCP_TOOLS.filter((t) => !t.writes).map((t) => t.name),
+    ['lore_grep', 'lore_read', 'lore_recall', 'lore_sync_now'],
+  )
   await s.close()
 })
 
