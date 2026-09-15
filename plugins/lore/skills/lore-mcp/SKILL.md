@@ -260,9 +260,10 @@ with a line of context. Call `lore_doc_add` with the link as `url` — lore
 reads it itself through the Workspace service account (Docs, Slides, Sheets,
 uploaded Word/PowerPoint/Excel, Drive-hosted PDFs and text), so do not open
 it, paste its text, or ask for sharing to be changed. Drive *folders* are not documents — say so, and ask for the files inside a
-folder. A Figma link is a *source*, not a document: it belongs in
-`sources.figma.files` (ask the person to run `lore setup --figma` or add it),
-after which every frame is in the figma stream. If lore cannot read it (the person it reads as has
+folder. A Figma *design file or FigJam* link is a *source*, not a document: it
+belongs in `sources.figma.files` (ask the person to add it), after which
+every frame is in the figma stream. A Figma *Slides deck* (figma.com/deck/…)
+cannot be synced — ask for a PDF export and file that with `lore_doc_add`. If lore cannot read it (the person it reads as has
 no access), report that error plainly. Failing a link, pass the text as
 `text` with a `title`.
 

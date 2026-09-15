@@ -4,7 +4,8 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
 /**
  * Figma connector — the design as evidence an agent can check work against.
  *
- * For every configured file (design, FigJam board, Slides deck) it writes:
+ * For every configured file (design file or FigJam board — the REST API does
+ * not serve Slides decks) it writes:
  * - one doc per top-level frame on each page — the frame's text layers in
  *   reading order under its nested frame headings, component instances by
  *   name, and a deep link to the node — re-emitted only when that frame's
@@ -158,6 +159,10 @@ export const figma: Connector = {
         cursor[key] = next
         ctx.log(`figma: ${head.name} → ${docs.length} docs so far`)
       } catch (err) {
+        if (err instanceof FigmaError && err.status === 400 && /not supported/i.test(err.message)) {
+          errors.push(`file ${key}: Figma's REST API does not serve this file type (Slides decks are not available to it) — export it as PDF and \`lore doc add\` it instead`)
+          continue
+        }
         if (err instanceof FigmaError && (err.status === 403 || err.status === 404)) {
           errors.push(`file ${key}: ${err.message} — check the key and that the token's account can open the file`)
           continue

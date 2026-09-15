@@ -64,8 +64,9 @@ the client's designs; Figma → Settings → Security → Personal access tokens
 read-only `file_content:read` + `file_comments:read`) lives as the `figma`
 exe.dev http-proxy (`--header "X-Figma-Token:figd_…"` to
 `https://api.figma.com`). Per client: make sure that account can open the
-file(s), copy the file URL(s) for `--figma` below. Design files, FigJam
-boards and Slides decks all work; a Figma *project* id in
+file(s), copy the file URL(s) for `--figma` below. Design files and FigJam
+boards work (Slides decks are not served by Figma's API — export to PDF and
+`lore doc add`); a Figma *project* id in
 `sources.figma.projects` takes every file in it.
 
 ## 3c. Jira — nothing per project once the site is connected

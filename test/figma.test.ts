@@ -53,6 +53,7 @@ function fakeFigma() {
     if (path === `/files/${KEY}/versions`) return json({ versions: state.versions })
     if (path === '/projects/77/files') return json({ files: state.projectFiles })
     if (path === '/files/NOPE12345') return json({ status: 404, err: 'Not found' }, { status: 404 })
+    if (path === '/files/DECK1234567') return json({ status: 400, err: 'File type not supported by this endpoint' }, { status: 400 })
     return json({ err: `no route ${path}` }, { status: 404 })
   }) as typeof fetch
   return state
@@ -170,10 +171,11 @@ test('figma: comments arrive as threaded docs anchored to their frame, increment
 test('figma: projects list files; a missing file is a reported error, not a crash; 429 retries; a proxy needs no token', async () => {
   const g = fakeFigma()
   g.projectFiles = [{ key: KEY, name: 'Merrin App' }]
-  const r = await figma.fetch(ctx({ config: { projects: [77], files: ['NOPE12345'], token: 'figd_test', api_base: API } }))
+  const r = await figma.fetch(ctx({ config: { projects: [77], files: ['NOPE12345', 'https://www.figma.com/deck/DECK1234567/Vision'], token: 'figd_test', api_base: API } }))
   assert.equal(r.docs.filter((d) => d.meta?.kind === 'index').length, 1)
-  assert.equal(r.errors?.length, 1)
+  assert.equal(r.errors?.length, 2)
   assert.match(r.errors![0], /file NOPE12345: figma 404 .* — check the key/)
+  assert.match(r.errors![1], /file DECK1234567: Figma's REST API does not serve this file type .*export it as PDF/)
   g.rateLimitOnce = true
   const r2 = await figma.fetch(ctx({ cursor: r.nextCursor }))
   assert.equal(r2.errors, undefined)

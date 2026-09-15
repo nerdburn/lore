@@ -221,7 +221,8 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   resolves to its saved filter's JQL — `lore setup --jira board:293`).
   `site` is the Atlassian URL for permalinks and, without a proxy, the API.
 - **Figma** syncs the design as evidence: for each configured file (design
-  file, FigJam board, Slides deck) one doc per top-level frame per page —
+  file or FigJam board; the REST API does not serve Slides decks — export
+  those to PDF and `lore doc add` them) one doc per top-level frame per page —
   its text layers in reading order under nested-frame headings, component
   instances by name, a deep link to the node — re-emitted only when that
   frame's content changes; an index of pages and frames per file version;
