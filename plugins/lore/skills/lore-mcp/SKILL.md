@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_remember, lore_sow_add, lore_doc_add, lore_source_list, lore_source_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked to sync a new Slack channel, repo, Notion page, Figma file or mailbox for the project, or asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -156,6 +156,22 @@ look for that in Slack or a pin before stating it as settled.
     you cannot find and which may have arrived since `lastSync`.
   Otherwise, close with the offer: "Memory is from 14:32; want me to run a
   refresh (~1–2 min)?" — and refresh only if the user says yes.
+- **Freshness is per source, and `lastSync` alone can mislead.** A sync
+  where one source failed still updates `lastSync`: the others synced and
+  folded normally while the broken one waits for a later run. So
+  `synced.lastSync` says when lore last *ran*, not that every source is
+  current. `synced.degraded` names the sources that are behind, and
+  `synced.sources` gives each one a state — `ok`, `stale` (with
+  `staleHours` of gap and the error), `never` (configured but has never
+  synced), `disabled`.
+  Check it before answering, and when a degraded source bears on the
+  question, say so in the answer rather than after it: "nothing in memory
+  about the deploy — though GitHub has been failing to sync for 30h, so
+  I'd only half-trust that." A `never` source is the sharpest case: there
+  is no memory from it at all, which is not the same as nothing having
+  been said there. Refreshing will not fix either — the credentials or the
+  connector are broken, and a human has to repair them. Name the source
+  and the error, and don't keep triggering syncs against it.
   **Never run `lore sync` yourself** — an agent has neither the credentials
   nor the network for it. To refresh, call `lore_sync_now` (it asks the host
   to sync now and waits — about a minute; if a run is already in flight it
@@ -282,3 +298,35 @@ searchable now and will be folded into requests/decisions/roadmap on the
 next extract (`lore_sync_now` with `fold: true` if they want it sooner). The
 document is raw material, never authoritative — a commitment goes through
 `lore_sow_add`, a fact through `lore_remember`.
+
+
+## lore_source_add — widening what lore watches
+
+A question with no answer in memory often means the source was never
+synced, not that nothing was said. `lore_source_list` tells you which
+connectors feed this client and what each is pointed at; check it before
+concluding memory is empty, and say so plainly: "nothing in memory — but
+#acme-design isn't a synced channel."
+
+`lore_source_add` fixes that. It points a built-in connector at more of the
+client — another Slack channel, a repo on a client that only had Figma, a
+Notion page, a Figma file, a Jira project key, a mailbox. The new scope
+backfills on the next sync.
+
+Two limits that are not yours to relax:
+
+- **Only on explicit instruction.** Adding a source changes what lore
+  *collects* about a client, for everyone, permanently. Noticing that
+  #acme-design exists is not permission to sync it. Suggest it; let them
+  say yes.
+- **Connector kinds are code.** The tool configures the connectors lore
+  already has. If someone wants Linear or Asana, that is a change to lore
+  itself — say so rather than trying to express it as config.
+
+You do the scope; a human does the credentials and the consent. Relay the
+result's `next` list verbatim — `/invite @lore` in the new channel, a host
+integration for the new repo, sharing the page with the Notion integration —
+because until those happen the source yields nothing. If the result comes
+back `disabled: true`, the credentials aren't in place and lore deliberately
+parked it rather than break the client's whole sync; say what is missing and
+who needs to fix it. Don't offer to enable it yourself.

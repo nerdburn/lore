@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { after } from 'node:test'
 
 /** The config identity recall needs, for the default fixture project. */
-export const ACME = { project: 'acme', lifecycle: 'active' as const }
+export const ACME = { project: 'acme', lifecycle: 'active' as const, sources: {} }
 
 const created: string[] = []
 after(() => {

@@ -28,12 +28,19 @@ export interface SyncSummary {
  * configured backfill months; after that, cursors rule. To re-backfill a
  * channel, delete its cursor from state.json.
  *
- * Failure model: every enabled source must succeed for the run to succeed.
- * A source with no connector, unresolved env, a thrown fetch, or connector-
- * reported errors marks the run failed (non-zero exit) — but sources that
- * did succeed still keep their docs and cursors, and health for every
- * source is recorded in state.json. Only `"disabled": true` skips a source
- * quietly.
+ * Failure model: sources are independent. One that fails — no connector,
+ * unresolved env, a thrown fetch, connector-reported errors — does not stop
+ * the others: they keep their docs and advance their cursors, the failed
+ * one keeps its old cursor and resumes from there on a later run, and the
+ * fold (a content delta) picks up the catch-up material whenever it lands.
+ * Health for every source is recorded in state.json, and `recall` reports
+ * it, so an answer drawn from partial memory can say what is missing —
+ * that reporting is what makes carrying on safe rather than misleading.
+ *
+ * `ok` is still false when anything failed, so a human running `lore sync`
+ * gets a non-zero exit. The host scheduler reads the per-source detail
+ * instead: see run-all, where a partial sync is `degraded`, not `failed`.
+ * Only `"disabled": true` skips a source quietly.
  */
 export async function sync(root: string, registry: Record<string, Connector> = connectors): Promise<SyncSummary> {
   const config = loadConfig(root)
@@ -128,7 +135,12 @@ export async function sync(root: string, registry: Record<string, Connector> = c
     const failed = Object.entries(summary.sources)
       .filter(([, s]) => s.status === 'failed')
       .map(([n]) => n)
-    console.error(`sync failed: ${failed.join(', ')} — see state.json sources for details`)
+    const okCount = Object.values(summary.sources).filter((v) => v.status === 'ok').length
+    console.error(
+      okCount > 0
+        ? `sync partial: ${failed.join(', ')} failed, ${okCount} source(s) synced — they keep their progress, the failed ones resume next run`
+        : `sync failed: ${failed.join(', ')} — see state.json sources for details`,
+    )
   }
   return summary
 }

@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process'
 import { git, readGlobalConfig, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
-import { recallData } from '../recall.js'
+import { recallData, type Recalled } from '../recall.js'
+import { describeDegraded } from '../health.js'
 
 export interface RefreshResult {
-  before: { lastSync?: string; lastExtract?: string }
-  after: { lastSync?: string; lastExtract?: string }
+  before: Recalled['synced']
+  after: Recalled['synced']
   /**
    * What happened on the host: 'ran' (we started the sync service and waited
    * for it), 'waited' (a run was already in flight — we waited for that one
@@ -115,7 +116,12 @@ export function refresh(
       if (outcome && ctx.mode === 'cache') git(ctx.root, 'pull', '--ff-only', '--quiet')
     }
   }
-  return { before, after: freshness(ctx), host, ...(outcome ? { outcome } : {}), ...(opts.trigger && opts.fold ? { fold: true as const } : {}), ...(note ? { note } : {}) }
+  const after = freshness(ctx)
+  // A run can succeed with a source still down: the others synced and folded.
+  // Say which, or the caller reads a fresh `lastSync` as complete coverage.
+  const behind = describeDegraded(after.sources)
+  if (behind) note = note ? `${note}; ${behind}` : behind
+  return { before, after, host, ...(outcome ? { outcome } : {}), ...(opts.trigger && opts.fold ? { fold: true as const } : {}), ...(note ? { note } : {}) }
 }
 
 /** Parse `systemctl show -p Result,ExecMainStatus` into an outcome; `Result=success` is the only success. */
@@ -137,7 +143,7 @@ export function unitOutcome(show: string, prefix?: string): { outcome: 'success'
   return { outcome: 'failed', note: parts.join('; ') }
 }
 
-function freshness(ctx: ResolvedContext): { lastSync?: string; lastExtract?: string } {
+function freshness(ctx: ResolvedContext): Recalled['synced'] {
   return recallData(ctx.root, ctx.config, 'nothing').synced
 }
 

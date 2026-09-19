@@ -154,7 +154,17 @@ Both run `lore run-all` on the same work clones and may overlap: per-client
 locks under `/srv/lore/work/.locks/` serialise syncs and git operations, and
 a sync-only run that arrives mid-fold syncs around it (no reset, its own
 half of `state.json`). An extracting run that finds a fold already in
-flight skips its own fold. Agent refreshes are rate-limited to one per 5
+flight skips its own fold.
+
+A client whose sources partly failed is **degraded**, not failed: what
+synced is committed and folded, the run exits 0, and the journal line reads
+`! lore-acme: degraded (sources failed: github)`. The failed source keeps
+its cursor and catches up on a later run. A client only *fails* when
+something structural breaks (clone, push, invalid config) or every one of
+its sources fails at once — so a red timer means "nothing got through",
+not "one vendor was flaky". To see what is behind without reading the
+journal: the host page's client table flags stale sources per client, and
+`lore source list -p <client>` or `lore check` says it on the command line. Agent refreshes are rate-limited to one per 5
 minutes per kind (sync, fold) unless forced. Raw streams therefore reach the bare repo within
 a minute of any run starting; derived artifacts follow when the fold lands,
 so `recall` can show `lastExtract` behind `lastSync`. Clients are processed

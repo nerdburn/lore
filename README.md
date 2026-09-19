@@ -267,12 +267,22 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   fine: the fold splits it across batches and the weekly report only sees
   its opening. Every add is audited, committed, and pushed.
 
-Every configured source must be usable or the sync fails — a source with no
-connector or an unresolved `env:` ref is an error, not a skip, so a scheduler
-never commits a partial sync as if it were complete. To keep a source
-configured but skipped, set `"disabled": true` on it. Per-source health
-(last success, last error) is recorded in `state.json` and printed by
-`lore check`. `backfill` seeds the first sync N months back (per-source
+Sources are independent: one that fails doesn't hold up the rest. The
+others sync, commit and fold as usual; the failed source keeps its old
+cursor, resumes from there on a later run, and the fold — a content delta —
+picks up the catch-up material whenever it lands. A source with no
+connector or an unresolved `env:` ref fails that source, not the run. To
+keep a source configured but skipped entirely, set `"disabled": true` on it.
+
+What replaces the old all-or-nothing rule is *saying so*. Per-source health
+lives in `state.json` and surfaces everywhere freshness does: `lore check`
+and `lore source list` for a human, the host page's client table, and
+`recall` — whose `synced.sources` classifies each source `ok`, `stale`
+(synced before, currently failing, with how many hours of gap), `never`, or
+`disabled`, and whose `synced.degraded` names the ones an answer must be
+hedged on. A run-level "synced 2 minutes ago" can hide a source that has
+been down for days; the per-source layer is what keeps an agent from
+presenting partial memory as complete. `backfill` seeds the first sync N months back (per-source
 overrides supported); everything after is forward-incremental.
 
 **Who the client is.** Every context repo carries a `client` block — name,
@@ -521,14 +531,25 @@ removing @lore from the Slack channels.
 
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
 `lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`,
-`lore_doc_add`, and the tracker verbs `lore_work_add`, `lore_work_promote`,
+`lore_doc_add`, `lore_source_list`, `lore_source_add`, and the tracker verbs
+`lore_work_add`, `lore_work_promote`,
 `lore_work_move`, `lore_work_set` (each requires a reason), and
 `lore_work_push` (write ticket state to Jira, on request only). `lore_recall`
 returns exactly what the CLI does — pins, every derived artifact, the lore
 tracker and the external work tables, recent reports, and sync/extract
 timestamps so an agent can say how fresh its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
 triggers the host's sync (and fold) and waits, and reports before/after
-freshness — agents never run `lore sync` themselves. In a linked repo with
+freshness — agents never run `lore sync` themselves.
+`lore_source_add` is the scope half of onboarding a source: it points one of
+the built-in connectors at more of the client — another Slack channel, a repo
+on a client that had only Figma, a Notion page — and the new scope backfills
+on the next sync. Connector *kinds* stay in code; an agent chooses what of a
+vendor belongs to the client, never invents a new kind of source. The
+credential and consent half stays human, and the result says what is still
+owed (`/invite @lore`, a host integration, sharing the Notion page). Because
+`sync` fails a whole client on an unusable source, a newly configured source
+whose credentials don't resolve is written `"disabled": true` rather than
+live — it can never take a client's sync down. In a linked repo with
 Claude Code:
 
 ```sh
@@ -595,6 +616,8 @@ cites sources, never pins uninvited); run them with
 | `lore work rank <key> (--above key \| --top \| --bottom) --reason why` | move in the priority order |
 | `lore work list [--all] [--json]` / `lore work show <key> [--json]` | open tickets in rank order / one ticket with its history |
 | `lore work push [keys...] [--all] [--dry-run] [--json] [--by who]` | write lore's ticket state to Jira: transition linked issues, create issues for open unlinked tickets; runs on the host |
+| `lore source add <kind> <scope...> [--site url] [--disabled] [--by who] [--json]` | point a built-in connector at more of this client — channels, repos, Notion pages, Figma files, Jira keys, mailboxes — or configure one it doesn't have yet; commits + pushes |
+| `lore source list [--json]` | every configured source, its scope and state, and which connectors are still available |
 | `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
 | `lore sow add <file-or-gdoc-link> --name n --weeks n --start d [--end d] [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
 | `lore sow list [--json]` | attached SOWs |
@@ -602,7 +625,7 @@ cites sources, never pins uninvited); run them with
 | `lore doc list [--json]` | documents in the `docs` stream |
 | `lore gdoc export <url> --as <email> [--json]` | export a Google Doc (Slides, Sheet, Drive-hosted PDF/text) as text via the service account (used by `sow add` / `doc add` on the host) |
 | `lore mcp` | MCP server over stdio |
-| `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
+| `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; a failed source doesn't stop the others, but exits non-zero if any enabled source failed) |
 | `lore extract [--report] [--review]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
 | `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
 | `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
@@ -610,7 +633,7 @@ cites sources, never pins uninvited); run them with
 | `lore check` | validate config, connectors, env refs; print per-source sync health |
 | `lore manifest slack` | print the bundled Slack app manifest |
 
-`grep`, `recall`, `remember`, `sow`, `doc`, `refresh`, `archive`, and `mcp` all take
+`grep`, `recall`, `remember`, `source`, `sow`, `doc`, `refresh`, `archive`, and `mcp` all take
 `--context <owner/repo>`, `-p/--project <name>`, and `--no-pull`.
 
 ## Troubleshooting

@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import { readSows, summarizeSow, type SowSummary } from './sow.js'
 import { summarizeForRecall, type LoreWorkItem } from './work.js'
+import { degraded, sourceStatuses, type SourceStatus } from './health.js'
+import { loadState } from './state.js'
 import type { Client, Lifecycle, LoreConfig } from './config.js'
 import type { Pin } from './types.js'
 
@@ -14,8 +16,14 @@ export interface Recalled {
   archived_at?: string
   /** Who the client is — name, email domains, known contacts. */
   client?: Client
-  /** ISO timestamps from state.json — lets a caller say how fresh this is. */
-  synced: { lastSync?: string; lastExtract?: string }
+  /**
+   * How fresh this memory is. `lastSync`/`lastExtract` are the run-level
+   * timestamps; `sources` is per-source, and it is the one that matters
+   * when answering. A sync that partly failed still updates `lastSync`, so
+   * "synced 2 minutes ago" alone can hide a source that has been down for
+   * days — `degraded` names those, and an answer drawing on them says so.
+   */
+  synced: { lastSync?: string; lastExtract?: string; sources: SourceStatus[]; degraded: string[] }
   pins: Pin[]
   /** Derived YAML artifacts keyed by file stem: requests, decisions, roadmap, contradictions… */
   derived: Record<string, unknown>
@@ -62,7 +70,7 @@ const DEFAULT_REPORT_LIMIT = 3
  */
 export function recallData(
   root: string,
-  config: Pick<LoreConfig, 'project' | 'lifecycle' | 'archived_at' | 'client'>,
+  config: Pick<LoreConfig, 'project' | 'lifecycle' | 'archived_at' | 'client' | 'sources'>,
   category?: string,
   opts: { reportLimit?: number } = {},
 ): Recalled {
@@ -119,13 +127,11 @@ export function recallData(
     for (const f of files) reports.push({ date: f.slice(0, 10), text: readFileSync(join(reportsDir, f), 'utf8') })
   }
 
-  const synced: Recalled['synced'] = {}
-  const statePath = join(root, 'state.json')
-  if (existsSync(statePath)) {
-    const state = JSON.parse(readFileSync(statePath, 'utf8')) as { lastSync?: string; lastExtract?: string }
-    if (state.lastSync) synced.lastSync = state.lastSync
-    if (state.lastExtract) synced.lastExtract = state.lastExtract
-  }
+  const state = loadState(root)
+  const statuses = sourceStatuses(config, state)
+  const synced: Recalled['synced'] = { sources: statuses, degraded: degraded(statuses).map((d) => d.source) }
+  if (state.lastSync) synced.lastSync = state.lastSync
+  if (state.lastExtract) synced.lastExtract = state.lastExtract
 
   return {
     project: config.project,

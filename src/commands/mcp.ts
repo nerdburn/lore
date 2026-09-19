@@ -12,6 +12,7 @@ import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
 import { workAdd, workMove, workPromote, workRank, workSet } from './work.js'
 import { workPush } from './work-push.js'
+import { sourceAdd, sourceKinds, sourceList } from './source.js'
 import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -28,6 +29,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
   { name: 'lore_recall', writes: false, summary: 'pins, tracker, derived artifacts, reports, SOWs at once' },
   { name: 'lore_sync_now', writes: false, summary: 'pull, and ask the host to sync (and fold) now' },
+  { name: 'lore_source_list', writes: false, summary: 'which sources feed this client, their scope, and what is still available' },
   { name: 'lore_remember', writes: true, summary: 'pin a fact (explicit user instruction only)' },
   { name: 'lore_sow_add', writes: true, summary: 'attach a statement of work' },
   { name: 'lore_doc_add', writes: true, summary: 'attach a document or link the client sent' },
@@ -36,6 +38,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
   { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones (explicit only)' },
+  { name: 'lore_source_add', writes: true, summary: 'point a built-in connector at more of this client: channels, repos, pages, files, mailboxes' },
 ]
 
 export interface McpCommandOptions extends ResolveOptions {
@@ -82,7 +85,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const label = archived
     ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
     : ''
-  const server = new McpServer({ name: 'lore', version: '0.3.0' })
+  const server = new McpServer({ name: 'lore', version: '0.4.0' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })
@@ -220,6 +223,40 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ url, text: body, title, from, date, source }) => {
       const d = await docAdd(rememberOpts.cwd, { file: url, text: body, title, from, date, source }, { ...rememberOpts.opts, via: 'mcp' })
       return text(d)
+    },
+  )
+
+  server.registerTool(
+    'lore_source_list',
+    {
+      description: `Which sources feed ${ctx.config.project}'s memory — each connector, the scope it is pointed at (Slack channels, GitHub repos, Notion pages, Figma files, Jira projects, mailboxes), whether it is disabled, and which built-in connectors are not configured for this client yet. Read this before lore_source_add, and when a question has no answer in memory because the source was never synced.`,
+      inputSchema: {},
+    },
+    async () => {
+      freshen()
+      return text(sourceList(rememberOpts.cwd, rememberOpts.opts))
+    },
+  )
+
+  server.registerTool(
+    'lore_source_add',
+    {
+      description: archived
+        ? 'Unavailable: this client is archived and its memory is read-only.'
+        : `Point one of lore's built-in connectors at more of ${ctx.config.project}: add Slack channels, GitHub repos, Notion pages, Figma files, Jira project keys or mailboxes to a source, or configure a connector this client does not have yet. Connector kinds are fixed in code — this sets *what* of each belongs to the client, never a new kind of source. Use on explicit user instruction. The scope backfills on the next sync. Credentials and consent stay human: the result's "next" lists what a person must still do (invite @lore to the channel, create the host integration, share the Notion page), and a new source whose credentials cannot be resolved is written disabled so it cannot break the client's sync. Call lore_source_list first to see what is already configured.`,
+      inputSchema: {
+        kind: z.enum(sourceKinds() as [string, ...string[]]).describe('which built-in connector'),
+        scope: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe('what to add: "#acme-design" (slack), "acme/web" (github), a Notion page URL, a Figma file URL, "ACM" (jira), a mailbox or "all" (gmail), a folder title (granola)'),
+        site: z.string().optional().describe('jira only: https://<you>.atlassian.net, when configuring jira for the first time'),
+        disabled: z.boolean().optional().describe('configure it but leave it skipped, for a human to enable'),
+      },
+    },
+    async ({ kind, scope, site, disabled }) => {
+      const r = sourceAdd(rememberOpts.cwd, { kind, scope, site, disabled }, { ...rememberOpts.opts, via: 'mcp' })
+      return text(r)
     },
   )
 

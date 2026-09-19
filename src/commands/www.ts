@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { describeDegraded, sourceStatuses, type SourceStatus } from '../health.js'
+import type { LoreState } from '../state.js'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -23,6 +25,10 @@ export interface ClientStatus {
   lastSync?: string
   lastExtract?: string
   health: Record<string, { lastSuccess?: string; lastError?: string }>
+  /** Per-source freshness: which sources are behind, and by how long. Since a
+   *  failed source no longer stops the run, this is where a client that is
+   *  syncing but incomplete shows up. */
+  sourceStates: SourceStatus[]
   lastCommit?: string
   error?: string
 }
@@ -73,7 +79,7 @@ export function clientStatuses(reposDir: string): ClientStatus[] {
     .map((bare) => {
       const name = basename(bare, '.git')
       const dir = join(reposDir, bare)
-      const status: ClientStatus = { name, sources: [], health: {} }
+      const status: ClientStatus = { name, sources: [], health: {}, sourceStates: [] }
       try {
         const cfg = configSchema.parse(JSON.parse(gitShow(dir, 'lore.json')))
         status.project = cfg.project
@@ -90,6 +96,7 @@ export function clientStatuses(reposDir: string): ClientStatus[] {
           for (const [src, h] of Object.entries(state.sources ?? {})) {
             status.health[src] = { lastSuccess: h.lastSuccess, lastError: h.lastError?.message }
           }
+          status.sourceStates = sourceStatuses(cfg, state as LoreState)
         }
         status.lastCommit = execFileSync('git', ['-C', dir, 'log', '-1', '--format=%cI %s'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
       } catch (err) {
@@ -132,13 +139,15 @@ function statusSection(clients: ClientStatus[]): string {
         .filter(([, h]) => h.lastError)
         .map(([s, h]) => `<div class="err"><b>${esc(s)}</b>: ${esc(h.lastError!)}</div>`)
         .join('')
+      const state = new Map(c.sourceStates.map((s) => [s.source, s]))
+      const behind = describeDegraded(c.sourceStates)
       return `<tr class="${c.lifecycle === 'archived' ? 'archived' : ''}">
         <td><code>${esc(c.name)}</code>${c.client ? `<div class="muted">${esc(c.client)}</div>` : ''}</td>
         <td>${esc(c.lifecycle ?? '?')}</td>
-        <td>${c.sources.map((s) => `<span class="tag">${esc(s)}</span>`).join(' ')}</td>
+        <td>${c.sources.map((s) => `<span class="tag ${state.get(s)?.state === 'ok' || !state.get(s) ? '' : 'behind'}">${esc(s)}</span>`).join(' ')}</td>
         <td title="${esc(c.lastSync ?? '')}">${ago(c.lastSync)}</td>
         <td title="${esc(c.lastExtract ?? '')}">${ago(c.lastExtract)}</td>
-        <td>${errs || (c.error ? `<div class="err">${esc(c.error)}</div>` : '<span class="ok">ok</span>')}</td>
+        <td>${behind ? `<div class="err">${esc(behind)}</div>` : ''}${errs || (c.error ? `<div class="err">${esc(c.error)}</div>` : behind ? '' : '<span class="ok">ok</span>')}</td>
       </tr>`
     })
     .join('')
@@ -160,7 +169,7 @@ h1{font-size:1.9rem;margin:2.2rem 0 .8rem;letter-spacing:-.01em}h2{font-size:1.3
 p,li{max-width:70ch}a{color:var(--accent)}code{font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);padding:.1em .35em;border-radius:4px}
 pre{background:var(--code);padding:14px 16px;border-radius:8px;overflow-x:auto;line-height:1.45}pre code{background:none;padding:0;font-size:.85rem}
 table{border-collapse:collapse;width:100%;margin:.8rem 0 1.2rem;font-size:.93rem}th,td{text-align:left;vertical-align:top;padding:.5rem .6rem;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
-.muted{color:var(--muted);font-size:.85rem}.tag{display:inline-block;background:var(--code);border-radius:999px;padding:.05em .6em;font-size:.8rem}.ok{color:var(--ok)}.err{color:var(--err);font-size:.85rem}.archived td{opacity:.55}
+.muted{color:var(--muted);font-size:.85rem}.tag{display:inline-block;background:var(--code);border-radius:999px;padding:.05em .6em;font-size:.8rem}.tag.behind{color:var(--err);box-shadow:inset 0 0 0 1px currentColor}.ok{color:var(--ok)}.err{color:var(--err);font-size:.85rem}.archived td{opacity:.55}
 hr{border:0;border-top:1px solid var(--line);margin:2.5rem 0}.status{margin-bottom:2rem}
 </style></head><body><main>${body}</main></body></html>`
 }

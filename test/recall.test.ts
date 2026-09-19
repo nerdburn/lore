@@ -11,7 +11,7 @@ test('recall: with no category returns pins, every derived artifact, reports, fr
   assert.equal(r.project, 'acme')
   assert.equal(r.lifecycle, 'active')
   assert.equal(r.archived_at, undefined)
-  assert.deepEqual(r.synced, { lastSync: '2026-08-14T06:23:00.000Z', lastExtract: '2026-08-14T06:30:00.000Z' })
+  assert.deepEqual(r.synced, { lastSync: '2026-08-14T06:23:00.000Z', lastExtract: '2026-08-14T06:30:00.000Z', sources: [], degraded: [] })
   assert.deepEqual(r.pins.map((p) => p.id), ['pin-0001', 'pin-0002'])
   assert.deepEqual(Object.keys(r.derived), ['decisions', 'requests', 'roadmap'])
   assert.equal((r.derived.requests as { id: string }[])[0].id, 'req-0001')
@@ -49,13 +49,13 @@ test('recall: an empty repo recalls nothing without throwing', () => {
   const root = makeContextRepo()
   const r = recallData(root, ACME)
   assert.ok(isEmpty(r))
-  assert.deepEqual(r.synced, {})
+  assert.deepEqual(r.synced, { sources: [], degraded: [] })
 })
 
 test('recall CLI: --json output is exactly recallData', async () => {
   const root = fullFixtureRepo()
   const { out } = await captureConsole(() => recall(root, undefined, { context: root, json: true }))
-  assert.deepEqual(JSON.parse(out), recallData(root, ACME))
+  assert.deepEqual(JSON.parse(out), recallData(root, resolveContext(root, { context: root }).config))
 })
 
 test('recall CLI: human output lists pins, derived sections and reports', async () => {

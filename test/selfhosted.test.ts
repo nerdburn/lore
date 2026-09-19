@@ -125,12 +125,19 @@ test('run-all: syncs every active bare repo, commits and pushes; archived skippe
   }
 
   const { result, out } = await captureConsole(() => runAll({ repos, work }, registry))
-  assert.equal(result.ok, false)
+  // One broken source does not fail the run: `boom` has no connector, but
+  // `fake` synced, so lore-bad is degraded and the whole run still exits 0.
   assert.deepEqual(result.clients['lore-good'], { status: 'synced', committed: true })
   assert.deepEqual(result.clients['lore-old'], { status: 'archived', committed: false })
-  assert.equal(result.clients['lore-bad'].status, 'failed')
-  assert.match(result.clients['lore-bad'].error!, /boom/)
-  assert.equal(result.clients['lore-bad'].committed, true, 'even a failed run commits the progress it made (state health, partial docs)')
+  assert.equal(result.clients['lore-bad'].status, 'degraded')
+  assert.equal(result.clients['lore-bad'].error, undefined)
+  assert.match(result.clients['lore-bad'].note!, /sources failed: boom/)
+  assert.equal(result.clients['lore-bad'].committed, true, 'the source that worked still reaches the bare repo')
+  // lore-acme is left over from the earlier test and its only source has no
+  // connector here — nothing synced at all, which is still a failure.
+  assert.equal(result.clients['lore-acme'].status, 'failed')
+  assert.match(result.clients['lore-acme'].error!, /every source failed/)
+  assert.equal(result.ok, false, 'a client with no working source at all fails the run')
   assert.match(out, /=== lore-acme/) // the repo from the earlier test is picked up too — the directory is the registry
   assert.match(out, /run-all summary/)
 
@@ -149,7 +156,7 @@ test('run-all: syncs every active bare repo, commits and pushes; archived skippe
   assert.ok(!existsSync(join(work, 'lore-good/context/junk.md')))
 })
 
-test('run-all: progress is committed even when the run fails, so checkpoints survive the next reset', async () => {
+test('run-all: a failed source degrades the client without stopping the rest, and catches up on a later run', async () => {
   const bareDir = mkdtempSync(join(tmpdir(), 'lore-repos3-'))
   const workDir = mkdtempSync(join(tmpdir(), 'lore-work3-'))
   const bare = join(bareDir, 'lore-flaky.git')
@@ -167,12 +174,65 @@ test('run-all: progress is committed even when the run fails, so checkpoints sur
     bad: { name: 'bad', fetch: async () => { throw new Error('boom') } },
   }
   const { result } = await captureConsole(() => runAll({ repos: bareDir, work: workDir }, registry))
-  assert.equal(result.clients['lore-flaky'].status, 'failed')
+  assert.equal(result.ok, true, 'one broken source does not fail the host run')
+  assert.equal(result.clients['lore-flaky'].status, 'degraded')
   assert.equal(result.clients['lore-flaky'].committed, true, 'the good source\'s docs were committed despite the failure')
   const check = mkdtempSync(join(tmpdir(), 'lore-check3-'))
   execFileSync('git', ['clone', '--quiet', bare, check])
   assert.ok(existsSync(join(check, 'context/streams/fake/#c/2026-09-01.md')))
-  assert.match(readFileSync(join(check, 'state.json'), 'utf8'), /"good"/)
+
+  // The failure is recorded per source, and `bad` never got a cursor — so it
+  // resumes from scratch rather than skipping the window it missed.
+  const state = JSON.parse(readFileSync(join(check, 'state.json'), 'utf8'))
+  assert.ok(state.sources.good.lastSuccess)
+  assert.match(state.sources.bad.lastError.message, /boom/)
+  assert.equal(state.sources.bad.lastSuccess, undefined)
+  assert.equal(state.cursors.bad, undefined)
+
+  // Next run, the source is healthy: it catches up and the client is clean again.
+  registry.bad = { name: 'bad', fetch: async () => ({ docs: [doc('bad-1')], nextCursor: { n: 1 } }) }
+  const again = await captureConsole(() => runAll({ repos: bareDir, work: workDir }, registry))
+  assert.equal(again.result.clients['lore-flaky'].status, 'synced')
+  const after = mkdtempSync(join(tmpdir(), 'lore-check3b-'))
+  execFileSync('git', ['clone', '--quiet', bare, after])
+  const state2 = JSON.parse(readFileSync(join(after, 'state.json'), 'utf8'))
+  assert.ok(state2.sources.bad.lastSuccess)
+  assert.equal(state2.sources.bad.lastError, undefined)
+})
+
+test('run-all: a partial sync still reaches the fold — a broken source does not hold back the ones that worked', async () => {
+  const bareDir = mkdtempSync(join(tmpdir(), 'lore-repos6-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'lore-work6-'))
+  const bare = join(bareDir, 'lore-half.git')
+  mkdirSync(bare)
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', bare])
+  const src = makeContextRepo({}, { project: 'half', sources: { good: {}, bad: {} }, backfill: { months: 1 }, extract: ['requests'] })
+  g(src, 'init', '--quiet', '-b', 'main')
+  g(src, 'config', 'user.email', 't@t')
+  g(src, 'config', 'user.name', 't')
+  g(src, 'add', '-A')
+  g(src, 'commit', '--quiet', '-m', 'scaffold')
+  g(src, 'push', '--quiet', bare, 'main')
+  const registry: Record<string, Connector> = {
+    good: { name: 'good', fetch: async () => ({ docs: [doc('good-1')], nextCursor: { n: 1 } }) },
+    bad: { name: 'bad', fetch: async () => { throw new Error('boom') } },
+  }
+
+  // Holding the extract lock makes the fold phase announce itself and skip
+  // instead of calling a model — so the note proves phase 2 was entered at
+  // all, which is what a failed source used to prevent.
+  mkdirSync(join(workDir, '.locks'), { recursive: true })
+  const foldLock = tryLock(join(workDir, '.locks', 'lore-half.extract'))!
+  try {
+    const { result, out } = await captureConsole(() => runAll({ repos: bareDir, work: workDir, extract: true }, registry))
+    assert.equal(result.ok, true)
+    assert.equal(result.clients['lore-half'].status, 'degraded')
+    assert.match(result.clients['lore-half'].note!, /sources failed: bad/)
+    assert.match(result.clients['lore-half'].note!, /fold skipped/)
+    assert.match(out, /fold skipped — another run is already folding/)
+  } finally {
+    foldLock.release()
+  }
 })
 
 test('run-all: a commit pushed to the bare repo mid-run is absorbed — sync commit rebased and pushed', async () => {

@@ -25,7 +25,7 @@ export interface RunAllOptions {
 
 export interface RunAllSummary {
   ok: boolean
-  clients: Record<string, { status: 'synced' | 'archived' | 'failed'; committed: boolean; error?: string; note?: string }>
+  clients: Record<string, { status: 'synced' | 'degraded' | 'archived' | 'failed'; committed: boolean; error?: string; note?: string }>
 }
 
 /** How long a run waits for another run's sync of the same client before giving up. Syncs take seconds; this is a safety net. */
@@ -37,7 +37,11 @@ const GIT_LOCK_WAIT_MS = 5 * 60_000
  * The self-hosted scheduler's one job: for every context repo on this host,
  * sync (and optionally extract), commit, push back to the bare repo. Runs
  * from a systemd timer; per-client failures are isolated and the exit code
- * reflects the whole run. The set of bare repos *is* the client registry —
+ * reflects the whole run. A client whose sources partly failed is
+ * `degraded`, not `failed`: what synced is committed and folded, and the
+ * run still exits 0 — one broken vendor must not stop a client's memory
+ * moving. Only a structural failure (clone, push, invalid config) or every
+ * source failing at once fails the client. The set of bare repos *is* the client registry —
  * `lore setup` in remote mode adds one, `lore archive` flips its lifecycle.
  *
  * Layout on the host:
@@ -91,7 +95,8 @@ export async function runAll(opts: RunAllOptions, registry: Record<string, Conne
   console.log('\n--- run-all summary')
   for (const name of bares.map((b) => basename(b, '.git'))) {
     const c = summary.clients[name]
-    console.log(`${c.status === 'failed' ? '✗' : c.status === 'archived' ? '–' : '✓'} ${name}: ${c.status}${c.committed ? ', committed' : ''}${c.note ? ` (${c.note})` : ''}${c.error ? ` — ${c.error}` : ''}`)
+    const mark = c.status === 'failed' ? '✗' : c.status === 'degraded' ? '!' : c.status === 'archived' ? '–' : '✓'
+    console.log(`${mark} ${name}: ${c.status}${c.committed ? ', committed' : ''}${c.note ? ` (${c.note})` : ''}${c.error ? ` — ${c.error}` : ''}`)
   }
   return summary
 }
@@ -138,7 +143,19 @@ async function runClient(
       syncLock.release()
     }
     if (failure) throw failure
-    if (!s!.ok) throw new Error(`sync reported errors: ${Object.entries(s!.sources).filter(([, v]) => v.status === 'failed').map(([k]) => k).join(', ')}`)
+
+    // A source that failed does not hold up the ones that worked. Its cursor
+    // did not advance, so it resumes where it left off on a later run and the
+    // fold — a content delta — picks up the catch-up material then. What the
+    // run must not do is let the gap go unsaid: the failure is in
+    // state.json's per-source health, which `recall` reports, so an agent
+    // answering from this memory can say what is missing.
+    const failed = Object.entries(s!.sources)
+      .filter(([, v]) => v.status === 'failed')
+      .map(([k]) => k)
+    if (failed.length > 0) notes.push(`sources failed: ${failed.join(', ')}`)
+    const allFailed = failed.length > 0 && failed.length === Object.values(s!.sources).filter((v) => v.status !== 'disabled').length
+    if (allFailed) throw new Error(`every source failed: ${failed.join(', ')}`)
 
     // ---- phase 2: fold, commit, push — under the extract lock ----
     if (opts.extract) {
@@ -162,7 +179,7 @@ async function runClient(
         if (foldFailure) throw foldFailure
       }
     }
-    return { status: 'synced', committed, ...(notes.length ? { note: notes.join('; ') } : {}) }
+    return { status: failed.length > 0 ? 'degraded' : 'synced', committed, ...(notes.length ? { note: notes.join('; ') } : {}) }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`✗ ${name}: ${message}`)

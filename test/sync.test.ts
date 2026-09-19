@@ -175,8 +175,8 @@ test('check: reports missing env and shows source health from state.json', async
   const r = await captureConsole(() => check(root, { fake: fake(async () => ({ docs: [], nextCursor: {} })) }))
   assert.equal(r.result, false)
   assert.match(r.err, /missing env vars: NOPE_TOKEN/)
-  assert.match(r.out, /last success: 2026-09-01/)
-  assert.match(r.out, /last error: +2026-09-02.*kaboom/)
+  // The source is classified, not just dumped: a human sees how wide the gap is.
+  assert.match(r.out, /stale \d+d — last success 2026-09-01T00:00:00Z: kaboom/)
 })
 
 test('check: invalid lore.json is a failure', async () => {

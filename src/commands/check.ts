@@ -1,5 +1,6 @@
 import { loadConfig, resolveEnvRefs } from '../config.js'
 import { connectors } from '../connectors/index.js'
+import { formatStale, sourceStatuses } from '../health.js'
 import { loadState } from '../state.js'
 import type { Connector } from '../types.js'
 
@@ -21,7 +22,8 @@ export function check(root: string, registry: Record<string, Connector> = connec
     return false
   }
 
-  const health = loadState(root).sources ?? {}
+  const state = loadState(root)
+  const statuses = new Map(sourceStatuses(config, state).map((s) => [s.source, s]))
 
   for (const [name, sourceConfig] of Object.entries(config.sources)) {
     if (sourceConfig.disabled) {
@@ -42,10 +44,11 @@ export function check(root: string, registry: Record<string, Connector> = connec
     } else {
       console.log(`✓ source "${name}": connector found, env refs resolve`)
     }
-    const h = health[name]
-    if (h) {
-      console.log(`    last success: ${h.lastSuccess ?? 'never'}`)
-      if (h.lastError) console.log(`    last error:   ${h.lastError.at} — ${h.lastError.message}`)
+    const st = statuses.get(name)
+    if (st && st.state !== 'ok') {
+      console.log(`    ${st.state === 'never' ? 'never synced' : `stale ${formatStale(st.staleHours ?? 0)} — last success ${st.lastSuccess}`}: ${st.error}`)
+    } else if (st?.lastSuccess) {
+      console.log(`    last success: ${st.lastSuccess}`)
     }
   }
   return ok

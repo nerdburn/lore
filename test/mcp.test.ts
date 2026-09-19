@@ -26,7 +26,7 @@ async function connect(root: string) {
   return { client, call, close: () => Promise.all([client.close(), server.close()]) }
 }
 
-test('mcp: exposes the twelve tools', async () => {
+test('mcp: exposes the fourteen tools', async () => {
   const s = await connect(fullFixtureRepo())
   const tools = (await s.client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
@@ -35,6 +35,8 @@ test('mcp: exposes the twelve tools', async () => {
     'lore_read',
     'lore_recall',
     'lore_remember',
+    'lore_source_add',
+    'lore_source_list',
     'lore_sow_add',
     'lore_sync_now',
     'lore_work_add',
@@ -48,7 +50,7 @@ test('mcp: exposes the twelve tools', async () => {
   assert.deepEqual([...MCP_TOOLS.map((t) => t.name)].sort(), tools)
   assert.deepEqual(
     MCP_TOOLS.filter((t) => !t.writes).map((t) => t.name),
-    ['lore_grep', 'lore_read', 'lore_recall', 'lore_sync_now'],
+    ['lore_grep', 'lore_read', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
   )
   await s.close()
 })
@@ -57,7 +59,7 @@ test('mcp: lore_recall with no category matches the CLI recall surface exactly',
   const root = fullFixtureRepo()
   const s = await connect(root)
   const { text } = await s.call('lore_recall')
-  assert.deepEqual(JSON.parse(text), recallData(root, ACME))
+  assert.deepEqual(JSON.parse(text), recallData(root, resolveContext(root, { context: root }).config))
   const parsed = JSON.parse(text)
   assert.equal(parsed.pins.length, 2)
   assert.deepEqual(Object.keys(parsed.derived), ['decisions', 'requests', 'roadmap'])
@@ -75,7 +77,7 @@ test('mcp: lore_recall category filter returns that derived artifact', async () 
   assert.deepEqual(requests.pins, [])
   const decisions = JSON.parse((await s.call('lore_recall', { category: 'decisions' })).text)
   assert.deepEqual(Object.keys(decisions.derived), ['decisions'])
-  assert.deepEqual(JSON.parse((await s.call('lore_recall', { category: 'decisions' })).text), recallData(root, ACME, 'decisions'))
+  assert.deepEqual(JSON.parse((await s.call('lore_recall', { category: 'decisions' })).text), recallData(root, resolveContext(root, { context: root }).config, 'decisions'))
   await s.close()
 })
 
@@ -136,5 +138,38 @@ test('mcp: lore_remember is refused when write.allow excludes the actor', async 
   assert.match(r.text, /not in lore.json write.allow/)
   assert.equal(readFileSync(join(root, 'context/facts.yaml'), 'utf8').trim().endsWith('[]'), true)
   assert.deepEqual(readAudit(root), [])
+  await s.close()
+})
+
+test('source mcp: adds scope with via mcp, lists what is configured, and refuses an unknown kind', async () => {
+  const root = makeContextRepo({}, {
+    project: 'acme',
+    sources: { figma: { files: ['https://figma.com/design/abc/Acme'], token: 'env:FIGMA_TOKEN' } },
+    backfill: { months: 1 },
+    extract: ['requests'],
+  })
+  const s = await connect(root)
+
+  const before = JSON.parse((await s.call('lore_source_list')).text)
+  assert.deepEqual(before.sources.map((x: { kind: string }) => x.kind), ['figma'])
+  assert.ok(before.available.includes('github'))
+
+  process.env.LORE_GITHUB_TOKEN = 'ghp-fake'
+  const added = JSON.parse((await s.call('lore_source_add', { kind: 'github', scope: ['acme/web'] })).text)
+  assert.equal(added.created, true)
+  assert.equal(added.disabled, false)
+  assert.deepEqual(added.added, ['acme/web'])
+  assert.ok(added.next.some((n: string) => n.includes('GitHub integration')))
+  delete process.env.LORE_GITHUB_TOKEN
+
+  // The caller never supplies the actor; the surface is recorded as mcp.
+  const entry = readAudit(root).at(-1)!
+  assert.equal(entry.action, 'source')
+  assert.equal(entry.via, 'mcp')
+  assert.equal(entry.actor, userInfo().username)
+
+  // A kind with no connector is not even in the schema's enum.
+  assert.equal((await s.call('lore_source_add', { kind: 'linear', scope: ['ACME'] })).isError, true)
+
   await s.close()
 })
