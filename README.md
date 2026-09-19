@@ -161,7 +161,8 @@ workflow, no secrets. Any number of repos can point at one context repo.
 ## Sources
 
 Each is an entry under `sources` in the context repo's `lore.json`; the
-wizard writes them, and this is what they mean. Every scope belongs to
+wizard writes them, `lore source add` widens them later (an agent can too,
+via `lore_source_add`), and this is what they mean. Every scope belongs to
 exactly one client repo. Secrets are always `env:` references (lore loads
 `.env` from the working directory; real env vars win) or an `api_base` /
 `endpoint` proxy that injects them, so a token never sits in git.
@@ -520,10 +521,13 @@ removing @lore from the Slack channels.
 ### For agents (MCP)
 
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
-`lore_recall`, `lore_sync_now`, `lore_remember`, `lore_sow_add`,
-`lore_doc_add`, and the tracker verbs `lore_work_add`, `lore_work_promote`,
-`lore_work_move`, `lore_work_set` (each requires a reason), and
-`lore_work_push` (write ticket state to Jira, on request only). `lore_recall`
+`lore_recall`, `lore_sync_now`, `lore_source_list`, `lore_remember`,
+`lore_sow_add`, `lore_doc_add`, `lore_source_add` (widen what is synced — a
+repo, channel, folder, page, design file, board, or mailbox — on explicit
+instruction; identifiers only, credentials stay on the host), and the tracker
+verbs `lore_work_add`, `lore_work_promote`, `lore_work_move`, `lore_work_set`
+(each requires a reason), and `lore_work_push` (write ticket state to Jira,
+on request only). `lore_recall`
 returns exactly what the CLI does — pins, every derived artifact, the lore
 tracker and the external work tables, recent reports, and sync/extract
 timestamps so an agent can say how fresh its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
@@ -600,6 +604,8 @@ cites sources, never pins uninvited); run them with
 | `lore sow list [--json]` | attached SOWs |
 | `lore doc add <file-or-google-link> [--title t] [--from who] [--date d] [--source url] [--as email] [--by who]` | add a document (Google Doc/Slides/Sheet, Drive PDF/text, or local .md/.txt/.pdf) to the `docs` stream — raw material, folded like email; commits + pushes |
 | `lore doc list [--json]` | documents in the `docs` stream |
+| `lore source add <kind> [scope...] [--site url] [--by who]` | add a source or widen its scope on an existing client — `github owner/repo`, `slack "#chan"`, `granola "Folder"`, `notion <url>`, `figma <url>`, `jira KEY\|board:id`, `gmail [emails\|all]`; identifiers only (proxy `api_base` from `~/.lore/config.json` or `env:` refs), validated, audited, commits + pushes; the host backfills the new scope; prints the human steps left |
+| `lore source list [--json]` | configured sources with scope, auth mode, and last success / last error |
 | `lore gdoc export <url> --as <email> [--json]` | export a Google Doc (Slides, Sheet, Drive-hosted PDF/text) as text via the service account (used by `sow add` / `doc add` on the host) |
 | `lore mcp` | MCP server over stdio |
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; non-zero exit if any enabled source fails) |
@@ -610,7 +616,7 @@ cites sources, never pins uninvited); run them with
 | `lore check` | validate config, connectors, env refs; print per-source sync health |
 | `lore manifest slack` | print the bundled Slack app manifest |
 
-`grep`, `recall`, `remember`, `sow`, `doc`, `refresh`, `archive`, and `mcp` all take
+`grep`, `recall`, `remember`, `sow`, `doc`, `source`, `refresh`, `archive`, and `mcp` all take
 `--context <owner/repo>`, `-p/--project <name>`, and `--no-pull`.
 
 ## Troubleshooting

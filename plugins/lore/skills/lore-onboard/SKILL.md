@@ -99,6 +99,25 @@ relay the human steps, and verify before declaring success.
 8. **Report** what was set up, what is still human, and the first real
    answer you got from the memory.
 
+## Widening an existing client
+
+A client already onboarded gets a new repo, channel, folder, Notion page,
+Figma file, Jira board, or mailbox with one command — no hand edit of
+lore.json:
+
+```sh
+lore source add github inputlogic/merrin -p merrin      # or: slack "#merrin-dev" · granola "Merrin" · notion <page url>
+lore source add figma "https://www.figma.com/design/<key>/…" -p merrin
+lore source add jira board:293 --site https://input-logic.atlassian.net -p jointly
+lore source list -p merrin                               # scope, auth mode, last success / last error per source
+```
+
+It validates, audits, commits and pushes; the host backfills the new scope on
+its next sync. It prints the human steps that remain (invite the bot, attach
+the GitHub integration to `tag:lore`, share the Notion page) — do them, then
+`lore refresh --trigger -p <client>`. Agents have the same verb as
+`lore_source_add` / `lore_source_list` (the `lore-mcp` skill).
+
 ## Ending an engagement
 
 `lore archive --context lore-<client>` — sync stops, writes are refused,

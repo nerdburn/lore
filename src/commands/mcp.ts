@@ -12,6 +12,8 @@ import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
 import { workAdd, workMove, workPromote, workRank, workSet } from './work.js'
 import { workPush } from './work-push.js'
+import { sourceAdd, sourceList } from './source.js'
+import { KNOWN_SOURCES } from '../config.js'
 import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -28,9 +30,11 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
   { name: 'lore_recall', writes: false, summary: 'pins, tracker, derived artifacts, reports, SOWs at once' },
   { name: 'lore_sync_now', writes: false, summary: 'pull, and ask the host to sync (and fold) now' },
+  { name: 'lore_source_list', writes: false, summary: 'what is synced: each source, its scope, and its health' },
   { name: 'lore_remember', writes: true, summary: 'pin a fact (explicit user instruction only)' },
   { name: 'lore_sow_add', writes: true, summary: 'attach a statement of work' },
   { name: 'lore_doc_add', writes: true, summary: 'attach a document or link the client sent' },
+  { name: 'lore_source_add', writes: true, summary: 'add a source or widen its scope: a repo, channel, folder, page, design file, board, mailbox (explicit only)' },
   { name: 'lore_work_add', writes: true, summary: 'open a tracker ticket' },
   { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
@@ -220,6 +224,40 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ url, text: body, title, from, date, source }) => {
       const d = await docAdd(rememberOpts.cwd, { file: url, text: body, title, from, date, source }, { ...rememberOpts.opts, via: 'mcp' })
       return text(d)
+    },
+  )
+
+  server.registerTool(
+    'lore_source_list',
+    {
+      description:
+        label +
+        `What ${ctx.config.project}'s memory is synced from: each configured source (slack, github, granola, notion, figma, jira, gmail) with its scope in its own terms (channels, repos, folders, roots, files, projects/boards, mailboxes), whether it is disabled, how the host authenticates, and its last successful sync / last error. Use it to answer "which repos/channels are synced", to check a scope before adding to it, and to explain a source that is failing.`,
+      inputSchema: {},
+    },
+    async () => {
+      freshen()
+      return text(sourceList(rememberOpts.cwd, { ...rememberOpts.opts, pull: false }))
+    },
+  )
+
+  server.registerTool(
+    'lore_source_add',
+    {
+      description: archived
+        ? 'Unavailable: this client is archived and its memory is read-only.'
+        : 'Add a source to project memory, or widen one: a GitHub repo, a Slack channel, a Granola folder, a Notion page, a Figma design file, a Jira project/board, or Gmail mailboxes. Use ONLY on explicit instruction from a teammate ("add the mobile repo to lore", "sync #acme-dev too"), with the identifiers exactly as given — never guess a repo name, channel, or folder, and never add a scope you merely saw mentioned. Credentials are never part of this: the config records identifiers only, and the host authenticates through its proxies. The result lists what was added, what was already there, and `next`: the steps only a person can do (invite the bot to the channel, attach the GitHub integration, share the Notion page) — relay those verbatim, because the host cannot read the new scope until they are done. The new scope backfills automatically on the host\'s next sync (or lore_sync_now). Scope is never removed here; that is a human edit.',
+      inputSchema: {
+        kind: z.enum(KNOWN_SOURCES as [string, ...string[]]).describe('slack | github | granola | notion | figma | jira | gmail'),
+        scope: z
+          .array(z.string().min(1))
+          .describe('in the source\'s own terms: "#channel"; "owner/repo"; a Granola folder title; a Notion page/database URL or id; a Figma file URL or key (not a Slides deck); a Jira project key (ACM) or "board:293"; mailboxes as emails, or "all" for every Workspace mailbox (gmail: an empty list means the team-side contacts\' inboxes)'),
+        site: z.string().optional().describe('jira only: https://<site>.atlassian.net, for permalinks'),
+      },
+    },
+    async ({ kind, scope, site }) => {
+      const r = await sourceAdd(rememberOpts.cwd, { kind, scope, site }, { ...rememberOpts.opts, via: 'mcp' })
+      return text(r)
     },
   )
 
