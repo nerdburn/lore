@@ -37,6 +37,13 @@ ssh exe.dev integrations add github --name <owner>-<repo> --repository <owner>/<
 
 Uses exe.dev's GitHub App (no personal token). If the repo doesn't appear,
 the app isn't installed on that org yet: exe.dev → Integrations → GitHub.
+If an integration for the repo already exists (`ssh exe.dev integrations list`)
+but isn't on `tag:lore`, attach it instead of adding a second one:
+`ssh exe.dev integrations attach <name> tag:lore` (`--team` when the listing
+marks it `(team)`) — until then the host's sync reports "repo not found or
+token lacks access". Adding the repo to an existing client is
+`lore source add github <owner>/<repo> -p <client>` (or an agent's
+`lore_source_add`); the source block alone does nothing without this step.
 Verify from the host before relying on it:
 
 ```sh
@@ -184,13 +191,16 @@ registers):
 | `lore_read` | no | read a file or line range from the context repo |
 | `lore_recall` | no | pins, tracker, derived artifacts, reports, SOWs at once |
 | `lore_sync_now` | no | pull, and ask the host to sync (and fold) now |
+| `lore_source_list` | no | what is synced: each source, its scope, and its health |
 | `lore_remember` | yes | pin a fact — **deny for client-facing agents** unless the user says otherwise |
 | `lore_sow_add` | yes | attach a statement of work |
 | `lore_doc_add` | yes | attach a document or link the client sent |
+| `lore_source_add` | yes | add a source or widen its scope — repo, channel, folder, page, design file, board, mailbox (explicit only; the result names the human steps: invite, integration attach, page share) |
 | `lore_work_add` | yes | open a tracker ticket |
 | `lore_work_promote` | yes | turn a derived request into a ticket |
 | `lore_work_move` | yes | change a ticket status, with a reason |
 | `lore_work_set` | yes | priority, assignee, labels, title, evidence, rank |
+| `lore_work_push` | yes | write ticket state to Jira: transition linked issues, create missing ones (explicit only) |
 
 enso-agent-bootstrap's `install.sh` does exactly this (it runs
 `lore mcp --list-tools` at route time; `LORE_DENY_TOOLS` in its conf is the

@@ -12,7 +12,8 @@ import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
 import { workAdd, workMove, workPromote, workRank, workSet } from './work.js'
 import { workPush } from './work-push.js'
-import { sourceAdd, sourceKinds, sourceList } from './source.js'
+import { sourceAdd, sourceList } from './source.js'
+import { KNOWN_SOURCES } from '../config.js'
 import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 
 const PULL_INTERVAL_MS = 60_000
@@ -29,16 +30,16 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
   { name: 'lore_recall', writes: false, summary: 'pins, tracker, derived artifacts, reports, SOWs at once' },
   { name: 'lore_sync_now', writes: false, summary: 'pull, and ask the host to sync (and fold) now' },
-  { name: 'lore_source_list', writes: false, summary: 'which sources feed this client, their scope, and what is still available' },
+  { name: 'lore_source_list', writes: false, summary: 'what is synced: each source, its scope, and its health' },
   { name: 'lore_remember', writes: true, summary: 'pin a fact (explicit user instruction only)' },
   { name: 'lore_sow_add', writes: true, summary: 'attach a statement of work' },
   { name: 'lore_doc_add', writes: true, summary: 'attach a document or link the client sent' },
+  { name: 'lore_source_add', writes: true, summary: 'add a source or widen its scope: a repo, channel, folder, page, design file, board, mailbox (explicit only)' },
   { name: 'lore_work_add', writes: true, summary: 'open a tracker ticket' },
   { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
   { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones (explicit only)' },
-  { name: 'lore_source_add', writes: true, summary: 'point a built-in connector at more of this client: channels, repos, pages, files, mailboxes' },
 ]
 
 export interface McpCommandOptions extends ResolveOptions {
@@ -229,12 +230,14 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   server.registerTool(
     'lore_source_list',
     {
-      description: `Which sources feed ${ctx.config.project}'s memory — each connector, the scope it is pointed at (Slack channels, GitHub repos, Notion pages, Figma files, Jira projects, mailboxes), whether it is disabled, and which built-in connectors are not configured for this client yet. Read this before lore_source_add, and when a question has no answer in memory because the source was never synced.`,
+      description:
+        label +
+        `What ${ctx.config.project}'s memory is synced from: each configured source (slack, github, granola, notion, figma, jira, gmail) with its scope in its own terms (channels, repos, folders, roots, files, projects/boards, mailboxes), whether it is disabled, how the host authenticates, and its last successful sync / last error. Use it to answer "which repos/channels are synced", to check a scope before adding to it, and to explain a source that is failing.`,
       inputSchema: {},
     },
     async () => {
       freshen()
-      return text(sourceList(rememberOpts.cwd, rememberOpts.opts))
+      return text(sourceList(rememberOpts.cwd, { ...rememberOpts.opts, pull: false }))
     },
   )
 
@@ -243,19 +246,17 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? 'Unavailable: this client is archived and its memory is read-only.'
-        : `Point one of lore's built-in connectors at more of ${ctx.config.project}: add Slack channels, GitHub repos, Notion pages, Figma files, Jira project keys or mailboxes to a source, or configure a connector this client does not have yet. Connector kinds are fixed in code — this sets *what* of each belongs to the client, never a new kind of source. Use on explicit user instruction. The scope backfills on the next sync. Credentials and consent stay human: the result's "next" lists what a person must still do (invite @lore to the channel, create the host integration, share the Notion page), and a new source whose credentials cannot be resolved is written disabled so it cannot break the client's sync. Call lore_source_list first to see what is already configured.`,
+        : 'Add a source to project memory, or widen one: a GitHub repo, a Slack channel, a Granola folder, a Notion page, a Figma design file, a Jira project/board, or Gmail mailboxes. Use ONLY on explicit instruction from a teammate ("add the mobile repo to lore", "sync #acme-dev too"), with the identifiers exactly as given — never guess a repo name, channel, or folder, and never add a scope you merely saw mentioned. Credentials are never part of this: the config records identifiers only, and the host authenticates through its proxies. The result lists what was added, what was already there, and `next`: the steps only a person can do (invite the bot to the channel, attach the GitHub integration, share the Notion page) — relay those verbatim, because the host cannot read the new scope until they are done. The new scope backfills automatically on the host\'s next sync (or lore_sync_now). Scope is never removed here; that is a human edit.',
       inputSchema: {
-        kind: z.enum(sourceKinds() as [string, ...string[]]).describe('which built-in connector'),
+        kind: z.enum(KNOWN_SOURCES as [string, ...string[]]).describe('slack | github | granola | notion | figma | jira | gmail'),
         scope: z
           .array(z.string().min(1))
-          .min(1)
-          .describe('what to add: "#acme-design" (slack), "acme/web" (github), a Notion page URL, a Figma file URL, "ACM" (jira), a mailbox or "all" (gmail), a folder title (granola)'),
-        site: z.string().optional().describe('jira only: https://<you>.atlassian.net, when configuring jira for the first time'),
-        disabled: z.boolean().optional().describe('configure it but leave it skipped, for a human to enable'),
+          .describe('in the source\'s own terms: "#channel"; "owner/repo"; a Granola folder title; a Notion page/database URL or id; a Figma file URL or key (not a Slides deck); a Jira project key (ACM) or "board:293"; mailboxes as emails, or "all" for every Workspace mailbox (gmail: an empty list means the team-side contacts\' inboxes)'),
+        site: z.string().optional().describe('jira only: https://<site>.atlassian.net, for permalinks'),
       },
     },
-    async ({ kind, scope, site, disabled }) => {
-      const r = sourceAdd(rememberOpts.cwd, { kind, scope, site, disabled }, { ...rememberOpts.opts, via: 'mcp' })
+    async ({ kind, scope, site }) => {
+      const r = await sourceAdd(rememberOpts.cwd, { kind, scope, site }, { ...rememberOpts.opts, via: 'mcp' })
       return text(r)
     },
   )

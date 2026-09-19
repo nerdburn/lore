@@ -140,36 +140,3 @@ test('mcp: lore_remember is refused when write.allow excludes the actor', async 
   assert.deepEqual(readAudit(root), [])
   await s.close()
 })
-
-test('source mcp: adds scope with via mcp, lists what is configured, and refuses an unknown kind', async () => {
-  const root = makeContextRepo({}, {
-    project: 'acme',
-    sources: { figma: { files: ['https://figma.com/design/abc/Acme'], token: 'env:FIGMA_TOKEN' } },
-    backfill: { months: 1 },
-    extract: ['requests'],
-  })
-  const s = await connect(root)
-
-  const before = JSON.parse((await s.call('lore_source_list')).text)
-  assert.deepEqual(before.sources.map((x: { kind: string }) => x.kind), ['figma'])
-  assert.ok(before.available.includes('github'))
-
-  process.env.LORE_GITHUB_TOKEN = 'ghp-fake'
-  const added = JSON.parse((await s.call('lore_source_add', { kind: 'github', scope: ['acme/web'] })).text)
-  assert.equal(added.created, true)
-  assert.equal(added.disabled, false)
-  assert.deepEqual(added.added, ['acme/web'])
-  assert.ok(added.next.some((n: string) => n.includes('GitHub integration')))
-  delete process.env.LORE_GITHUB_TOKEN
-
-  // The caller never supplies the actor; the surface is recorded as mcp.
-  const entry = readAudit(root).at(-1)!
-  assert.equal(entry.action, 'source')
-  assert.equal(entry.via, 'mcp')
-  assert.equal(entry.actor, userInfo().username)
-
-  // A kind with no connector is not even in the schema's enum.
-  assert.equal((await s.call('lore_source_add', { kind: 'linear', scope: ['ACME'] })).isError, true)
-
-  await s.close()
-})

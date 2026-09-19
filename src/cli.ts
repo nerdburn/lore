@@ -23,7 +23,6 @@ import { docAdd, docList } from './commands/doc.js'
 import { workAdd, workList, workMove, workPromote, workRank, workSet, workShow } from './commands/work.js'
 import { printPush, workPush } from './commands/work-push.js'
 import { sourceAdd, sourceList } from './commands/source.js'
-import { formatStale } from './health.js'
 import { exportGoogleDoc } from './gdoc.js'
 
 function splitList(value: unknown): string[] | undefined {
@@ -210,37 +209,6 @@ contextual(
 })
 contextual(doc.command('list').description('list documents in the `docs` stream').option('--json', 'machine-readable output')).action((o) => void docList(root, o))
 
-const source = program
-  .command('source')
-  .description('which sources feed this client: configure one of the built-in connectors, or widen one that is already configured')
-contextual(
-  source
-    .command('add')
-    .description('configure a connector for this client, or add scope to one already configured; commits and pushes. Connector kinds are code — this sets what of each belongs to the client')
-    .argument('<kind>', 'slack | github | granola | notion | jira | figma | gmail')
-    .argument('<scope...>', 'channels (#acme), repos (acme/web), Notion pages, Figma files, Jira project keys, mailboxes (or "all")')
-    .option('--site <url>', 'jira only: https://<you>.atlassian.net — needed when creating the source without a proxy')
-    .option('--disabled', 'write the source configured but skipped, to enable by hand later')
-    .option('--by <who>', 'who is adding this (defaults to OS username)')
-    .option('--json', 'machine-readable output'),
-).action((kind: string, scope: string[], o) => {
-  const r = sourceAdd(root, { kind, scope, site: o.site, disabled: o.disabled }, o)
-  if (o.json) return void console.log(JSON.stringify(r, null, 2))
-  if (!r.added.length && !r.created) return void console.log(`${kind}: already configured for ${r.present.join(', ')} — nothing to add`)
-  console.log(`${r.created ? 'configured' : 'widened'} ${kind}${r.added.length ? `: +${r.added.join(', ')}` : ''}${r.disabled ? ' (disabled)' : ''}`)
-  if (r.present.length) console.log(`  already present: ${r.present.join(', ')}`)
-  for (const step of r.next) console.log(`  • ${step}`)
-})
-contextual(source.command('list').description('every configured source, its scope, and which connectors are still available').option('--json', 'machine-readable output')).action((o) => {
-  const r = sourceList(root, o)
-  if (o.json) return void console.log(JSON.stringify(r, null, 2))
-  for (const s of r.sources) {
-    const mark = s.disabled ? '–' : s.state === 'ok' ? '✓' : '!'
-    const health = s.state === 'stale' ? ` — stale ${formatStale(s.staleHours ?? 0)}: ${s.error}` : s.state === 'never' ? ` — never synced: ${s.error}` : ''
-    console.log(`${mark} ${s.kind}${s.disabled ? ' (disabled)' : ''}: ${s.scope.join(', ') || '(no explicit scope)'}${s.connector ? '' : ' — no connector!'}${health}`)
-  }
-  if (r.available.length) console.log(`available: ${r.available.join(', ')}`)
-})
 
 const work = program.command('work').description('the work tracker of record: tickets mirrored from Jira/GitHub, moved by people, agents, and the fold — every move recorded with who and why')
 contextual(
@@ -329,6 +297,20 @@ contextual(
 contextual(work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--json', 'machine-readable output')).action((o) => void workList(root, o))
 contextual(work.command('show').description('one item with its full history').argument('<key>').option('--json', 'machine-readable output')).action((key: string, o) => void workShow(root, key, o))
 
+const source = program.command('source').description('what memory is synced from — add a repo, channel, folder, page, design file, board, or mailbox to an existing client (identifiers only; credentials stay in proxies / env)')
+contextual(
+  source
+    .command('add')
+    .description('add a source or widen its scope; validates lore.json, audits, commits and pushes — the host backfills the new scope on its next sync')
+    .argument('<kind>', 'slack | github | granola | notion | figma | jira | gmail')
+    .argument('[scope...]', '"#channel" · "owner/repo" · Granola folder title · Notion page URL/id · Figma file URL/key · Jira key or board:<id> · mailboxes or "all" (gmail with none = team contacts)')
+    .option('--site <url>', 'jira: https://<site>.atlassian.net, for permalinks')
+    .option('--by <who>', 'who is adding this (defaults to OS username)'),
+).action(async (kind: string, scope: string[], o) => {
+  await sourceAdd(root, { kind, scope, site: o.site }, o)
+})
+contextual(source.command('list').description('configured sources with scope, auth mode, and sync health').option('--json', 'machine-readable output')).action((o) => void sourceList(root, o))
+
 program
   .command('link')
   .description('point this project repo at a context repo (writes a one-line lore.json pointer + AGENTS.md section)')
@@ -378,7 +360,7 @@ contextual(
 contextual(
   program
     .command('mcp')
-    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_work_*/lore_work_push)')
+    .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_source_list/lore_source_add/lore_work_*/lore_work_push)')
     .option('--list-tools', 'print the tool table as JSON ({name, writes, summary}) and exit — for provisioning scripts building allow lists; needs no context or network'),
 ).action((opts) => mcp(root, opts))
 
