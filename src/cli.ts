@@ -60,6 +60,7 @@ program
   .description('wizard: create + scaffold + push a context repo, set the secret, dispatch the first sync, link this repo')
   .argument('[repo]', 'context repo name or "owner/name" (derived from cwd/channels if omitted)')
   .option('--channels <list>', 'comma-separated Slack channels, e.g. "#acme,#acme-dev"')
+  .option('--slack-proxy <url>', 'Slack API base for this client when its channels are in a different workspace than the default proxy, e.g. https://slack-acme.int.exe.xyz/api (an exe.dev http-proxy holding that workspace\'s bot token)')
   .option('--github <repos>', 'comma-separated GitHub repos to sync, e.g. "acme/web,acme/mobile"')
   .option('--granola <folders>', 'comma-separated Granola folder titles holding this client\'s meetings, e.g. "Acme"')
   .option('--notion <roots>', 'comma-separated Notion page/database ids or URLs scoping this client\'s docs')

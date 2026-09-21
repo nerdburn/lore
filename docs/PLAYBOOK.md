@@ -29,6 +29,13 @@ In each channel: `/invite @lore`. The bot only reads channels it is a member
 of; that is the consent model. Nothing else to configure — the workspace's
 Slack app and its token already exist as the `slack` integration.
 
+**A client in another Slack workspace:** create the app there from
+`lore manifest slack`, install it, and put its bot token behind its own
+exe.dev proxy (`ssh exe.dev integrations add http-proxy --name=slack-<workspace>
+--target=https://slack.com --bearer=- --attach=tag:lore`, token on stdin).
+Then pass `--slack-proxy https://slack-<workspace>.int.exe.xyz/api` to
+`lore setup` for each client in that workspace; everything else is the same.
+
 ## 2. GitHub — one read-only integration per repo
 
 ```sh

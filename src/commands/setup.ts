@@ -10,6 +10,8 @@ import { deriveWorkPrefix } from '../work.js'
 
 export interface SetupFlags {
   channels?: string
+  /** Slack Web API base for THIS client when its channels live in another workspace than the default proxy — an exe.dev proxy holding that workspace's bot token, e.g. https://slack-acme.int.exe.xyz/api. */
+  slackProxy?: string
   /** Comma-separated "owner/repo" list — adds a github source. */
   github?: string
   /** Comma-separated Granola folder titles (or ids) holding this client's meetings — adds a granola source. */
@@ -156,7 +158,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
       lifecycle: 'active',
       client: { name: flags.client ?? project.charAt(0).toUpperCase() + project.slice(1), domains, contacts: [], ...(owner ? { owner } : {}) },
       work: { prefix: deriveWorkPrefix(flags.client ?? project) },
-      sources: buildSources(channels, repos, mode === 'remote' ? global.proxy : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers, figmaFiles),
+      sources: buildSources(channels, repos, mode === 'remote' ? { ...global.proxy, ...(flags.slackProxy ? { slack: flags.slackProxy } : {}) } : flags.slackProxy ? { slack: flags.slackProxy } : undefined, folders, notionRoots, jiraProjects, flags.jiraSite, jiraBoards, gmailUsers, figmaFiles),
       backfill: { months: Number.isFinite(months) ? months : 3 },
       extract: ['requests', 'decisions', 'roadmap', 'weekly-report'],
     }
@@ -199,7 +201,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     if (mode === 'remote') {
       if (channels.length) console.log(`  - /invite @lore in ${channels.join(', ')} — the host's next \`lore run-all\` picks the repo up automatically`)
       if (gmailUsers !== undefined) console.log('  - gmail: the service account key must be at ~/.lore/gmail-sa.json on the host, with domain-wide delegation for gmail.readonly (docs/PLAYBOOK.md §3d)')
-      if (!global.proxy?.slack) console.log('  - the host needs SLACK_TOKEN in its environment (no slack proxy configured)')
+      if (!global.proxy?.slack && !flags.slackProxy) console.log('  - the host needs SLACK_TOKEN in its environment (no slack proxy configured)')
     } else {
       if (channels.length) console.log(`  - /invite @lore in ${channels.join(', ')}, then re-run the sync from Actions`)
     }
