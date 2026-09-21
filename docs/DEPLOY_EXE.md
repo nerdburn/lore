@@ -171,29 +171,67 @@ so `recall` can show `lastExtract` behind `lastSync`. Clients are processed
 `LORE_CONCURRENCY` (default 3) at a time; journal lines are prefixed
 `[lore-<client>]`.
 
-## 6. Giving another VM's agent access
+## 6. Giving another VM's agent access — the hosted MCP endpoint
 
-An agent on a different exe.dev VM (a Slack bot, a coding agent) reads lore
-by cloning from the host over SSH, so it needs a key that the exe.dev edge
-accepts — VM sshd `authorized_keys` files are ignored there:
+The host serves MCP itself: `lore www` answers `/mcp/<context>` on the same
+port as the status page (exe.dev proxies one port per VM). An agent on another
+exe.dev VM needs no lore install, no clone, no SSH key — it talks HTTP to the
+host through a **VM-to-VM (peer) integration**, and the platform stamps every
+request with `X-Exedev-Source-Vm: <calling vm>` after stripping anything the
+caller sent. That header is the agent's identity; nothing else is trusted.
+
+```
+agent VM ── https://lore-mcp.int.exe.xyz/mcp/lore-acme ──▶ exe.dev edge (adds peer key,
+                                                          sets X-Exedev-Source-Vm)
+                                                          ──▶ lore-host:8000  lore www
+                                                              agents.json says who may open what
+                                                              ~/.lore/cache/<context> clone ⇄ /srv/lore/repos
+```
+
+One-time, per host — the integration, attached to every VM that should reach it:
 
 ```sh
-ssh <agent-vm> 'ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519; cat ~/.ssh/id_ed25519.pub'
-ssh exe.dev ssh-key add --tag=lore "<that public key>"      # scoped to lore-tagged VMs only
+ssh exe.dev integrations add http-proxy --name lore-mcp --target https://lore-host.exe.xyz/ --peer \
+    --attach vm:accord-agent --attach vm:claire-agent      # repeat --attach per agent VM
+ssh exe.dev integrations attach lore-mcp vm:new-agent      # later additions
 ```
 
-Then on the agent VM: install lore (Node ≥ 20), write `~/.lore/config.json`
-with the same `remote`, and register the MCP server with an absolute command
-and explicit env, e.g. for a stdio MCP config:
+Per agent, on the host — say which context(s) the VM may open (the file is
+`~/.lore/agents.json`; the server reads it on every new session, no restart):
+
+```sh
+ssh exedev@lore-host.exe.xyz lore agents allow accord-agent lore-jointly
+ssh exedev@lore-host.exe.xyz lore agents allow ops-agent '*' --as ops   # every context; writes signed "ops"
+ssh exedev@lore-host.exe.xyz lore agents list
+```
+
+Then the agent's MCP config is one line, no env, no paths:
 
 ```json
-"lore": { "type": "stdio", "command": "/path/to/lore", "args": ["mcp", "--context", "lore-acme"],
-          "env": { "LORE_HOME": "/home/<user>/.lore", "HOME": "/home/<user>", "PATH": "/path/to/node/bin:/usr/bin:/bin" } }
+"lore": { "type": "http", "url": "https://lore-mcp.int.exe.xyz/mcp/lore-acme" }
 ```
 
-Allow the four `mcp__lore__*` tools in the agent's permission rules and give
-it the `lore-mcp` skill from `plugins/lore/skills/`. The agent's first call
-clones the context repo into its own `~/.lore/cache`; reads pull, pins push.
+Allow the `mcp__lore__*` tools in the agent's permission rules (the names are
+unchanged from the stdio server; `lore mcp --list-tools` on the host prints
+them) and give it the `lore-mcp` skill from `plugins/lore/skills/`.
+
+What you get over the old per-VM install: one deploy (upgrade the host, every
+agent has the new tools), real per-client scoping (a VM not granted a context
+gets 403 before anything is cloned), and writes attributed to the agent —
+`authorized_by: accord-agent` instead of the host's service user. A request
+with no identity header (a human on the private HTTPS URL, or anything that
+did not come through the edge) is refused with 401. `/mcp-sessions.json`
+lists the open sessions.
+
+Trade-off to know: the host is now in the agents' request path. If it is
+down, agents have no memory until it is back (the old stdio install served a
+stale cache). Keep the laptop path (`lore mcp`, stdio, a clone) for yourself;
+it is unchanged.
+
+**Upgrading agents from the stdio install:** change the `lore` entry in the
+policy's `claude/mcp.json` to the http form above, restart enso. The old
+install and `~/.lore/cache` on the agent VM can stay or go; nothing reads
+them once the config changes.
 
 ## 7. Archive, backup, access
 

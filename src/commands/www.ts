@@ -8,12 +8,17 @@ import { execFileSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { configSchema } from '../config.js'
 import { esc, renderMarkdown } from '../markdown.js'
+import { agentsFilePath, createMcpHttpHandler, MCP_PATH, type McpHttpHandler } from '../mcp-http.js'
 
 export interface WwwOptions {
   /** Directory of bare context repos — the client registry. */
   repos: string
   port: number
   host?: string
+  /** Serve the hosted MCP endpoint under /mcp (default true). */
+  mcp?: boolean
+  /** Agents file for the MCP endpoint (default ~/.lore/agents.json). */
+  agents?: string
 }
 
 export interface ClientStatus {
@@ -38,11 +43,18 @@ export interface ClientStatus {
  * table of every client on this host, read straight from the bare repos.
  * No dependencies, no auth of its own: on exe.dev the HTTPS proxy in front
  * of it is private to the account (and shareable) — that is the access layer.
+ *
+ * It also hosts the MCP endpoint (`/mcp/<context>`, see mcp-http.ts): agents
+ * on other VMs reach it through a peer integration, which is what identifies
+ * them — the page and the tools share the port because exe.dev proxies one
+ * port per VM.
  */
-export function www(opts: WwwOptions): void {
-  const server = createServer((req, res) => {
+export function www(opts: WwwOptions): { close(): Promise<void> } {
+  const mcp: McpHttpHandler | undefined = opts.mcp === false ? undefined : createMcpHttpHandler({ agentsFile: opts.agents })
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
+      if (mcp && (await mcp.handle(req, res, url))) return
       if (url.pathname === '/status.json') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ generated: new Date().toISOString(), clients: clientStatuses(opts.repos) }, null, 2))
@@ -58,6 +70,11 @@ export function www(opts: WwwOptions): void {
         res.end('ok\n')
         return
       }
+      if (url.pathname === '/mcp-sessions.json') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ generated: new Date().toISOString(), sessions: mcp?.sessions() ?? [] }, null, 2))
+        return
+      }
       res.writeHead(404, { 'content-type': 'text/plain' })
       res.end('not found\n')
     } catch (err) {
@@ -67,7 +84,14 @@ export function www(opts: WwwOptions): void {
   })
   server.listen(opts.port, opts.host ?? '0.0.0.0', () => {
     console.log(`lore www: http://${opts.host ?? '0.0.0.0'}:${opts.port}/  (repos: ${opts.repos})`)
+    if (mcp) console.log(`lore mcp: ${MCP_PATH}/<context>  (agents: ${opts.agents ?? agentsFilePath()})`)
   })
+  return {
+    close: async () => {
+      await mcp?.close()
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
+    },
+  }
 }
 
 /** Read each bare repo's lore.json + state.json at HEAD without a checkout. */

@@ -132,16 +132,23 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
-# --- systemd: the host's page (playbook + live client status) on the exe.dev proxy port ---
+# --- systemd: the host's page (playbook + live client status) AND the hosted MCP
+# endpoint (/mcp/<context>) on the exe.dev proxy port. Agents on other VMs reach
+# the endpoint through a peer integration (see docs/DEPLOY_EXE.md §6); who may
+# open which context is $LORE_HOME_DIR/agents.json (`lore agents allow …`).
+[ -f "$LORE_HOME_DIR/agents.json" ] || { echo '{}' > "$LORE_HOME_DIR/agents.json"; chown "$LORE_USER":"$LORE_USER" "$LORE_HOME_DIR/agents.json"; }
 cat > /etc/systemd/system/lore-www.service <<UNIT
 [Unit]
-Description=lore: playbook + client status page
+Description=lore: playbook + client status page + hosted MCP endpoint
 After=network-online.target
 
 [Service]
 User=$LORE_USER
-ExecStart=$(command -v lore) www --repos /srv/lore/repos --port ${WWW_PORT:-8000}
-Restart=on-failure
+EnvironmentFile=/etc/lore/env
+WorkingDirectory=/srv/lore
+ExecStart=$(command -v lore) www --repos /srv/lore/repos --port ${WWW_PORT:-8000} --agents $LORE_HOME_DIR/agents.json
+Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
@@ -151,7 +158,7 @@ systemctl daemon-reload
 systemctl enable --now lore-www.service
 systemctl restart lore-www.service
 systemctl enable --now lore-sync.timer
-echo "www:   $(systemctl is-active lore-www.service) on port ${WWW_PORT:-8000} (https://<vm>.exe.xyz via the exe.dev proxy)"
+echo "www:   $(systemctl is-active lore-www.service) on port ${WWW_PORT:-8000} (https://<vm>.exe.xyz via the exe.dev proxy; MCP at /mcp/<context> for peer VMs in $LORE_HOME_DIR/agents.json)"
 echo "timer: $(systemctl is-active lore-sync.timer); next runs:"
 systemctl list-timers lore-sync.timer --no-pager | head -3
 echo

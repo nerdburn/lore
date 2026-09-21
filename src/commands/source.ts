@@ -37,6 +37,9 @@ export interface SourceAddOptions extends ResolveOptions {
   /** CLI only: who is adding this. MCP callers can never set it. */
   by?: string
   via?: 'cli' | 'mcp'
+  /** Hosted MCP only: the platform-attested caller; see WriteGateOptions. */
+  actor?: string
+| 'mcp'
 }
 
 export interface SourceAdded {

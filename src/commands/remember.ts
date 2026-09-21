@@ -14,6 +14,9 @@ export interface RememberOptions extends ResolveOptions {
   by?: string
   source?: string
   via?: 'cli' | 'mcp'
+  /** Hosted MCP only: the platform-attested caller; see WriteGateOptions. */
+  actor?: string
+| 'mcp'
 }
 
 /**

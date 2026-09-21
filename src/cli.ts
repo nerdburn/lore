@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Command } from 'commander'
+import { agentsAllow, agentsList, agentsRevoke } from './commands/agents.js'
 import { archive } from './commands/archive.js'
 import { auth } from './commands/auth.js'
 import { check } from './commands/check.js'
@@ -118,11 +119,46 @@ program
 
 program
   .command('www')
-  .description('serve the onboarding playbook + live client status for a self-hosted lore host')
+  .description('serve the onboarding playbook + live client status for a self-hosted lore host, and the hosted MCP endpoint (/mcp/<context>)')
   .requiredOption('--repos <dir>', 'directory of bare context repos')
   .option('--port <n>', 'port (default 8000)', '8000')
   .option('--host <addr>', 'bind address (default 0.0.0.0)')
-  .action((opts) => www({ repos: opts.repos, port: Number(opts.port), host: opts.host }))
+  .option('--agents <file>', 'who may open which context over MCP (default ~/.lore/agents.json; see `lore agents`)')
+  .option('--no-mcp', 'serve the page only, no MCP endpoint')
+  .action((opts) => {
+    www({ repos: opts.repos, port: Number(opts.port), host: opts.host, agents: opts.agents, mcp: opts.mcp })
+  })
+
+const agents = program
+  .command('agents')
+  .description('hosted MCP access: which agent VMs may open which context repos (edits ~/.lore/agents.json on the host)')
+agents
+  .command('allow')
+  .description('let an agent VM open a context over the hosted MCP endpoint ("*" for every context)')
+  .argument('<vm>', 'the calling VM name, as X-Exedev-Source-Vm reports it (e.g. accord-agent)')
+  .argument('<context...>', 'context repo names, e.g. lore-acme')
+  .option('--as <actor>', 'attribute its writes to this name instead of the VM name')
+  .option('--file <path>', 'agents file (default ~/.lore/agents.json)')
+  .action((vm, contexts, opts) => {
+    const g = agentsAllow(vm, contexts, { as: opts.as, file: opts.file })
+    console.log(`${vm}: ${g.contexts === '*' ? 'every context' : g.contexts.join(', ')}${g.actor ? ` (as ${g.actor})` : ''}`)
+  })
+agents
+  .command('revoke')
+  .description('remove contexts from an agent VM (no context: remove the agent)')
+  .argument('<vm>')
+  .argument('[context...]')
+  .option('--file <path>', 'agents file (default ~/.lore/agents.json)')
+  .action((vm, contexts, opts) => {
+    const g = agentsRevoke(vm, contexts ?? [], { file: opts.file })
+    console.log(g ? `${vm}: ${g.contexts === '*' ? 'every context' : g.contexts.join(', ')}` : `${vm}: removed`)
+  })
+agents
+  .command('list')
+  .description('show every agent VM and the contexts it may open')
+  .option('--json')
+  .option('--file <path>', 'agents file (default ~/.lore/agents.json)')
+  .action((opts) => agentsList({ json: opts.json, file: opts.file }))
 
 program
   .command('manifest')

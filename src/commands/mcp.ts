@@ -15,6 +15,7 @@ import { workPush } from './work-push.js'
 import { sourceAdd, sourceList } from './source.js'
 import { KNOWN_SOURCES } from '../config.js'
 import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
+import type { WriteGateOptions } from '../write.js'
 
 const PULL_INTERVAL_MS = 60_000
 
@@ -64,13 +65,26 @@ export async function mcp(cwd: string, opts: McpCommandOptions): Promise<void> {
   await server.connect(new StdioServerTransport())
 }
 
+/** Options the write tools re-resolve with: the context, plus (hosted) the attested actor. */
+export type ServerWriteOptions = ResolveOptions & Pick<WriteGateOptions, 'actor'>
+
+export interface ServerHooks {
+  /**
+   * Runs every write tool through this, so a server that hosts several
+   * sessions on one clone can serialise their commits. Reads are not wrapped.
+   */
+  serialize?: <T>(fn: () => Promise<T>) => Promise<T>
+}
+
 /**
  * Build the server for an already-resolved context. Split from `mcp()` so
- * tests can connect it over an in-memory transport against a fixture repo.
- * `rememberOpts` are the resolve options the write path re-resolves with,
- * so cache mode still commits + pushes.
+ * tests can connect it over an in-memory transport against a fixture repo,
+ * and so `lore www` can host one per HTTP session. `rememberOpts` are the
+ * resolve options the write path re-resolves with, so cache mode still
+ * commits + pushes; `opts.actor` (hosted only) is who the writes are
+ * attributed to.
  */
-export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; opts: ResolveOptions }): McpServer {
+export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; opts: ServerWriteOptions }, hooks: ServerHooks = {}): McpServer {
   let lastPull = Date.now()
   const freshen = () => {
     if (ctx.mode !== 'cache' || Date.now() - lastPull < PULL_INTERVAL_MS) return
@@ -90,8 +104,15 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })
+  const writes = new Set(MCP_TOOLS.filter((t) => t.writes).map((t) => t.name))
+  // registerTool with the write hook applied: the name decides, so the table
+  // above stays the one place that says which tools write.
+  const tool: McpServer['registerTool'] = (name, def, handler) => {
+    const wrapped = writes.has(name) && hooks.serialize ? ((...args: Parameters<typeof handler>) => hooks.serialize!(async () => (handler as (...a: unknown[]) => Promise<unknown>)(...args))) : handler
+    return server.registerTool(name, def, wrapped as typeof handler)
+  }
 
-  server.registerTool(
+  tool(
     'lore_grep',
     {
       description: `${label}Search ${ctx.config.project}'s project memory (synced Slack, email, meetings, attached documents, decisions, pinned facts). Pattern is a regex; falls back to literal. Returns file:line matches — read surrounding context with lore_read.`,
@@ -108,7 +129,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_read',
     {
       description: 'Read a file from project memory by the path lore_grep returned (e.g. "context/streams/slack/#acme/2026-07-01.md").',
@@ -124,7 +145,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_recall',
     {
       description:
@@ -138,7 +159,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_sync_now',
     {
       description:
@@ -156,7 +177,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_remember',
     {
       description: archived
@@ -176,7 +197,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_sow_add',
     {
       description: archived
@@ -206,7 +227,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_doc_add',
     {
       description: archived
@@ -227,7 +248,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_source_list',
     {
       description:
@@ -241,7 +262,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_source_add',
     {
       description: archived
@@ -266,7 +287,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const reasonField = z.string().min(1).describe('why — recorded in the item\'s history with you as the actor; cite what the person said or the evidence')
   const sourcesField = z.array(z.string()).optional().describe('permalinks to the evidence (Slack message, email, PR)')
 
-  server.registerTool(
+  tool(
     'lore_work_add',
     {
       description: archived
@@ -289,7 +310,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_work_promote',
     {
       description: archived
@@ -308,7 +329,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_work_move',
     {
       description: archived
@@ -327,7 +348,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_work_set',
     {
       description: archived
@@ -361,7 +382,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
   )
 
-  server.registerTool(
+  tool(
     'lore_work_push',
     {
       description: archived

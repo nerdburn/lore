@@ -155,29 +155,34 @@ investigate, don't hand off.
 **Claude Code (you, teammates):** in the linked repo the plugin's server just
 works; anywhere else, `claude mcp add lore -- lore mcp -p <client>`.
 
-**A Slack agent VM (accord-style, enso):**
+**A Slack agent VM (accord-style, enso):** the host serves MCP over HTTP;
+the agent VM needs no lore install and no clone. Its identity is the VM name,
+which the exe.dev edge stamps on requests that come through a peer integration.
 
 ```sh
-# once per agent VM
-ssh <agent-vm> 'ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519; cat ~/.ssh/id_ed25519.pub'
-ssh exe.dev ssh-key add --tag=lore "<that key>"              # access to lore-tagged VMs only
-ssh <agent-vm> 'printf "{ \"remote\": \"exedev@lore-host.exe.xyz:/srv/lore/repos\" }\n" > ~/.lore/config.json'
-# install lore there (Node ≥ 20): npm pack → scp → npm install -g --prefix <node-prefix> lore.tgz
+# once per agent VM: let it reach the host through the lore-mcp peer integration
+ssh exe.dev integrations attach lore-mcp vm:<agent-vm>
+# on the host: which context(s) that VM may open (writes are attributed to the VM name)
+ssh exedev@lore-host.exe.xyz lore agents allow <agent-vm> lore-<client>
 ```
 
 Then in the policy's `claude/mcp.json`:
 
 ```json
-"lore": { "type": "stdio", "command": "/home/exedev/node/bin/lore", "args": ["mcp", "--context", "lore-<client>"],
-          "env": { "LORE_HOME": "/home/exedev/.lore", "HOME": "/home/exedev", "PATH": "/home/exedev/node/bin:/usr/bin:/bin" } }
+"lore": { "type": "http", "url": "https://lore-mcp.int.exe.xyz/mcp/lore-<client>" }
 ```
+
+(The `lore-mcp` integration exists once per host: `ssh exe.dev integrations add
+http-proxy --name lore-mcp --target https://lore-host.exe.xyz/ --peer`. A VM
+that is attached but not in the host's agents file gets 403; see
+`docs/DEPLOY_EXE.md` §6.)
 
 Then the allow list in `claude/settings.json`. **Do not copy a list from
 memory or from an older VM** — three agents were provisioned with a stale
-four-tool list that way. Ask the installed binary:
+four-tool list that way. Ask the host's binary:
 
 ```sh
-lore mcp --list-tools      # JSON: [{ name, writes, summary }, …]; no context or network needed
+ssh exedev@lore-host.exe.xyz lore mcp --list-tools      # JSON: [{ name, writes, summary }, …]
 ```
 
 Allow every tool it prints as `mcp__lore__<name>`, and put the ones the

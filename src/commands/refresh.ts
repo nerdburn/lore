@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 import { git, readGlobalConfig, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { recallData, type Recalled } from '../recall.js'
 import { describeDegraded } from '../health.js'
@@ -22,6 +23,12 @@ export interface RefreshResult {
 export interface RefreshDeps {
   /** Run a command on the host over SSH; throws on non-zero exit. */
   ssh: (target: string, command: string, timeoutMs: number) => string
+  /**
+   * Run a command here, when this machine IS the host (the remote is a local
+   * directory and the sync unit is installed) — how the hosted MCP server
+   * triggers a sync. Defaults to a local shell; undefined disables the path.
+   */
+  local?: (command: string, timeoutMs: number) => string
   now?: () => number
 }
 
@@ -82,7 +89,7 @@ const IN_FLIGHT = new Set(['activating', 'active', 'deactivating'])
 export function refresh(
   cwd: string,
   opts: ResolveOptions & { trigger?: boolean; force?: boolean; fold?: boolean },
-  deps: RefreshDeps = { ssh: sshExec },
+  deps: RefreshDeps = { ssh: sshExec, local: localExec },
 ): RefreshResult {
   const ctx = resolveContext(cwd, { ...opts, pull: opts.pull ?? true })
   const before = freshness(ctx)
@@ -91,27 +98,31 @@ export function refresh(
   let note: string | undefined
 
   if (opts.trigger) {
-    const target = ctx.mode === 'cache' ? sshTargetFromRemote(readGlobalConfig().remote) : undefined
-    if (!target) {
+    const remote = ctx.mode === 'cache' ? readGlobalConfig().remote : undefined
+    const target = sshTargetFromRemote(remote)
+    // On the host itself the remote is a directory: run the same unit commands here.
+    const onHost = !target && remote !== undefined && isAbsolute(remote) && deps.local !== undefined && hasSyncUnit(deps.local)
+    const run = target ? (cmd: string, t: number) => deps.ssh(target, cmd, t) : onHost ? deps.local! : undefined
+    if (!run) {
       host = 'unavailable'
       note = ctx.mode === 'cache' ? 'remote is not an SSH host — the host syncs on its own timer' : 'local context repo — run `lore sync` here'
     } else {
       const fold = opts.fold === true
       const cmd = hostCommands(fold)
       const what = fold ? 'sync + fold' : 'sync'
-      const state = deps.ssh(target, cmd.state, STATUS_TIMEOUT_MS).trim()
+      const state = run(cmd.state, STATUS_TIMEOUT_MS).trim()
       const now = deps.now?.() ?? Date.now()
       const last = fold ? before.lastExtract : before.lastSync
       const lastMs = last ? new Date(last).getTime() : 0
       if (IN_FLIGHT.has(state)) {
         host = 'waited'
-        ;({ outcome, note } = unitOutcome(deps.ssh(target, cmd.wait, HOST_TIMEOUT_MS), `a ${what} was already running; waited for it`))
+        ;({ outcome, note } = unitOutcome(run(cmd.wait, HOST_TIMEOUT_MS), `a ${what} was already running; waited for it`))
       } else if (!opts.force && now - lastMs < MIN_INTERVAL_MS) {
         host = 'skipped-recent'
         note = `host ${fold ? 'folded' : 'synced'} ${Math.round((now - lastMs) / 60_000)} min ago; not re-running (force to override)`
       } else {
         host = 'ran'
-        ;({ outcome, note } = unitOutcome(deps.ssh(target, cmd.start, HOST_TIMEOUT_MS)))
+        ;({ outcome, note } = unitOutcome(run(cmd.start, HOST_TIMEOUT_MS)))
       }
       if (outcome && ctx.mode === 'cache') git(ctx.root, 'pull', '--ff-only', '--quiet')
     }
@@ -152,6 +163,24 @@ export function sshTargetFromRemote(remote: string | undefined): string | undefi
   if (!remote) return undefined
   const m = /^(?:ssh:\/\/)?([^/:@\s]+@[^/:\s]+)[:/]/.exec(remote)
   return m?.[1]
+}
+
+/** Is the sync unit installed on this machine? Cached: units do not come and go while a server runs. */
+let syncUnitHere: boolean | undefined
+function hasSyncUnit(local: NonNullable<RefreshDeps['local']>): boolean {
+  if (syncUnitHere === undefined) {
+    try {
+      local('systemctl cat lore-sync.service >/dev/null 2>&1', 10_000)
+      syncUnitHere = true
+    } catch {
+      syncUnitHere = false
+    }
+  }
+  return syncUnitHere
+}
+
+function localExec(command: string, timeoutMs: number): string {
+  return execFileSync('bash', ['-c', command], { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs }).toString()
 }
 
 function sshExec(target: string, command: string, timeoutMs: number): string {

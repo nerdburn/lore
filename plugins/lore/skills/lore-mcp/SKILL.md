@@ -26,7 +26,18 @@ claude mcp add lore -- lore mcp -p <project>          # name from ~/.lore/regist
 claude mcp add lore -- lore mcp --context lore-<project>   # explicit repo: a bare name (self-hosted) or owner/repo (GitHub)
 ```
 
-If startup fails with `project "<name>" not in registry`, fall back to
+On an agent VM that reaches the lore host through its peer integration, the
+server is hosted — no install, no clone; the VM's name is its identity:
+
+```json
+"lore": { "type": "http", "url": "https://lore-mcp.int.exe.xyz/mcp/lore-<project>" }
+```
+
+A 403 there means the host's agents file does not grant this VM that context
+(`lore agents allow <vm> lore-<project>` on the host); a 401 means the request
+did not come through the peer integration.
+
+If stdio startup fails with `project "<name>" not in registry`, fall back to
 `--context`; with `no lore.json found`, the cwd isn't linked — run it with
 `-p`/`--context`, or see the `lore-onboard` skill. If a tool description
 starts with **ARCHIVED**, the engagement has ended: answer from it as

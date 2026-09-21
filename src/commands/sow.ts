@@ -33,6 +33,9 @@ export interface SowAddOptions extends ResolveOptions {
   /** CLI only: who is attaching this. MCP callers can never set it. */
   by?: string
   via?: 'cli' | 'mcp'
+  /** Hosted MCP only: the platform-attested caller; see WriteGateOptions. */
+  actor?: string
+| 'mcp'
   /** Test seam: how a Google Doc link becomes markdown. */
   exportDoc?: (url: string, as: string) => Promise<GoogleDoc>
 }

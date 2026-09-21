@@ -337,23 +337,45 @@ decisions, source freshness, and citations.
 - Agents can answer the core product questions without manually assembling
 several grep calls.
 
-### 16. Prepare for remote MCP, without requiring it immediately
+### 16. Remote MCP — done (2026-09-21)
 
-**Work:** Keep stdio MCP for local agents that can execute Lore and access the
-client context repo. Design an authenticated remote MCP service for hosted
-agents that cannot safely clone every client's repository.
+**Shipped:** `lore www` hosts the MCP endpoint at `/mcp/<context>` on the lore
+host (src/mcp-http.ts). Agents on other exe.dev VMs reach it through a
+VM-to-VM peer integration; the platform sets `X-Exedev-Source-Vm` on delivery,
+so the caller is attested, not claimed. `~/.lore/agents.json` on the host
+(`lore agents allow <vm> <context>`) is the authorization; writes are
+attributed to the VM (or its `actor`). Stdio `lore mcp` remains for laptops.
 
-Remote MCP must enforce client-scoped authorization server-side. Git access on
-an agent host is not a sufficient long-term permission boundary.
+**Still open:** the identity names a VM, not the Slack user who asked; a
+second attestation (the agent passing the requester) is future work.
+
+## Priority 6: search, operations, and scale
+
+### 17a. Derived SQLite index for the work tracker (planned, not started)
+
+**When:** when a client's work table gets long enough that the JSON file is
+awkward to filter, rank, or render (a board view, "everything blocked across
+clients", per-assignee lists), or when queries need joins across clients.
+
+**Work:** a SQLite database on the host, rebuilt from the context repos on
+every fold (and on demand), holding work items, their history, pins, SOWs and
+source freshness — an *index*, never the record. Git stays the store of
+record and the audit trail; the index is disposable and regenerable, so no
+migrations of meaning, only of shape. Expose it through the hosted MCP
+(`lore_work_query` with filters/sort) and the board view; the CLI can use it
+when present and fall back to the files when not.
+
+**Not:** a move of storage to a database. The evaluation on 2026-09-21
+concluded the repo-per-client layout carries readable history, portability
+and free audit, and the brittleness observed was in code/config distribution
+(fixed by the hosted MCP), not in storage.
 
 **Acceptance criteria:**
 
-- Local stdio MCP remains supported.
-- Remote MCP design includes authentication, authorization, audit logging, and
-  client/project scope enforcement.
-- A hosted agent cannot enumerate or query an unauthorized client.
-
-## Priority 6: search, operations, and scale
+- Rebuild from the repos is idempotent and takes seconds per client.
+- Deleting the database loses nothing.
+- Queries filter by client, status, assignee, priority, label, external id,
+  and last-moved date; results cite the item key and history.
 
 ### 17. Add metadata and full-text search
 
