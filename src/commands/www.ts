@@ -62,7 +62,13 @@ export interface ClientStatus {
 export function www(opts: WwwOptions): { close(): Promise<void>; ready: Promise<number> } {
   const mcp: McpHttpHandler | undefined = opts.mcp === false ? undefined : createMcpHttpHandler({ agentsFile: opts.agents })
   const boardOn = opts.board ?? /^(1|true|yes|on)$/i.test(process.env.LORE_BOARD ?? '')
-  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ repos: opts.repos, ...(typeof boardOn === 'object' ? boardOn : {}) }) : undefined
+  const hostStatus = () => ({
+    generated: new Date().toISOString(),
+    clients: clientStatuses(opts.repos),
+    sessions: mcp?.sessions() ?? [],
+    playbook: renderMarkdown(playbookMarkdown()),
+  })
+  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ repos: opts.repos, hostStatus, ...(typeof boardOn === 'object' ? boardOn : {}) }) : undefined
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
@@ -73,15 +79,16 @@ export function www(opts: WwwOptions): { close(): Promise<void>; ready: Promise<
         res.end('ok\n')
         return
       }
-      // A public host: everything below is for admins only.
+      // A public host: the status page moves into the board (HeroUI, at
+      // /board/host, admins only); the JSON endpoints need an admin session.
+      if (board && (url.pathname === '/' || url.pathname === '/index.html')) {
+        res.writeHead(302, { location: board.isAdmin(req) ? `${BOARD_PATH}/host` : `${BOARD_PATH}/` })
+        res.end()
+        return
+      }
       if (board && !board.isAdmin(req)) {
-        if (url.pathname === '/' || url.pathname === '/index.html') {
-          res.writeHead(302, { location: `${BOARD_PATH}/` })
-          res.end()
-        } else {
-          res.writeHead(401, { 'content-type': 'text/plain' })
-          res.end('sign in on /board as a host admin\n')
-        }
+        res.writeHead(401, { 'content-type': 'text/plain' })
+        res.end('sign in on /board as a host admin\n')
         return
       }
       if (url.pathname === '/status.json') {

@@ -35,6 +35,8 @@ export interface BoardOptions {
   log?: (line: string) => void
   /** Test seam. */
   now?: () => number
+  /** The host's own status (client health, MCP sessions, playbook) for admins at /api/board/host — supplied by `lore www`. */
+  hostStatus?: () => unknown
 }
 
 export interface BoardHandler {
@@ -136,6 +138,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       const email = s.email
 
       if (route === '/me' && method === 'GET') return send(res, 200, { email, admin: admins.includes(email) }), true
+
+      if (route === '/host' && method === 'GET') {
+        if (!admins.includes(email)) return send(res, 403, { error: 'host status is for host admins' }), true
+        return send(res, 200, opts.hostStatus?.() ?? {}), true
+      }
 
       if (route === '/projects' && method === 'GET') {
         const projects = bareProjects(opts.repos)

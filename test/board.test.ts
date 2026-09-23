@@ -307,6 +307,13 @@ test('board: with the board on, the host pages need an admin', async () => {
   assert.equal((await fetch(`${base}/healthz`)).status, 200)
   const boss = await signIn('boss@inputlogic.ca')
   assert.equal((await fetch(`${base}/status.json`, { headers: { cookie: boss } })).status, 200)
+  const adminHome = await fetch(`${base}/`, { redirect: 'manual', headers: { cookie: boss } })
+  assert.equal(adminHome.headers.get('location'), '/board/host', 'admins land on the HeroUI host page')
+  const host = await api('/host', { cookie: boss })
+  assert.equal(host.status, 200)
+  assert.deepEqual(host.body.clients.map((c: any) => c.name), ['lore-acme', 'lore-beta'])
+  assert.match(host.body.playbook, /<h1/)
+  assert.equal((await api('/host', { cookie: await signIn('jane@acme.com') })).status, 403, 'members are not host admins')
 })
 
 test('board: `lore board` edits lore.json in the context repo', async () => {

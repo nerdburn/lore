@@ -78,3 +78,52 @@ body {
   color: var(--link);
   text-decoration: underline;
 }
+
+/* The onboarding playbook on the host page. */
+.host-playbook h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 1.2em 0 0.5em;
+}
+.host-playbook h1:first-child {
+  margin-top: 0;
+}
+.host-playbook h2 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 1.6em 0 0.5em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--separator);
+}
+.host-playbook h3 {
+  font-weight: 600;
+  margin: 1.2em 0 0.4em;
+}
+.host-playbook p,
+.host-playbook li {
+  line-height: 1.6;
+}
+.host-playbook pre {
+  background: var(--default);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+.host-playbook pre code {
+  background: none;
+  padding: 0;
+}
+.host-playbook table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  font-size: 0.9rem;
+}
+.host-playbook th,
+.host-playbook td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid var(--separator);
+  vertical-align: top;
+}

@@ -7,9 +7,8 @@ type Col = 'rank' | 'key' | 'title' | 'status' | 'priority' | 'assignee' | 'upda
 
 const keyNum = (k: string) => Number(/-(\d+)$/.exec(k)?.[1] ?? 0)
 
-export function ListView({ items, onOpen }: { items: Item[]; onOpen: (key: string) => void }) {
+export function ListView({ items, onOpen, showClosed, onShowClosed }: { items: Item[]; onOpen: (key: string) => void; showClosed: boolean; onShowClosed: (v: boolean) => void }) {
   const [sort, setSort] = useState<SortDescriptor>({ column: 'rank', direction: 'ascending' })
-  const [showClosed, setShowClosed] = useState(false)
 
   const rows = useMemo(() => {
     const rank = new Map(items.map((i, n) => [i.key, n]))
@@ -46,11 +45,13 @@ export function ListView({ items, onOpen }: { items: Item[]; onOpen: (key: strin
   return (
     <div className="flex flex-col gap-3">
       <div className="flex justify-end">
-        <Switch isSelected={showClosed} onChange={setShowClosed} size="sm">
-          <Switch.Control>
-            <Switch.Thumb />
-          </Switch.Control>
-          <Switch.Content>Show done &amp; archived</Switch.Content>
+        <Switch isSelected={showClosed} onChange={onShowClosed} size="sm">
+          <Switch.Content className="flex items-center gap-2 text-sm">
+            <Switch.Control>
+              <Switch.Thumb />
+            </Switch.Control>
+            Show done &amp; archived
+          </Switch.Content>
         </Switch>
       </div>
       <Table>

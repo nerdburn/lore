@@ -21,7 +21,14 @@ export function Header({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
         </a>
         <div className="flex-1" />
         {me.admin && (
-          <a href="/" className="hidden text-sm text-muted hover:text-foreground sm:inline">
+          <a
+            href={href({ name: 'host' })}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate({ name: 'host' })
+            }}
+            className="hidden text-sm text-muted hover:text-foreground sm:inline"
+          >
             Host status
           </a>
         )}

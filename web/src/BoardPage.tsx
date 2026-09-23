@@ -6,24 +6,20 @@ import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { NewItemModal } from './NewItemModal'
-import { navigate, type Route } from './router'
+import { navigate, type Filters, type Route } from './router'
 
 type BoardRoute = Extract<Route, { name: 'board' }>
 
 const ALL = '__all'
-const NONE = '__none'
+const NONE = 'none'
 const POLL_MS = 30_000
-
-export interface Filters {
-  q: string
-  label: string
-  assignee: string
-}
 
 export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnauthorized: () => void }) {
   const [board, setBoard] = useState<Board>()
   const [error, setError] = useState<string>()
-  const [filters, setFilters] = useState<Filters>({ q: '', label: ALL, assignee: ALL })
+  // Filters live in the URL, so a filtered board can be bookmarked and shared.
+  const filters = route.filters
+  const setFilters = (fn: (f: Filters) => Filters) => navigate({ ...route, filters: fn(route.filters) }, true)
   const [creating, setCreating] = useState(false)
   // While a write is in flight, a poll must not snap the card back.
   const pending = useRef(0)
@@ -146,14 +142,14 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
-        <FilterSelect label="Label" value={filters.label} options={board.labels} onChange={(label) => setFilters((f) => ({ ...f, label }))} />
-        <FilterSelect label="Assignee" value={filters.assignee} options={board.assignees} onChange={(assignee) => setFilters((f) => ({ ...f, assignee }))} withNone />
+        <FilterSelect label="Label" value={filters.label ?? ALL} options={board.labels} onChange={(label) => setFilters((f) => ({ ...f, label: label === ALL ? undefined : label }))} />
+        <FilterSelect label="Assignee" value={filters.assignee ?? ALL} options={board.assignees} onChange={(assignee) => setFilters((f) => ({ ...f, assignee: assignee === ALL ? undefined : assignee }))} withNone />
       </div>
 
       {route.view === 'kanban' ? (
         <KanbanView items={visible} canEdit={canEdit} onOpen={open} onMove={moveItem} />
       ) : (
-        <ListView items={visible} onOpen={open} />
+        <ListView items={visible} onOpen={open} showClosed={filters.closed} onShowClosed={(closed) => setFilters((f) => ({ ...f, closed }))} />
       )}
 
       <ItemDrawer
@@ -218,8 +214,8 @@ function applyFilters(items: Item[], f: Filters): Item[] {
   return items.filter(
     (i) =>
       (!q || i.key.toLowerCase().includes(q) || i.title.toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q)) &&
-      (f.label === ALL || i.labels.some((l) => l.toLowerCase() === f.label.toLowerCase())) &&
-      (f.assignee === ALL || (f.assignee === NONE ? !i.assignee : i.assignee === f.assignee)),
+      (!f.label || i.labels.some((l) => l.toLowerCase() === f.label!.toLowerCase())) &&
+      (!f.assignee || (f.assignee === NONE ? !i.assignee : i.assignee === f.assignee)),
   )
 }
 

@@ -1,6 +1,6 @@
 import { CollisionPriority } from '@dnd-kit/abstract'
-import { DragDropProvider, useDroppable } from '@dnd-kit/react'
-import { isSortable, useSortable } from '@dnd-kit/react/sortable'
+import { pointerIntersection } from '@dnd-kit/collision'
+import { DragDropProvider, DragOverlay, useDraggable, useDroppable } from '@dnd-kit/react'
 import { Avatar } from '@heroui/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BOARD_COLUMNS, STATUS_LABEL, type Item, type Status } from './api'
@@ -22,11 +22,18 @@ function columnsOf(items: Item[]): Columns {
   return cols
 }
 
+/**
+ * Drag and drop without moving any DOM node mid-drag: the card that follows
+ * the pointer is an overlay, the hovered card shows a drop line, and state
+ * changes once, on drop. (Letting the library re-parent cards across
+ * columns while the pointer moved made the dragged shape drift a column to
+ * the right, so a drop on Blocked landed in Done.)
+ */
 export function KanbanView({ items, canEdit, onOpen, onMove }: Props) {
   const byKey = useMemo(() => new Map(items.map((i) => [i.key, i])), [items])
   const [columns, setColumns] = useState<Columns>(() => columnsOf(items))
-  const snapshot = useRef(columns)
   const dragging = useRef(false)
+  const [active, setActive] = useState<string>()
 
   // Follow the server between drags; never mid-drag.
   useEffect(() => {
@@ -35,88 +42,92 @@ export function KanbanView({ items, canEdit, onOpen, onMove }: Props) {
 
   return (
     <DragDropProvider
-      onDragStart={() => {
+      onDragStart={(event) => {
         dragging.current = true
-        snapshot.current = columns
+        setActive(String(event.operation.source?.id ?? ''))
       }}
       onDragEnd={(event) => {
         dragging.current = false
-        // Mid-drag, dnd-kit reorders the DOM itself (optimistic sorting); React
-        // state changes only here, once, so the two never fight over a card.
+        setActive(undefined)
         if (event.canceled) return
         const { source, target } = event.operation
         const key = String(source?.id ?? '')
-        const before = snapshot.current
-        const from = BOARD_COLUMNS.find((s) => before[s].includes(key))
-        if (!from) return
-        let to: Status = from
-        let index = before[from].indexOf(key)
-        if (isSortable(source)) {
-          to = String(source.group) as Status
-          index = source.index
-        }
-        // Dropped on a column's empty space rather than on a card: its end.
-        if (target && !isSortable(target) && (BOARD_COLUMNS as string[]).includes(String(target.id))) {
-          to = String(target.id) as Status
-          if (to !== from || !isSortable(source)) index = before[to].filter((k) => k !== key).length
-        }
-        if (!BOARD_COLUMNS.includes(to)) return
-        if (to === from && before[from].indexOf(key) === index) return
-        const order = before[to].filter((k) => k !== key)
-        order.splice(Math.min(index, order.length), 0, key)
-        const next = { ...before, [from]: before[from].filter((k) => k !== key), [to]: order }
-        setColumns(next)
-        const idx = order.indexOf(key)
-        const neighbour = order[idx + 1] ? { above: order[idx + 1] } : order[idx - 1] ? { below: order[idx - 1] } : {}
+        const from = BOARD_COLUMNS.find((s) => columns[s].includes(key))
+        if (!from || !target) return
+        const data = target.data as { column?: Status; card?: Status; key?: string } | undefined
+        const to = data?.column ?? data?.card
+        if (!to || !BOARD_COLUMNS.includes(to) || data?.key === key) return
+        const order = columns[to].filter((k) => k !== key)
+        // On a card: in its place (that card moves down). On the column's empty space: at the end.
+        let index = data?.key ? order.indexOf(data.key) : order.length
+        if (index < 0) index = order.length
+        order.splice(index, 0, key)
+        if (from === to && columns[from].join() === order.join()) return
+        setColumns({ ...columns, [from]: columns[from].filter((k) => k !== key), [to]: order })
+        const neighbour = order[index + 1] ? { above: order[index + 1] } : order[index - 1] ? { below: order[index - 1] } : {}
         onMove(key, to, order, neighbour)
       }}
     >
       <div className="grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
         {BOARD_COLUMNS.map((status) => (
-          <Column key={status} status={status} keys={columns[status]} byKey={byKey} canEdit={canEdit} onOpen={onOpen} />
+          <Column key={status} status={status} keys={columns[status]} byKey={byKey} canEdit={canEdit} active={active} onOpen={onOpen} />
         ))}
       </div>
+      <DragOverlay>{active && byKey.get(active) ? <CardBody item={byKey.get(active)!} className="rotate-1 shadow-xl" /> : null}</DragOverlay>
     </DragDropProvider>
   )
 }
 
-function Column({ status, keys, byKey, canEdit, onOpen }: { status: Status; keys: string[]; byKey: Map<string, Item>; canEdit: boolean; onOpen: (key: string) => void }) {
-  const { ref, isDropTarget } = useDroppable({ id: status, type: 'column', accept: 'item', collisionPriority: CollisionPriority.Low })
+function Column({ status, keys, byKey, canEdit, active, onOpen }: { status: Status; keys: string[]; byKey: Map<string, Item>; canEdit: boolean; active?: string; onOpen: (key: string) => void }) {
+  const { ref, isDropTarget } = useDroppable({ id: `column:${status}`, data: { column: status }, collisionPriority: CollisionPriority.Low, collisionDetector: pointerIntersection })
   return (
     <section
       ref={ref}
       aria-label={STATUS_LABEL[status]}
-      className={`flex min-h-[60vh] flex-col rounded-2xl border border-separator bg-default/40 p-2 transition-colors ${isDropTarget ? 'bg-default/80' : ''}`}
+      className={`flex min-h-[60vh] flex-col rounded-2xl border p-2 transition-colors ${isDropTarget ? 'border-accent/60 bg-default/80' : 'border-separator bg-default/40'}`}
     >
       <header className="flex items-center justify-between px-2 pt-1 pb-2">
         <h2 className="text-sm font-semibold">{STATUS_LABEL[status]}</h2>
         <span className="text-xs text-muted">{keys.length}</span>
       </header>
       <div className="flex flex-col gap-2">
-        {keys.map((key, index) => {
+        {keys.map((key) => {
           const item = byKey.get(key)
-          return item ? <Card key={key} item={item} index={index} status={status} canEdit={canEdit} onOpen={onOpen} /> : null
+          return item ? <Card key={key} item={item} status={status} canEdit={canEdit} isActive={active === key} onOpen={onOpen} /> : null
         })}
       </div>
     </section>
   )
 }
 
-function Card({ item, index, status, canEdit, onOpen }: { item: Item; index: number; status: Status; canEdit: boolean; onOpen: (key: string) => void }) {
-  const { ref, isDragging } = useSortable({ id: item.key, index, group: status, type: 'item', accept: 'item', disabled: !canEdit })
+function Card({ item, status, canEdit, isActive, onOpen }: { item: Item; status: Status; canEdit: boolean; isActive: boolean; onOpen: (key: string) => void }) {
+  const drag = useDraggable({ id: item.key, disabled: !canEdit })
+  // The drop target is the wrapper, not the dragged element, and only what
+  // is under the pointer counts: by overlap, the dragged shape (still at
+  // the card's start) would always "hit" its own card.
+  const drop = useDroppable({ id: `card:${item.key}`, data: { card: status, key: item.key }, disabled: !canEdit, collisionDetector: pointerIntersection })
   return (
-    <div
-      ref={ref}
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(item.key)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen(item.key)
-      }}
-      className={`group rounded-xl border border-separator bg-surface p-3 text-left shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-focus ${
-        canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
-      } ${isDragging ? 'opacity-60 shadow-lg' : 'hover:border-border'}`}
-    >
+    <div ref={drop.ref} className="relative">
+      {drop.isDropTarget && !isActive && <div className="pointer-events-none absolute -top-[5px] right-1 left-1 h-[3px] rounded-full bg-accent" />}
+      <div
+        ref={drag.ref}
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(item.key)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onOpen(item.key)
+        }}
+        className={`rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus ${canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
+      >
+        <CardBody item={item} className={isActive ? 'opacity-40' : 'hover:border-border'} />
+      </div>
+    </div>
+  )
+}
+
+function CardBody({ item, className = '' }: { item: Item; className?: string }) {
+  return (
+    <div className={`rounded-xl border border-separator bg-surface p-3 text-left shadow-sm transition ${className}`}>
       <div className="text-sm leading-snug font-medium">{item.title}</div>
       <div className="mt-2 flex items-center gap-2">
         <span className="mono text-xs text-muted">{item.key}</span>

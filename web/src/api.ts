@@ -75,6 +75,37 @@ export interface Board {
   items: Item[]
 }
 
+export interface SourceState {
+  source: string
+  /** "ok" when healthy; "stale" / "never" / … otherwise. */
+  state: string
+  lastSuccess?: string
+  staleHours?: number
+  error?: string
+}
+
+export interface ClientStatus {
+  name: string
+  project?: string
+  client?: string
+  lifecycle?: string
+  sources: string[]
+  lastSync?: string
+  lastExtract?: string
+  health: Record<string, { lastSuccess?: string; lastError?: string }>
+  sourceStates: SourceState[]
+  lastCommit?: string
+  error?: string
+}
+
+export interface HostStatus {
+  generated: string
+  clients: ClientStatus[]
+  sessions: { agent: string; context: string; idleMs: number }[]
+  /** The onboarding playbook, rendered to HTML on the host. */
+  playbook: string
+}
+
 export interface Me {
   email: string
   admin: boolean
@@ -110,6 +141,7 @@ export const api = {
   verify: (email: string, code: string) => call<Me>('/verify', { body: { email, code } }),
   logout: () => call<{ ok: true }>('/logout', { body: {} }),
   projects: () => call<{ projects: ProjectSummary[] }>('/projects'),
+  host: () => call<HostStatus>('/host'),
   board: (context: string) => call<Board>(`/p/${enc(context)}`),
   item: (context: string, key: string) => call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`),
   add: (context: string, fields: Partial<Pick<Item, 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'labels'>>) =>

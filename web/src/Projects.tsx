@@ -1,7 +1,7 @@
 import { Card, Chip, Spinner } from '@heroui/react'
 import { useEffect, useState } from 'react'
 import { api, ApiError, STATUS_LABEL, type ProjectSummary } from './api'
-import { href, navigate } from './router'
+import { boardRoute, href, navigate } from './router'
 
 export function Projects({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [projects, setProjects] = useState<ProjectSummary[]>()
@@ -12,7 +12,7 @@ export function Projects({ onUnauthorized }: { onUnauthorized: () => void }) {
       (r) => {
         setProjects(r.projects)
         // One board: go straight to it.
-        if (r.projects.length === 1) navigate({ name: 'board', context: r.projects[0].context, view: 'kanban' }, true)
+        if (r.projects.length === 1) navigate(boardRoute(r.projects[0].context), true)
       },
       (err) => (err instanceof ApiError && err.status === 401 ? onUnauthorized() : setError(err.message)),
     )
@@ -41,10 +41,10 @@ export function Projects({ onUnauthorized }: { onUnauthorized: () => void }) {
             return (
               <a
                 key={p.context}
-                href={href({ name: 'board', context: p.context, view: 'kanban' })}
+                href={href(boardRoute(p.context))}
                 onClick={(e) => {
                   e.preventDefault()
-                  navigate({ name: 'board', context: p.context, view: 'kanban' })
+                  navigate(boardRoute(p.context))
                 }}
                 className="rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-focus"
               >

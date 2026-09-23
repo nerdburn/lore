@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError, type Me } from './api'
 import { BoardPage } from './BoardPage'
 import { Header } from './Header'
+import { HostPage } from './HostPage'
 import { Login } from './Login'
 import { Projects } from './Projects'
 import { useRoute } from './router'
@@ -41,6 +42,8 @@ export function App() {
           <main className="flex-1">
             {route.name === 'projects' ? (
               <Projects onUnauthorized={onUnauthorized} />
+            ) : route.name === 'host' ? (
+              <HostPage onUnauthorized={onUnauthorized} />
             ) : (
               <BoardPage key={route.context} route={route} onUnauthorized={onUnauthorized} />
             )}
