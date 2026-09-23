@@ -26,7 +26,7 @@ async function connect(root: string) {
   return { client, call, close: () => Promise.all([client.close(), server.close()]) }
 }
 
-test('mcp: exposes the fourteen tools', async () => {
+test('mcp: exposes the sixteen tools', async () => {
   const s = await connect(fullFixtureRepo())
   const tools = (await s.client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
@@ -38,8 +38,10 @@ test('mcp: exposes the fourteen tools', async () => {
     'lore_source_add',
     'lore_source_list',
     'lore_sow_add',
+    'lore_status',
     'lore_sync_now',
     'lore_work_add',
+    'lore_work_label',
     'lore_work_move',
     'lore_work_promote',
     'lore_work_push',
@@ -50,7 +52,7 @@ test('mcp: exposes the fourteen tools', async () => {
   assert.deepEqual([...MCP_TOOLS.map((t) => t.name)].sort(), tools)
   assert.deepEqual(
     MCP_TOOLS.filter((t) => !t.writes).map((t) => t.name),
-    ['lore_grep', 'lore_read', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
+    ['lore_grep', 'lore_read', 'lore_status', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
   )
   await s.close()
 })

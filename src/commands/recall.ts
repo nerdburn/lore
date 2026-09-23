@@ -7,9 +7,9 @@ import { isEmpty, recallData } from '../recall.js'
  * Streams are for `grep`; this is for "what do we know" without a search
  * term. Shares its implementation with the MCP `lore_recall` tool.
  */
-export function recall(cwd: string, category: string | undefined, opts: ResolveOptions & { json?: boolean }): void {
+export function recall(cwd: string, category: string | undefined, opts: ResolveOptions & { json?: boolean; label?: string }): void {
   const ctx = resolveContext(cwd, opts)
-  const recalled = recallData(ctx.root, ctx.config, category)
+  const recalled = recallData(ctx.root, ctx.config, category ?? (opts.label ? 'work' : undefined), { label: opts.label })
 
   if (opts.json) {
     console.log(JSON.stringify(recalled, null, 2))
@@ -34,6 +34,9 @@ export function recall(cwd: string, category: string | undefined, opts: ResolveO
     const c = table.counts
     console.log(`\n## work: ${name} (${name.startsWith('lore/') ? 'lore tracker — the tracker of record' : 'external tracker snapshot'}) — ${c.open} open, ${c.merged} merged, ${c.closed} closed; full table: ${table.file}`)
     console.log(JSON.stringify(table.open, null, 2))
+    if (table.closed?.length) console.log(`closed:\n${JSON.stringify(table.closed, null, 2)}`)
+    if (table.labels && Object.keys(table.labels).length)
+      console.log(`labels: ${Object.entries(table.labels).map(([l, n]) => `${l} (${n.open} open, ${n.closed} closed)`).join('; ')}`)
   }
   for (const s of recalled.sow) {
     console.log(`\n## sow: ${s.name} [${s.status}] — ${s.weeks} human-weeks, effective ${s.start}${s.end ? ` to ${s.end}` : ''}${s.scope?.length ? `; scope: ${s.scope.join('; ')}` : ''}; document: ${s.file}`)

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { readSows, summarizeSow, type SowSummary } from './sow.js'
-import { summarizeForRecall, type LoreWorkItem } from './work.js'
+import { hasLabel, labelCounts, summarizeForRecall, type LoreWorkItem } from './work.js'
 import { degraded, sourceStatuses, type SourceStatus } from './health.js'
 import { loadState } from './state.js'
 import type { Client, Lifecycle, LoreConfig } from './config.js'
@@ -53,6 +53,10 @@ export interface WorkSummary {
   file: string
   counts: { open: number; closed: number; merged: number }
   open: unknown[]
+  /** Lore tracker only: every project label with its open/closed counts. */
+  labels?: Record<string, { open: number; closed: number }>
+  /** With a label filter: the closed items carrying it too, so "how is <theme> going" sees what shipped. */
+  closed?: unknown[]
 }
 
 export const REPORTS_CATEGORY = 'reports'
@@ -72,7 +76,7 @@ export function recallData(
   root: string,
   config: Pick<LoreConfig, 'project' | 'lifecycle' | 'archived_at' | 'client' | 'sources'>,
   category?: string,
-  opts: { reportLimit?: number } = {},
+  opts: { reportLimit?: number; label?: string } = {},
 ): Recalled {
   const factsPath = join(root, 'context/facts.yaml')
   const allPins = existsSync(factsPath) ? ((parse(readFileSync(factsPath, 'utf8')) as Pin[] | null) ?? []) : []
@@ -101,8 +105,11 @@ export function recallData(
         const rel = `context/work/${source}/${entry}`
         const items = (parse(readFileSync(join(dir, entry), 'utf8')) as Record<string, unknown>[] | null) ?? []
         const raw = Array.isArray(items) ? items : []
-        const list = source === 'lore' ? raw.map((i) => summarizeForRecall(i as unknown as LoreWorkItem) as unknown as Record<string, unknown>) : raw
+        const all = source === 'lore' ? raw.map((i) => summarizeForRecall(i as unknown as LoreWorkItem) as unknown as Record<string, unknown>) : raw
+        const list = opts.label ? all.filter((i) => Array.isArray(i.labels) && hasLabel(i.labels.map(String), opts.label!)) : all
+        if (opts.label && list.length === 0) continue
         const open = list.filter((i) => i.state === 'open')
+        const closed = list.filter((i) => i.state !== 'open')
         work[`${source}/${entry.replace(/\.ya?ml$/, '')}`] = {
           file: rel,
           counts: {
@@ -111,6 +118,8 @@ export function recallData(
             merged: list.filter((i) => i.merged === true).length,
           },
           open,
+          ...(opts.label ? { closed } : {}),
+          ...(source === 'lore' && !opts.label ? { labels: labelCounts(all as unknown as LoreWorkItem[]) } : {}),
         }
       }
     }

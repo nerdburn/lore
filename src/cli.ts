@@ -21,7 +21,10 @@ import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
 import { docAdd, docList } from './commands/doc.js'
-import { workAdd, workList, workMove, workPromote, workRank, workSet, workShow } from './commands/work.js'
+import { workAdd, workLabel, workList, workMove, workPromote, workRank, workSet, workShow } from './commands/work.js'
+import { gateReplay } from './commands/gate.js'
+import { resolveContext } from './context.js'
+import { statusView } from './status.js'
 import { printPush, workPush } from './commands/work-push.js'
 import { sourceAdd, sourceList } from './commands/source.js'
 import { exportGoogleDoc } from './gdoc.js'
@@ -331,7 +334,21 @@ contextual(
   if (o.json) console.log(JSON.stringify(r, null, 2))
   else printPush(r)
 })
-contextual(work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--json', 'machine-readable output')).action((o) => void workList(root, o))
+contextual(
+  work
+    .command('label')
+    .description('add or remove a project label (a theme like "onboarding" or "stripe integration") on several tickets at once')
+    .argument('<keys...>', 'ticket keys, e.g. CAR-3 CAR-7')
+    .option('--add <labels>', 'comma-separated labels to add')
+    .option('--remove <labels>', 'comma-separated labels to remove')
+    .requiredOption('--reason <why>', 'why — recorded in history')
+    .option('--by <who>', 'who is labeling'),
+).action(async (keys: string[], o) => {
+  await workLabel(root, keys, { add: splitList(o.add), remove: splitList(o.remove) }, { reason: o.reason }, o)
+})
+contextual(
+  work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--label <label>', 'only items carrying this label').option('--json', 'machine-readable output'),
+).action((o) => void workList(root, o))
 contextual(work.command('show').description('one item with its full history').argument('<key>').option('--json', 'machine-readable output')).action((key: string, o) => void workShow(root, key, o))
 
 const source = program.command('source').description('what memory is synced from — add a repo, channel, folder, page, design file, board, or mailbox to an existing client (identifiers only; credentials stay in proxies / env)')
@@ -370,8 +387,26 @@ contextual(
     .command('recall')
     .description('pinned facts + derived artifacts — "what do we know" without a search term')
     .argument('[category]', 'filter, e.g. deployment, decisions')
+    .option('--label <label>', 'only work items carrying this project label, open and closed')
     .option('--json', 'machine-readable output'),
 ).action((category, opts) => recall(root, category, opts))
+
+contextual(program.command('status').description("what's outstanding: the fold's summary, anything moved since, and the live open work — what lore_status returns")).action((o) => {
+  const ctx = resolveContext(root, o)
+  console.log(statusView(ctx.root, ctx.config))
+})
+
+const gate = program.command('gate').description('the fold gate: Jev (TypeSafe) checks new material before an incremental fold and skips folds with nothing to find (needs TYPESAFE_API_KEY)')
+contextual(
+  gate
+    .command('replay')
+    .description("measure the gate on this client's own history: which past folds it would have skipped, and which of those changed something")
+    .option('--since <when>', 'only commits since, e.g. 2026-09-01 or "2 weeks ago"')
+    .option('--limit <n>', 'replay at most this many folds', (v) => Number(v))
+    .option('--json', 'machine-readable output'),
+).action(async (o) => {
+  await gateReplay(resolveContext(root, o).root, o)
+})
 
 contextual(
   program

@@ -5,12 +5,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { recallData } from '../recall.js'
+import { statusView } from '../status.js'
 import { grepContext } from '../search.js'
 import { refresh } from './refresh.js'
 import { remember } from './remember.js'
 import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
-import { workAdd, workMove, workPromote, workRank, workSet } from './work.js'
+import { workAdd, workLabel, workMove, workPromote, workRank, workSet } from './work.js'
 import { workPush } from './work-push.js'
 import { sourceAdd, sourceList } from './source.js'
 import { KNOWN_SOURCES } from '../config.js'
@@ -29,6 +30,7 @@ const PULL_INTERVAL_MS = 60_000
 export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: string }[] = [
   { name: 'lore_grep', writes: false, summary: 'regex search across synced memory' },
   { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
+  { name: 'lore_status', writes: false, summary: "what's outstanding, ready to relay: summary, live open work, freshness" },
   { name: 'lore_recall', writes: false, summary: 'pins, tracker, derived artifacts, reports, SOWs at once' },
   { name: 'lore_sync_now', writes: false, summary: 'pull, and ask the host to sync (and fold) now' },
   { name: 'lore_source_list', writes: false, summary: 'what is synced: each source, its scope, and its health' },
@@ -40,6 +42,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
+  { name: 'lore_work_label', writes: true, summary: 'add or remove a project label on several tickets at once' },
   { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones (explicit only)' },
 ]
 
@@ -146,16 +149,33 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   )
 
   tool(
+    'lore_status',
+    {
+      description:
+        label +
+        `The status of ${ctx.config.project}, ready to relay: a short summary written after the last fold, anything the tracker recorded since, and the live outstanding list (open tickets by status, requests not yet ticketed, roadmap not done), with source freshness. Call this FIRST for "what's outstanding", "where are we", "status update", "what's left" — and reply with it as returned (trim or filter only if asked, e.g. "just the blocked ones"); do not also call lore_recall to rebuild it. Use lore_recall or lore_grep only for detail the page doesn't carry.`,
+      inputSchema: {},
+    },
+    async () => {
+      freshen()
+      return text(statusView(ctx.root, ctx.config))
+    },
+  )
+
+  tool(
     'lore_recall',
     {
       description:
         label +
-        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), the lore work tracker (work["lore/<PREFIX>"] — the tracker of record for delivery state, each item with who last moved it and why; drift: true where lore and Jira/GitHub disagree), external tracker snapshots (work["github/…"], work["jira/…"] — what the tracker itself says; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow.',
-      inputSchema: { category: z.string().optional() },
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), the lore work tracker (work["lore/<PREFIX>"] — the tracker of record for delivery state, each item with who last moved it and why; drift: true where lore and Jira/GitHub disagree), external tracker snapshots (work["github/…"], work["jira/…"] — what the tracker itself says; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow. The lore tracker lists its project labels (themes like "onboarding", "stripe integration") with open/closed counts; pass label to get just that theme\'s tickets, open and closed.',
+      inputSchema: {
+        category: z.string().optional(),
+        label: z.string().optional().describe('only work items carrying this label (case-insensitive); implies category "work"'),
+      },
     },
-    async ({ category }) => {
+    async ({ category, label }) => {
       freshen()
-      return text(recallData(ctx.root, ctx.config, category))
+      return text(recallData(ctx.root, ctx.config, category ?? (label ? 'work' : undefined), { label }))
     },
   )
 
@@ -379,6 +399,27 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       }
       if (notes.length === 0) throw new Error('lore_work_set: give at least one field to change')
       return text(notes.join('; '))
+    },
+  )
+
+  tool(
+    'lore_work_label',
+    {
+      description: archived
+        ? unavailable
+        : 'Add (or remove) a project-specific label — a theme, epic or workstream such as "onboarding" or "stripe integration" — on several work items in one change. Use when a person asks to label, tag, or group tickets. When they say "these", resolve the keys from the conversation or lore_recall first and name every labeled ticket in your reply; if it is unclear which tickets they mean, ask before labeling. A label the project already uses keeps its spelling. Find a label\'s tickets later with lore_recall { label }.',
+      inputSchema: {
+        keys: z.array(z.string().min(1)).min(1).describe('ticket keys, e.g. ["CAR-3", "CAR-7"]'),
+        add: z.array(z.string().min(1)).optional().describe('labels to add, e.g. ["stripe integration"]'),
+        remove: z.array(z.string().min(1)).optional().describe('labels to remove'),
+        reason: reasonField,
+      },
+    },
+    async ({ keys, add, remove, reason }) => {
+      const r = await workLabel(rememberOpts.cwd, keys, { add, remove }, { reason }, workVia)
+      const lines = r.labeled.map((l) => `${l.key}: ${l.title} — labels: ${l.labels.join(', ') || '(none)'}`)
+      if (r.unchanged.length) lines.push(`unchanged (already so): ${r.unchanged.join(', ')}`)
+      return text(lines.join('\n') || 'nothing changed')
     },
   )
 

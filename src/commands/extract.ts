@@ -8,6 +8,8 @@ import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
 import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
+import { alwaysFolds, gateConfig, newPart, runGate } from '../gate.js'
+import { STATUS_SUMMARY_SYSTEM, statusSummaryInput, writeStatus } from '../status.js'
 import type { Pin } from '../types.js'
 
 /**
@@ -216,7 +218,10 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   // change, or to open tickets for work already committed in memory).
   const review = opts.review === true && newFiles.length === 0
 
-  if (wantArtifacts.length > 0 && (newFiles.length > 0 || review)) {
+  let gated = false
+  if (wantArtifacts.length > 0 && newFiles.length > 0 && !review) gated = await gateSkips(root, config, state, newFiles, today)
+
+  if (wantArtifacts.length > 0 && (newFiles.length > 0 || review) && !gated) {
     const artifacts: Record<string, unknown[]> = {}
     for (const name of wantArtifacts) artifacts[name] = readYamlList(root, `context/derived/${name}.yaml`)
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
@@ -227,6 +232,8 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     console.log(review ? `review fold over current artifacts [${llm}:${model}]…` : `extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${model}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
+    /** Everything this fold changed, for the status summary. */
+    const foldChanges: string[] = []
     mkdirSync(join(root, 'context/derived'), { recursive: true })
     const sowNote = commitmentsNote(root)
     const clientNote = config.client
@@ -252,6 +259,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         const merged = acceptFold(name, artifacts[name], (result as unknown as Record<string, unknown[]>)[name])
         if (merged.rejected) console.warn(`  ⚠ ${name}: model ${merged.rejected}`)
         if (merged.added || merged.updated) changes.push(`${name} +${merged.added}/~${merged.updated}`)
+        for (const item of (result as unknown as Record<string, unknown[]>)[name] ?? []) foldChanges.push(`${name}: ${JSON.stringify(item)}`)
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
@@ -261,6 +269,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         if (w.applied.length > 0) {
           writeWorkItems(root, prefix, workItems)
           for (const line of w.applied) {
+            foldChanges.push(`ticket ${line}`)
             const key = line.slice(0, line.indexOf(':'))
             const proposal = (result.work_changes ?? []).find((c) => c.key?.toUpperCase() === key.toUpperCase())
             appendAudit(root, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: key, ...(proposal?.sources?.[0] ? { source: proposal.sources[0] } : {}) })
@@ -276,6 +285,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         if (c.created.length > 0) {
           writeWorkItems(root, prefix, workItems)
           for (const line of c.created) {
+            foldChanges.push(`new ticket ${line}`)
             const key = line.slice(0, line.indexOf(':'))
             const proposal = (result.work_new ?? []).find((n) => line.startsWith(`${key}: "${n.title?.trim()}"`))
             appendAudit(root, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: key, ...(proposal?.sources?.[0] ? { source: proposal.sources[0] } : {}) })
@@ -301,13 +311,27 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       )
     }
 
+    if (foldChanges.length > 0) {
+      // The status summary: a light call on the incremental model, only when
+      // the fold changed something. A failure keeps the previous summary.
+      const summaryModel = process.env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
+      try {
+        const input = statusSummaryInput(root, config, today, foldChanges.slice(0, 60))
+        const summary = llm === 'sdk' ? await sdkText(summaryModel, STATUS_SUMMARY_SYSTEM, input) : cliCall(summaryModel, STATUS_SUMMARY_SYSTEM, input)
+        writeStatus(root, config, { summary: summary.trim(), summaryAt: new Date().toISOString() })
+        console.log(`status: summary written [${llm}:${summaryModel}]`)
+      } catch (err) {
+        console.warn(`  ⚠ status summary failed (${err instanceof Error ? err.message : err}) — kept the previous one`)
+      }
+    }
+
     if (contradictions.length > 0) {
       writeFileSync(join(root, 'context/derived/contradictions.yaml'), stringify(contradictions))
       console.warn(
         `⚠ ${contradictions.length} pinned fact(s) contradicted by fresh evidence — see derived/contradictions.yaml`,
       )
     }
-  } else if (wantArtifacts.length > 0) {
+  } else if (wantArtifacts.length > 0 && !gated) {
     console.log('no new stream material since last extract')
   }
 
@@ -333,7 +357,48 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     }
   }
 
+  // The list half of status.md follows whatever the fold (or anything since) did to the tracker and artifacts.
+  if (wantArtifacts.length > 0) writeStatus(root, config)
+
   updateState(root, { extracted: state.extracted, lastExtract: new Date().toISOString() })
+}
+
+/**
+ * Ask the gate whether this hour's material is worth an incremental fold.
+ * Only the incremental path is gated — a backfill, a re-fold, a new source,
+ * an attached document or an empty tracker always folds. On a skip the
+ * files are marked consumed, exactly as a fold that found nothing would.
+ * Any gate failure folds.
+ */
+async function gateSkips(root: string, config: ReturnType<typeof loadConfig>, state: ReturnType<typeof loadState>, newFiles: StreamFile[], today: string): Promise<boolean> {
+  const gate = gateConfig()
+  if (!gate) return false
+  const newChars = newFiles.reduce((n, f) => n + f.text.length, 0)
+  const existing = ARTIFACTS.reduce((n, a) => n + readYamlList(root, `context/derived/${a}.yaml`).length, 0)
+  if (!isIncremental(pack(newFiles, BATCH_CHARS).length, existing, newChars) || newFiles.some((f) => alwaysFolds(f.path))) return false
+  try {
+    const items = readWorkItems(root, workPrefix(config))
+    const r = await runGate(
+      {
+        material: newFiles.map((f) => ({ path: f.path, text: newPart(f.text, state.extracted?.[f.path]) })),
+        trackedWork: describeWorkForPrompt(items, today),
+        pins: readRaw(root, 'context/facts.yaml'),
+      },
+      gate,
+    )
+    const why = `${r.top.question} p=${r.top.p.toFixed(2)}, threshold ${gate.threshold}; ${r.inputTokens} tokens`
+    if (r.fold) {
+      console.log(`gate: folding — ${why}`)
+      return false
+    }
+    for (const f of newFiles) state.extracted![f.path] = f.text.length
+    updateState(root, { extracted: state.extracted })
+    console.log(`gate: nothing to fold in ${newFiles.length} stream file(s) — ${why} [jev]`)
+    return true
+  } catch (err) {
+    console.warn(`  ⚠ gate failed (${err instanceof Error ? err.message : err}) — folding`)
+    return false
+  }
 }
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
@@ -358,7 +423,12 @@ function pickBackend(): Backend {
 export function pickModel(batchCount: number, existingItems: number, env: NodeJS.ProcessEnv = process.env, newChars = 0): string {
   const full = env.LORE_MODEL ?? MODEL
   const incremental = env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
-  return batchCount === 1 && existingItems > 0 && newChars <= INCREMENTAL_MAX_CHARS ? incremental : full
+  return isIncremental(batchCount, existingItems, newChars) ? incremental : full
+}
+
+/** One small batch of new material onto artifacts that already exist — the hourly delta, not a backfill. */
+export function isIncremental(batchCount: number, existingItems: number, newChars: number): boolean {
+  return batchCount === 1 && existingItems > 0 && newChars <= INCREMENTAL_MAX_CHARS
 }
 
 /** `claude -p --model` takes a family alias; map a model id onto one. */

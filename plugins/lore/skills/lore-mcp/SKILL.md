@@ -130,12 +130,22 @@ look for that in Slack or a pin before stating it as settled.
   this in scope"): `lore_recall` with `category: "sow"`; cite the SOW's
   `file`. "How much is left" cannot be answered until the scheduling source
   is connected — say so rather than reasoning from dates.
-- **Status questions** ("what's open / in progress / done", "what's
-  outstanding for the client"): `lore_recall` with `category: "work"` — the
+- **Status questions** ("what's outstanding", "where are we", "status
+  update", "what's left"): **`lore_status`, and nothing else.** It returns
+  the answer already written — a short summary from the last fold, anything
+  the tracker recorded after it, and the live outstanding list (open tickets
+  by status, requests nobody has ticketed, roadmap not done) with
+  freshness. Relay it as returned; trim or filter only when asked ("just
+  the blocked ones"). Do not call `lore_recall` to rebuild it — that is
+  hundreds of kilobytes on a busy client and is what makes a status answer
+  slow. If the page shows a "Since the summary" section, those moves are
+  newer than the prose; say so.
+- **Detail behind a status line** ("what's the history on CAR-3", "show me
+  everything open including closed", "the full request text"):
+  `lore_recall` with `category: "work"` (or `label` for one theme) — the
   lore tracker first, external snapshots as evidence — then
-  `category: "requests"` for asks that have no ticket yet (a request with a
-  ticket shows as the ticket's `request`). Say which is which, and for a
-  ticket the fold or sync moved recently, say so with the reason.
+  `category: "requests"` for asks that have no ticket yet. For a ticket the
+  fold or sync moved recently, say so with the reason.
 - **"What do we know / what was decided"**: `lore_recall` (no category, or
   `decisions`). Check `pins` first, then `derived`.
 - **What is synced** ("which repos does lore follow", "is #acme-dev in
@@ -254,6 +264,17 @@ not a paraphrase of the command.
 - **`lore_work_set`** — priority, assignee, labels, title, evidence links,
   the linked tracker issue, or rank (`rank_above`: a key, "top", or
   "bottom"). Reprioritise only on a decision-maker's word, and cite it.
+- **`lore_work_label`** — put a project label (a theme, epic or workstream:
+  "onboarding", "stripe integration") on several tickets in one change, or
+  take one off. Use when a person asks to label, tag or group tickets. For
+  "label these", resolve the keys from the conversation or `lore_recall`
+  first, and name every ticket you labeled in your reply; if it is unclear
+  which tickets they mean, list your candidates and ask before labeling.
+  Reuse an existing label (`lore_recall` lists them under the tracker's
+  `labels`, with counts) rather than coining a near-duplicate. To answer
+  "how is <theme> going", call `lore_recall` with `label` — it returns
+  that theme's tickets, open and closed. Labels added in lore survive
+  Jira/GitHub syncs; the tracker keeps owning its own labels.
 
 - **`lore_work_push`** — write lore's state out to Jira, **only when a
   person asks** ("push this to Jira", "create the Jira ticket for JNT-3",

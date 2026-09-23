@@ -46,6 +46,8 @@ export interface ExternalRef {
   status: string
   /** The tracker's coarse state: Jira status category, GitHub open/closed. */
   category: string
+  /** The tracker's own labels as last mirrored — so sync can tell them from labels added in lore. */
+  labels?: string[]
 }
 
 export interface WorkHistoryEntry {
@@ -115,10 +117,14 @@ export function stateFor(status: WorkStatus): WorkState {
 
 export function readWorkItems(root: string, prefix: string): LoreWorkItem[] {
   const path = join(root, workFile(prefix))
-  if (!existsSync(path)) return []
+  return existsSync(path) ? parseWorkItems(readFileSync(path, 'utf8')) : []
+}
+
+/** A tracker table's text → items, tolerating a missing or malformed file (e.g. read from an old commit). */
+export function parseWorkItems(text: string): LoreWorkItem[] {
   let parsed: unknown
   try {
-    parsed = parse(readFileSync(path, 'utf8').replace(/^(#.*\n)+/, ''))
+    parsed = parse(text.replace(/^(#.*\n)+/, ''))
   } catch {
     return []
   }
@@ -375,7 +381,7 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
         ...(issue.priority ? { priority: issue.priority } : {}),
         ...(issue.assignee ? { assignee: issue.assignee } : {}),
         labels: issue.labels,
-        external: issue.ref,
+        external: { ...issue.ref, labels: issue.labels },
         sources: [issue.ref.url],
         created: at.slice(0, 10),
         updated: at.slice(0, 10),
@@ -402,15 +408,58 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
     }
     if (issue.title !== known.title && !lastHumanChange(known, 'title')) fields.title = issue.title
     if ((issue.assignee ?? undefined) !== (known.assignee ?? undefined) && !lastHumanChange(known, 'assignee')) fields.assignee = issue.assignee
-    if (JSON.stringify(issue.labels) !== JSON.stringify(known.labels) && !lastHumanChange(known, 'labels')) fields.labels = issue.labels
+    const labels = mergeTrackerLabels(known, issue.labels)
+    if (JSON.stringify(labels) !== JSON.stringify(known.labels)) fields.labels = labels
     if (issue.priority && issue.priority !== known.priority && !lastHumanChange(known, 'priority')) fields.priority = issue.priority
-    known.external = { ...ext, ...issue.ref }
+    known.external = { ...ext, ...issue.ref, labels: issue.labels }
     const reason = moved ? `${label} moved ${ext.status} → ${issue.ref.status}` : `${label} updated`
     const change = applyChange(known, fields, { at, by: 'lore-sync', via: 'sync', reason, sources: [issue.ref.url] }, extra)
     if (Object.keys(change).length > 0) updated++
   }
   if (created === 0 && updated === 0 && existsSync(join(root, workFile(prefix)))) return { prefix, file: workFile(prefix), created, updated }
   return { prefix, file: writeWorkItems(root, prefix, items), created, updated }
+}
+
+/**
+ * The tracker's labels plus the ones lore added (project labels like
+ * "stripe integration" that Jira/GitHub never had). The tracker owns its own
+ * labels — one it drops goes — and lore's survive every sync. Items mirrored
+ * before `external.labels` was recorded: with no human label change every
+ * label came from the tracker; with one, keep them all rather than guess.
+ */
+export function mergeTrackerLabels(item: Pick<LoreWorkItem, 'labels' | 'history' | 'external'>, tracker: string[]): string[] {
+  const before = item.external?.labels ?? (lastHumanChange(item as LoreWorkItem, 'labels') ? [] : item.labels)
+  const own = item.labels.filter((l) => !hasLabel(before, l) && !hasLabel(tracker, l))
+  return [...tracker, ...own]
+}
+
+/** Labels compare case- and space-insensitively: "Stripe Integration" is "stripe  integration". */
+export function labelKey(label: string): string {
+  return label.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+export function hasLabel(labels: string[], label: string): boolean {
+  const k = labelKey(label)
+  return labels.some((l) => labelKey(l) === k)
+}
+
+/** A label as the project already spells it, or cleaned up if it is new. */
+export function canonicalLabel(items: Pick<LoreWorkItem, 'labels'>[], label: string): string {
+  const k = labelKey(label)
+  for (const i of items) for (const l of i.labels) if (labelKey(l) === k) return l
+  return label.trim().replace(/\s+/g, ' ')
+}
+
+/** Every label in the table with how many open and closed items carry it — the project's themes at a glance. */
+export function labelCounts(items: Pick<LoreWorkItem, 'labels' | 'state'>[]): Record<string, { open: number; closed: number }> {
+  const out: Record<string, { open: number; closed: number }> = {}
+  for (const i of items)
+    for (const l of i.labels) {
+      const c = (out[l] ??= { open: 0, closed: 0 })
+      if (i.state === 'open') c.open++
+      else c.closed++
+    }
+  return out
 }
 
 // ---- fold inference ----

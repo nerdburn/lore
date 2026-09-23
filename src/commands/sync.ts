@@ -7,6 +7,7 @@ import { writeDocs } from '../streams.js'
 import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
 import { mirrorExternal } from '../work.js'
+import { writeStatus } from '../status.js'
 
 /** Connector-supplied paths must stay inside context/. */
 function safeRel(rel: string): string {
@@ -122,6 +123,8 @@ export async function sync(root: string, registry: Record<string, Connector> = c
   try {
     const m = mirrorExternal(root, config)
     if (m.created || m.updated) console.log(`work: ${m.created} mirrored, ${m.updated} updated → ${m.file}`)
+    // A tracker move from Jira/GitHub shows on the status page with this sync's commit.
+    if (m.file && existsSync(join(root, 'context/derived'))) writeStatus(root, config)
   } catch (err) {
     console.error(`✗ work: ${err instanceof Error ? err.message : String(err)}`)
     summary.ok = false

@@ -344,6 +344,9 @@ everything else is kept verbatim), so an incremental fold is small and
 never drops an existing item. A first fold or multi-batch re-fold uses
 `LORE_MODEL` (default `claude-opus-4-8`); the routine one-batch fold onto
 existing artifacts uses `LORE_MODEL_INCREMENTAL` (default `claude-sonnet-5`).
+With `TYPESAFE_API_KEY` set, a fast Jev check on the new material skips
+incremental folds with nothing to find (see docs/DEPLOY_EXE.md, "Fold gate";
+`lore gate replay` measures it on a client's history first).
 
 </details>
 
@@ -418,6 +421,9 @@ lore work move CAR-2 in_progress --reason "Cory started the draft" --source http
 lore work set CAR-2 --assignee cory --external jira:INPT-9 --reason "same work as the Jira story"
 lore work rank CAR-3 --top --reason "report is due Friday"
 lore work list --all
+lore status                                     # what's outstanding: the fold's summary + the live open work (what lore_status returns)
+lore work label CAR-2 CAR-5 --add "stripe integration" --reason "group the Stripe work"
+lore work list --label "stripe integration"     # one theme's open tickets (recall --label: open and closed)
 lore work show CAR-2                            # the ticket with its full history
 ```
 

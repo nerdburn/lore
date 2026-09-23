@@ -8,13 +8,14 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { readAudit } from '../src/audit.js'
 import { createServer } from '../src/commands/mcp.js'
 import { sync } from '../src/commands/sync.js'
-import { workAdd, workList, workMove, workPromote, workRank, workSet, workShow } from '../src/commands/work.js'
+import { workAdd, workLabel, workList, workMove, workPromote, workRank, workSet, workShow } from '../src/commands/work.js'
 import { resolveContext } from '../src/context.js'
 import { recallData } from '../src/recall.js'
 import {
   applyFoldChanges,
   applyFoldCreations,
   deriveWorkPrefix,
+  mergeTrackerLabels,
   mirrorExternal,
   readWorkItems,
   summarizeForRecall,
@@ -192,7 +193,7 @@ test('work move / set / rank: every change needs a reason and lands in history; 
   await assert.rejects(captureConsole(() => workRank(root, 'ACM-3', {}, { reason: 'x' }, opts(root))), /--above/)
 
   const { out: list } = await captureConsole(() => workList(root, { context: root }))
-  assert.match(list, /^ACM-2\s+todo\s+P1\s+B\s+@cory\s+\[jira ACM-7: unknown\]$/m)
+  assert.match(list, /^ACM-2\s+todo\s+P1\s+B\s+@cory\s+#builder\s+\[jira ACM-7: unknown\]$/m)
   assert.doesNotMatch(list, /ACM-3/, 'done items are hidden without --all')
   const { out: all } = await captureConsole(() => workList(root, { context: root, all: true }))
   assert.match(all, /ACM-3\s+done/)
@@ -224,7 +225,7 @@ test('work mirror: open Jira/GitHub issues become lore items; PRs and never-trac
   assert.equal(gh.status, 'todo')
   assert.equal(gh.priority, 'P1', 'a P1 label maps to priority')
   assert.equal(gh.assignee, 'mara')
-  assert.deepEqual(gh.external, { system: 'github', id: 'github:acme/web#40', key: '#40', url: 'https://github.com/acme/web/issues/40', status: 'open', category: 'open' })
+  assert.deepEqual(gh.external, { system: 'github', id: 'github:acme/web#40', key: '#40', url: 'https://github.com/acme/web/issues/40', status: 'open', category: 'open', labels: ['bug', 'P1'] })
   assert.deepEqual(gh.history, [{ at: AT, by: 'lore-sync', via: 'sync', change: { created: true }, reason: 'mirrored from GitHub #40 (open)', sources: ['https://github.com/acme/web/issues/40'] }])
   const jira = items[1]
   assert.equal(jira.status, 'in_progress')
@@ -459,4 +460,95 @@ test('work fold: creates tickets for committed work — high confidence, cited, 
   assert.equal(metrics.state, 'open')
   assert.ok(titleSimilarity('Family portal login', 'Login for the family portal') >= 0.7)
   assert.ok(titleSimilarity('Family portal login', 'Run a parent alpha') < 0.3)
+})
+
+test('work label: one change labels several tickets, reuses the project spelling, removes, and refuses unknown keys wholesale', async () => {
+  const root = makeContextRepo()
+  for (const title of ['Stripe checkout', 'Stripe webhooks', 'Welcome email']) await captureConsole(() => workAdd(root, { title }, opts(root)))
+  await captureConsole(() => workSet(root, 'ACM-3', { labels: ['Onboarding'] }, { reason: 'x' }, opts(root)))
+
+  const r = await captureConsole(() => workLabel(root, ['acm-1', 'ACM-2'], { add: ['stripe  integration'] }, { reason: 'Shawn grouped the Stripe work' }, opts(root)))
+  assert.deepEqual(r.result.labeled.map((l) => [l.key, l.labels]), [['ACM-1', ['stripe integration']], ['ACM-2', ['stripe integration']]])
+  const items = readWorkItems(root, 'ACM')
+  assert.deepEqual(items[0].history.at(-1)?.change, { labels: [[], ['stripe integration']] })
+  assert.equal(items[0].history.at(-1)?.reason, 'Shawn grouped the Stripe work')
+  assert.equal(readAudit(root).filter((a) => a.id === 'ACM-1' || a.id === 'ACM-2').length, 4, 'one audit line per ticket per write')
+
+  const again = await captureConsole(() => workLabel(root, ['ACM-1', 'ACM-3'], { add: ['Stripe Integration', 'onboarding'] }, { reason: 'y' }, opts(root)))
+  assert.deepEqual(again.result.labeled.map((l) => [l.key, l.labels]), [['ACM-1', ['stripe integration', 'Onboarding']], ['ACM-3', ['Onboarding', 'stripe integration']]], 'existing spelling wins')
+
+  const off = await captureConsole(() => workLabel(root, ['ACM-3', 'ACM-2'], { remove: ['STRIPE integration'] }, { reason: 'not stripe' }, opts(root)))
+  assert.deepEqual(off.result.labeled.map((l) => [l.key, l.labels]), [['ACM-3', ['Onboarding']], ['ACM-2', []]])
+
+  const before = readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8')
+  await assert.rejects(captureConsole(() => workLabel(root, ['ACM-1', 'ACM-9'], { add: ['x'] }, { reason: 'z' }, opts(root))), /no item ACM-9 — nothing labeled/)
+  await assert.rejects(captureConsole(() => workLabel(root, ['ACM-1'], {}, { reason: 'z' }, opts(root))), /a label to add or remove/)
+  await assert.rejects(captureConsole(() => workLabel(root, ['ACM-1'], { add: ['x'] }, { reason: '' }, opts(root))), /--reason is required/)
+  assert.equal(readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8'), before)
+
+  const { out } = await captureConsole(() => workList(root, { context: root, label: 'stripe integration' }))
+  assert.match(out, /^ACM-1 .*#stripe integration #Onboarding$/m)
+  assert.doesNotMatch(out, /ACM-2|ACM-3/)
+})
+
+test('work label recall: labels are counted on the lore table; a label filter returns that theme open and closed', async () => {
+  const root = makeContextRepo()
+  for (const title of ['Stripe checkout', 'Stripe webhooks', 'Welcome email']) await captureConsole(() => workAdd(root, { title }, opts(root)))
+  await captureConsole(() => workLabel(root, ['ACM-1', 'ACM-2'], { add: ['stripe integration'] }, { reason: 'x' }, opts(root)))
+  await captureConsole(() => workMove(root, 'ACM-2', 'done', { reason: 'shipped' }, opts(root)))
+
+  const all = recallData(root, ACME)
+  assert.deepEqual(all.work['lore/ACM'].labels, { 'stripe integration': { open: 1, closed: 1 } })
+  const stripe = recallData(root, ACME, 'work', { label: 'Stripe Integration' })
+  const t = stripe.work['lore/ACM']
+  assert.deepEqual(t.counts, { open: 1, closed: 1, merged: 0 })
+  assert.deepEqual((t.open as { key: string }[]).map((i) => i.key), ['ACM-1'])
+  assert.deepEqual((t.closed as { key: string }[]).map((i) => i.key), ['ACM-2'])
+  assert.deepEqual(recallData(root, ACME, 'work', { label: 'nope' }).work, {})
+})
+
+test('work label mcp: lore_work_label labels a batch via mcp; lore_recall { label } reads the theme back', async () => {
+  const root = makeContextRepo()
+  for (const title of ['Stripe checkout', 'Stripe webhooks', 'Welcome email']) await captureConsole(() => workAdd(root, { title }, opts(root)))
+  const ctx = resolveContext(root, { context: root })
+  const server = createServer(ctx, { cwd: root, opts: { context: root } })
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair()
+  await server.connect(serverT)
+  const client = new Client({ name: 'test', version: '0' })
+  await client.connect(clientT)
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const res = await client.callTool({ name, arguments: args })
+    return { isError: res.isError === true, text: (res.content as { text: string }[])[0]?.text ?? '' }
+  }
+  const labeled = await call('lore_work_label', { keys: ['ACM-1', 'ACM-2'], add: ['stripe integration'], reason: 'asked to label the Stripe tickets' })
+  assert.equal(labeled.isError, false, labeled.text)
+  assert.match(labeled.text, /^ACM-1: Stripe checkout — labels: stripe integration\nACM-2: Stripe webhooks — labels: stripe integration$/)
+  assert.equal(readWorkItems(root, 'ACM')[0].history.at(-1)?.via, 'mcp')
+  const unknown = await call('lore_work_label', { keys: ['ACM-7'], add: ['x'], reason: 'r' })
+  assert.equal(unknown.isError, true)
+  const recalled = JSON.parse((await call('lore_recall', { label: 'stripe integration' })).text)
+  assert.deepEqual(Object.keys(recalled.work), ['lore/ACM'])
+  assert.deepEqual(recalled.work['lore/ACM'].open.map((i: { key: string }) => i.key), ['ACM-1', 'ACM-2'])
+  assert.deepEqual(recalled.pins, [], 'a label filter is a work question')
+  await Promise.all([client.close(), server.close()])
+})
+
+test('work mirror: project labels added in lore survive every sync; the tracker still owns its own labels', async () => {
+  const root = makeContextRepo({ 'context/work/github/acme__web.yaml': GITHUB_TABLE })
+  mirrorExternal(root, ACME, AT)
+  await captureConsole(() => workLabel(root, ['ACM-1'], { add: ['stripe integration'] }, { reason: 'theme' }, opts(root)))
+  assert.deepEqual(readWorkItems(root, 'ACM')[0].labels, ['bug', 'P1', 'stripe integration'])
+
+  // The tracker drops "bug" and adds "checkout": lore follows, and keeps its own label.
+  writeFileSync(join(root, 'context/work/github/acme__web.yaml'), GITHUB_TABLE.replace('labels: [bug, P1]', 'labels: [P1, checkout]'))
+  mirrorExternal(root, ACME, '2026-09-15T12:00:00.000Z')
+  const item = readWorkItems(root, 'ACM')[0]
+  assert.deepEqual(item.labels, ['P1', 'checkout', 'stripe integration'])
+  assert.deepEqual(item.external?.labels, ['P1', 'checkout'])
+
+  // Items mirrored before external.labels was recorded.
+  const legacy = { labels: ['bug', 'mine'], history: [], external: undefined }
+  assert.deepEqual(mergeTrackerLabels(legacy, ['bug']), ['bug'], 'sync-only item: every label was the tracker\'s')
+  const touched = { labels: ['bug', 'mine'], history: [{ at: AT, by: 'me', via: 'cli' as const, change: { labels: [[], ['bug', 'mine']] }, reason: 'x' }], external: undefined }
+  assert.deepEqual(mergeTrackerLabels(touched, ['bug']), ['bug', 'mine'], 'a person labeled it: keep theirs')
 })

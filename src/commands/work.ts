@@ -6,7 +6,9 @@ import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '
 import { authorizeWrite } from '../write.js'
 import {
   applyChange,
+  canonicalLabel,
   findItem,
+  hasLabel,
   nextKey,
   rankItem,
   readExternalIssues,
@@ -312,6 +314,55 @@ export function workSet(cwd: string, key: string, fields: WorkSetInput, input: C
   })
 }
 
+export interface WorkLabelResult {
+  /** Items whose labels changed, with their labels after. */
+  labeled: { key: string; title: string; labels: string[] }[]
+  /** Items that already had (or already lacked) the labels. */
+  unchanged: string[]
+}
+
+/**
+ * Add or remove project labels — a theme, epic or workstream ("onboarding",
+ * "stripe integration") — on several tickets in one change: one write, one
+ * commit, one history entry per ticket touched. Every key must exist or
+ * nothing is written. A label the project already uses keeps its spelling,
+ * so "Stripe Integration" and "stripe integration" stay one label.
+ */
+export async function workLabel(
+  cwd: string,
+  keys: string[],
+  change: { add?: string[]; remove?: string[] },
+  input: ChangeInput,
+  opts: WorkWriteOptions = {},
+): Promise<WorkLabelResult> {
+  const reason = requireReason(input, 'label')
+  const add = cleanList(change.add) ?? []
+  const remove = cleanList(change.remove) ?? []
+  if (add.length === 0 && remove.length === 0) throw new Error('work label: give a label to add or remove')
+  const wanted = [...new Set((cleanList(keys) ?? []).map((k) => k.toUpperCase()))]
+  if (wanted.length === 0) throw new Error('work label: give at least one ticket key')
+  const result: WorkLabelResult = { labeled: [], unchanged: [] }
+  await mutateBatch(cwd, opts, 'work item change', async (items, _prefix, actor, at) => {
+    const missing = wanted.filter((k) => !findItem(items, k))
+    if (missing.length) throw new Error(`work label: no item ${missing.join(', ')} — nothing labeled`)
+    const adding = add.map((l) => canonicalLabel(items, l))
+    for (const key of wanted) {
+      const item = findItem(items, key)!
+      const labels = [...item.labels.filter((l) => !hasLabel(remove, l)), ...adding.filter((l) => !hasLabel(item.labels, l) && !hasLabel(remove, l))]
+      const applied = applyChange(item, { labels }, { at, by: actor, via: opts.via ?? 'cli', reason, sources: cleanList(input.sources) })
+      if (Object.keys(applied).length) result.labeled.push({ key: item.key, title: item.title, labels: item.labels })
+      else result.unchanged.push(item.key)
+    }
+    const what = [adding.length ? `+${adding.join(', +')}` : '', remove.length ? `-${remove.join(', -')}` : ''].filter(Boolean).join(' ')
+    return { touched: result.labeled.map((l) => ({ key: l.key })), message: `label ${result.labeled.map((l) => l.key).join(', ')} ${what} (${reason})` }
+  })
+  if ((opts.via ?? 'cli') === 'cli') {
+    for (const l of result.labeled) console.log(`${l.key.padEnd(8)} ${l.labels.join(', ') || '(no labels)'}  ${l.title}`)
+    if (result.unchanged.length) console.log(`unchanged: ${result.unchanged.join(', ')}`)
+  }
+  return result
+}
+
 export function workRank(cwd: string, key: string, target: RankTarget, input: ChangeInput, opts: WorkWriteOptions = {}): LoreWorkItem {
   const reason = requireReason(input, 'rank')
   return mutate(cwd, opts, (items, _prefix, actor, at) => {
@@ -323,18 +374,19 @@ export function workRank(cwd: string, key: string, target: RankTarget, input: Ch
   })
 }
 
-export function workList(cwd: string, opts: ResolveOptions & { all?: boolean; json?: boolean } = {}): WorkItemSummary[] {
+export function workList(cwd: string, opts: ResolveOptions & { all?: boolean; json?: boolean; label?: string } = {}): WorkItemSummary[] {
   const ctx = resolveContext(cwd, opts)
   const prefix = workPrefix(ctx.config)
   const items = readWorkItems(ctx.root, prefix)
     .filter((i) => opts.all || i.state === 'open')
+    .filter((i) => !opts.label || hasLabel(i.labels, opts.label))
     .map((i) => summarizeForRecall(i))
   if (opts.json) console.log(JSON.stringify(items, null, 2))
   else if (items.length === 0) console.log(opts.all ? `no work items yet (prefix ${prefix}) — \`lore work add "<title>"\`` : `nothing open (prefix ${prefix}); \`lore work list --all\` for closed items`)
   else
     for (const i of items)
       console.log(
-        `${i.key.padEnd(8)} ${i.status.padEnd(12)}${(i.priority ?? '').padEnd(4)}${i.title}${i.assignee ? `  @${i.assignee}` : ''}${
+        `${i.key.padEnd(8)} ${i.status.padEnd(12)}${(i.priority ?? '').padEnd(4)}${i.title}${i.assignee ? `  @${i.assignee}` : ''}${i.labels.length ? `  #${i.labels.join(' #')}` : ''}${
           i.external ? `  [${i.external.system} ${i.external.key}: ${i.external.status}${i.drift ? ', drift' : ''}]` : ''
         }`,
       )
