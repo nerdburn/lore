@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { readAudit } from '../src/audit.js'
-import type { JiraApi, JiraTransition } from '../src/connectors/jira.js'
+import type { JiraApi, JiraBoard, JiraSprint, JiraTransition } from '../src/connectors/jira.js'
 import { workAdd, workMove } from '../src/commands/work.js'
 import { equalityClauses, inSync, pickTransition, workPush } from '../src/commands/work-push.js'
 import { mirrorExternal, readWorkItems, type LoreWorkItem } from '../src/work.js'
@@ -67,8 +67,47 @@ function fakeJira(initial: Record<string, string> = {}) {
       status[key] = 'To Do'
       return { id: String(n), key }
     },
+    async sprintField() {
+      return 'customfield_10020'
+    },
+    async boardInfo(id) {
+      calls.push(`sprint-board ${id}`)
+      return { id, name: 'Jointly', type: sprints.boardType }
+    },
+    async projectBoards(project) {
+      calls.push(`project-boards ${project}`)
+      return sprints.projectBoards
+    },
+    async openSprints(boardId) {
+      calls.push(`sprints ${boardId}`)
+      return sprints.open
+    },
+    async issueSprint(key) {
+      calls.push(`issue-sprint ${key}`)
+      const id = sprints.membership[key]
+      return sprints.open.find((sp) => sp.id === id)
+    },
+    async addToSprint(id, keys) {
+      calls.push(`add-to-sprint ${id} ${keys.join(',')}`)
+      for (const k of keys) sprints.membership[k] = id
+    },
   }
-  return { api, status, created, calls, deps: { jira: () => ({ api, site: SITE }) } }
+  // Kanban by default: no sprints, so pushes behave as before sprints existed.
+  const sprints = {
+    boardType: 'kanban',
+    projectBoards: [] as JiraBoard[],
+    open: [] as JiraSprint[],
+    membership: {} as Record<string, number>,
+  }
+  return { api, status, created, calls, sprints, deps: { jira: () => ({ api, site: SITE }) } }
+}
+
+const SPRINT_14: JiraSprint = { id: 14, name: 'Sprint 14', state: 'active', startDate: '2026-09-14T00:00:00Z' }
+const SPRINT_15: JiraSprint = { id: 15, name: 'Sprint 15', state: 'future', startDate: '2026-09-28T00:00:00Z' }
+function scrum(jira: ReturnType<typeof fakeJira>, open: JiraSprint[] = [SPRINT_14, SPRINT_15]) {
+  jira.sprints.boardType = 'scrum'
+  jira.sprints.open = open
+  return jira
 }
 
 const jiraTable = (rows: { key: string; status: string; category: string }[]) =>
@@ -242,4 +281,106 @@ test('work push: off-host it runs the same command on the lore host over SSH and
   const r = await workPush(root, { keys: ['ACM-1'], dryRun: true }, { context: root, at: AT }, { ...jira.deps, ssh: (_t, cmd) => (seen.push(cmd), '{}') })
   assert.equal(r.ranOn, 'here')
   assert.deepEqual(seen, [])
+})
+
+// ---- sprints ----
+
+test('work push: an in-flight ticket in no sprint goes into the active sprint; todo stays in the backlog; lore stores no sprint', async () => {
+  const root = makeContextRepo({}, { ...CFG, sources: { jira: { ...CFG.sources.jira, push: { project: 'INPT' } } } })
+  await captureConsole(() => workAdd(root, { title: 'Started', status: 'in_progress' }, { context: root, at: AT }))
+  await captureConsole(() => workAdd(root, { title: 'Not yet' }, { context: root, at: AT }))
+  const jira = scrum(fakeJira())
+
+  const dry = await workPush(root, { all: true, dryRun: true }, { context: root, at: AT }, jira.deps)
+  assert.deepEqual(
+    dry.actions.filter((a) => a.kind === 'sprint'),
+    [{ key: 'ACM-1', kind: 'sprint', detail: 'would add the new issue to sprint Sprint 14 — in_progress in lore' }],
+  )
+  jira.calls.length = 0
+
+  const r = await workPush(root, { all: true }, { context: root, at: AT, by: 'shawn' }, jira.deps)
+  assert.deepEqual(
+    r.actions.map((a) => [a.key, a.kind]),
+    [
+      ['ACM-1', 'create'],
+      ['ACM-1', 'transition'],
+      ['ACM-1', 'sprint'],
+      ['ACM-2', 'create'],
+    ],
+  )
+  assert.equal(r.actions[2].detail, 'INPT-7201 → sprint Sprint 14 — in_progress in lore')
+  assert.deepEqual(jira.sprints.membership, { 'INPT-7201': 14 }, 'the todo ticket was not put in a sprint')
+  assert.ok(!jira.calls.includes('issue-sprint INPT-7201'), 'a just-created issue is in no sprint; no need to ask')
+  assert.equal(jira.calls.filter((c) => c.startsWith('sprints ')).length, 1, 'sprints looked up once per run')
+
+  const [started] = readWorkItems(root, 'ACM')
+  assert.deepEqual(started.history.at(-1)!.change, { jira_sprint: [null, 'Sprint 14'] })
+  assert.match(started.history.at(-1)!.reason, /INPT-7201 added to sprint Sprint 14/)
+  assert.ok(!('sprint' in started) && !('sprint' in started.external!), 'no sprint on the lore ticket')
+  assert.equal(readAudit(root).filter((e) => e.id === 'ACM-1').length, 2, 'added, then one audit line for the whole push (create + transition + sprint)')
+})
+
+test('work push: an in-flight ticket the client already planned into a sprint is left there; no active sprint says so', async () => {
+  const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }, { key: 'INPT-2', status: 'In Progress', category: 'In Progress' }]) }, CFG)
+  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  const jira = scrum(fakeJira({ 'INPT-1': 'In Progress', 'INPT-2': 'In Progress' }))
+  jira.sprints.membership['INPT-1'] = 15
+
+  const r = await workPush(root, { all: true }, { context: root, at: AT }, jira.deps)
+  assert.deepEqual(r.actions, [{ key: 'ACM-2', kind: 'sprint', detail: 'INPT-2 → sprint Sprint 14 — in_progress in lore', jira: 'INPT-2' }])
+  assert.equal(jira.sprints.membership['INPT-1'], 15, 'planned into the next sprint by the client: untouched')
+
+  const between = scrum(fakeJira({ 'INPT-1': 'In Progress', 'INPT-2': 'In Progress' }), [SPRINT_15])
+  const r2 = await workPush(root, { keys: ['ACM-1'] }, { context: root, at: AT }, between.deps)
+  assert.deepEqual(r2.actions, [{ key: 'ACM-1', kind: 'skip', detail: 'no active sprint on board Jointly — INPT-1 left in the backlog', jira: 'INPT-1' }])
+})
+
+test('work push --sprint: named tickets go into the sprint asked for, whatever their status', async () => {
+  const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'To Do', category: 'To Do' }, { key: 'INPT-2', status: 'To Do', category: 'To Do' }]) }, CFG)
+  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  const jira = scrum(fakeJira({ 'INPT-1': 'To Do', 'INPT-2': 'To Do' }))
+  jira.sprints.membership['INPT-2'] = 15
+
+  await assert.rejects(workPush(root, { all: true, sprint: 'active' }, { context: root }, jira.deps), /--sprint puts named tickets in a sprint/)
+
+  const r = await workPush(root, { keys: ['ACM-1', 'ACM-2'], sprint: 'sprint 15' }, { context: root, at: AT }, jira.deps)
+  assert.deepEqual(r.actions, [
+    { key: 'ACM-1', kind: 'sprint', detail: 'INPT-1 → sprint Sprint 15 — asked', jira: 'INPT-1' },
+    { key: 'ACM-2', kind: 'skip', detail: 'INPT-2 is already in sprint Sprint 15', jira: 'INPT-2' },
+  ])
+  const moved = await workPush(root, { keys: ['ACM-2'], sprint: 'active' }, { context: root, at: AT }, jira.deps)
+  assert.deepEqual(moved.actions, [{ key: 'ACM-2', kind: 'sprint', detail: 'INPT-2 → sprint Sprint 14 (from Sprint 15) — asked', jira: 'INPT-2' }])
+  assert.deepEqual(readWorkItems(root, 'ACM')[1].history.at(-1)!.change, { jira_sprint: ['Sprint 15', 'Sprint 14'] })
+
+  const unknown = await workPush(root, { keys: ['ACM-1'], sprint: 'Sprint 99' }, { context: root, at: AT }, jira.deps)
+  assert.deepEqual(unknown.actions, [{ key: 'ACM-1', kind: 'error', detail: 'no open sprint "Sprint 99" on board Jointly (open: Sprint 14, Sprint 15 (future))', jira: 'INPT-1' }])
+})
+
+test('work push sprints: kanban boards and opted-out clients never get sprint changes; the board is found or named', async () => {
+  const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }]) }, CFG)
+  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  const kanban = fakeJira({ 'INPT-1': 'In Progress' })
+  assert.deepEqual((await workPush(root, { all: true }, { context: root, at: AT }, kanban.deps)).actions, [], 'kanban: nothing to report')
+  const asked = await workPush(root, { keys: ['ACM-1'], sprint: 'active' }, { context: root, at: AT }, kanban.deps)
+  assert.deepEqual(asked.actions, [{ key: 'ACM-1', kind: 'error', detail: 'board Jointly is a kanban board — it has no sprints', jira: 'INPT-1' }])
+
+  const off = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }]) }, { ...CFG, sources: { jira: { ...CFG.sources.jira, push: { sprints: false } } } })
+  mirrorExternal(off, ACME, '2026-09-15T10:00:00.000Z')
+  const offJira = scrum(fakeJira({ 'INPT-1': 'In Progress' }))
+  assert.deepEqual((await workPush(off, { all: true }, { context: off, at: AT }, offJira.deps)).actions, [])
+  assert.ok(!offJira.calls.some((c) => c.startsWith('sprint')), 'sprints off: no sprint lookups at all')
+
+  // No boards configured: the project's one scrum board, else ask for push.board.
+  const byProject = { project: 'acme', sources: { jira: { projects: ['INPT'], site: SITE, api_base: 'https://jira.int.example/rest/api/3' } }, extract: [] as string[] }
+  const p = makeContextRepo({ 'context/work/jira/INPT.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }]) }, byProject)
+  mirrorExternal(p, ACME, '2026-09-15T10:00:00.000Z')
+  const one = scrum(fakeJira({ 'INPT-1': 'In Progress' }))
+  one.sprints.projectBoards = [{ id: 7, name: 'INPT kanban', type: 'kanban' }, { id: 8, name: 'INPT sprints', type: 'scrum' }]
+  const r = await workPush(p, { all: true }, { context: p, at: AT }, one.deps)
+  assert.deepEqual(r.actions.map((a) => a.detail), ['INPT-1 → sprint Sprint 14 — in_progress in lore'])
+  assert.ok(one.calls.includes('sprints 8'))
+  const two = scrum(fakeJira({ 'INPT-1': 'In Progress' }))
+  two.sprints.projectBoards = [{ id: 8, name: 'A', type: 'scrum' }, { id: 9, name: 'B', type: 'scrum' }]
+  const ask = await workPush(p, { keys: ['ACM-1'], sprint: 'active' }, { context: p, at: AT }, two.deps)
+  assert.match(ask.actions[0].detail, /INPT has 2 scrum boards \(A 8, B 9\) — set sources\.jira\.push\.board/)
 })

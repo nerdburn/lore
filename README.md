@@ -473,6 +473,24 @@ option ids — then linked back as `external`. `sources.jira.push` in
 `lore.json` overrides the project, issue type, and scoping fields when
 inference cannot. Archived tickets and done tickets without an issue are
 never pushed. Every push is a history entry on the ticket and an audit line.
+
+**Sprints stay in Jira.** Lore's tickets carry no sprint — Jira owns sprint
+planning — but a push respects it. A ticket that is in flight in lore
+(`in_progress` or `blocked`) and sits in no open sprint goes into the
+board's active sprint; one the client already planned into a sprint is left
+there, and with no active sprint (between sprints) it stays in the backlog
+and the push says so. When the client asks for specific work in a sprint:
+
+```sh
+lore work push JNT-3 JNT-7 --sprint active       # the board's current sprint
+lore work push JNT-9 --sprint "Sprint 15"        # a named sprint, active or future
+```
+
+The board is `sources.jira.push.board`, else the first of `boards`, else
+the project's only scrum board; kanban boards have no sprints, and
+`push.sprints: false` turns this off for a client. Sync mirrors each Jira
+issue's current sprint onto Jira's own table (`sprint`, `sprint_state`) and
+into its stream docs, so recall and the fold can say "JNT-12 is in Sprint 14".
 Jira is reachable only from the lore host, so from a laptop or agent the
 command runs itself there over SSH (like `lore refresh --trigger`) and pulls
 the result back. The timer never pushes.

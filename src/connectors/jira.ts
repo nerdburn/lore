@@ -55,6 +55,9 @@ export interface JiraWorkItem {
   created: string
   updated: string
   resolved?: string
+  /** The sprint the issue is in now (active, else the next future one) — Jira's planning, mirrored as evidence; lore's own tickets carry no sprints. */
+  sprint?: string
+  sprint_state?: 'active' | 'future'
   url: string
 }
 
@@ -75,6 +78,9 @@ export const jira: Connector = {
     const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
 
     const api: JiraApi = jiraClient(apiBase, email && token ? { email, token } : undefined)
+    // Sites without Jira Software have no Sprint field; that just means no sprints.
+    const sprintField = await api.sprintField().catch(() => undefined)
+    const extraFields = sprintField ? [sprintField] : []
     const cursor = { ...(ctx.cursor as JiraCursor) }
     const docs: Doc[] = []
     const errors: string[] = []
@@ -104,17 +110,23 @@ export const jira: Connector = {
       for (const item of readWorkTable(ctx.readFile(workPath))) table.set(item.key, item)
 
       try {
-        const updated = await api.search(`${scope.jql} AND updated >= "${sinceJql}" ORDER BY updated ASC`)
-        const seed = prev ? [] : await api.search(`${scope.jql} AND statusCategory != Done ORDER BY created ASC`)
+        const updated = await api.search(`${scope.jql} AND updated >= "${sinceJql}" ORDER BY updated ASC`, extraFields)
+        const seed = prev ? [] : await api.search(`${scope.jql} AND statusCategory != Done ORDER BY created ASC`, extraFields)
         if (!browseBase && (updated[0] ?? seed[0])?.self) browseBase = new URL((updated[0] ?? seed[0]).self).origin
         const seen = new Set<string>()
         for (const issue of [...seed, ...updated]) {
-          const item = toWorkItem(issue, browseBase)
+          const item = toWorkItem(issue, browseBase, sprintField)
           table.set(issue.key, item)
           if (seen.has(issue.key)) continue
           seen.add(issue.key)
-          const fp = fingerprint(issue)
+          const fp = fingerprint(issue, item)
           if (fingerprints[issue.key] === fp) continue
+          if (sameBeforeSprints(fingerprints[issue.key], fp)) {
+            // A fingerprint from before sprints were tracked: upgrade it
+            // quietly rather than emit a "changed" doc for every issue in a sprint.
+            fingerprints[issue.key] = fp
+            continue
+          }
           docs.push(fingerprints[issue.key] ? stateChangeDoc(scope.channel, issue, item) : openedDoc(scope.channel, issue, item))
           fingerprints[issue.key] = fp
         }
@@ -154,6 +166,7 @@ function statusLine(item: JiraWorkItem): string {
   if (item.assignee) bits.push(`assignee: ${item.assignee}`)
   if (item.labels.length) bits.push(`labels: ${item.labels.join(', ')}`)
   if (item.fix_versions.length) bits.push(`fix: ${item.fix_versions.join(', ')}`)
+  if (item.sprint) bits.push(`sprint: ${item.sprint}${item.sprint_state === 'future' ? ' (planned)' : ''}`)
   return bits.join(' · ')
 }
 
@@ -207,7 +220,7 @@ function commentDoc(project: string, issue: JiraIssue, c: JiraComment, browseBas
 
 // ---- work table ----
 
-function toWorkItem(issue: JiraIssue, browseBase: string): JiraWorkItem {
+function toWorkItem(issue: JiraIssue, browseBase: string, sprintField?: string): JiraWorkItem {
   const f = issue.fields
   const category = f.status?.statusCategory?.name ?? 'To Do'
   const item: JiraWorkItem = {
@@ -230,10 +243,15 @@ function toWorkItem(issue: JiraIssue, browseBase: string): JiraWorkItem {
   if (r) item.reporter = r
   if (f.parent?.key) item.parent = f.parent.key
   if (f.resolutiondate) item.resolved = iso(f.resolutiondate)
+  const sprint = sprintField ? currentSprint(f[sprintField as `customfield_${string}`]) : undefined
+  if (sprint) {
+    item.sprint = sprint.name
+    item.sprint_state = sprint.state as 'active' | 'future'
+  }
   return item
 }
 
-function fingerprint(issue: JiraIssue): string {
+function fingerprint(issue: JiraIssue, item: Pick<JiraWorkItem, 'sprint'>): string {
   const f = issue.fields
   return JSON.stringify([
     f.status?.name,
@@ -243,7 +261,20 @@ function fingerprint(issue: JiraIssue): string {
     f.resolutiondate ?? null,
     [...(f.labels ?? [])].sort(),
     (f.fixVersions ?? []).map((v) => v.name).sort(),
+    item.sprint ?? null,
   ])
+}
+
+/** Is `prev` a 7-field fingerprint (pre-sprint) that matches `next` on those fields? */
+function sameBeforeSprints(prev: string | undefined, next: string): boolean {
+  if (!prev) return false
+  try {
+    const a = JSON.parse(prev) as unknown[]
+    const b = JSON.parse(next) as unknown[]
+    return a.length === 7 && JSON.stringify(a) === JSON.stringify(b.slice(0, 7))
+  } catch {
+    return false
+  }
 }
 
 export function readWorkTable(text: string | undefined): JiraWorkItem[] {
@@ -408,7 +439,8 @@ export interface JiraCreateField {
 }
 
 export interface JiraApi {
-  search(jql: string): Promise<JiraIssue[]>
+  /** `extraFields`: custom fields to fetch as well, e.g. the Sprint field. */
+  search(jql: string, extraFields?: string[]): Promise<JiraIssue[]>
   comments(key: string): Promise<JiraComment[]>
   /** Board name + the JQL of its saved filter (Jira Agile API). */
   board(id: number): Promise<{ name: string; jql: string }>
@@ -420,6 +452,41 @@ export interface JiraApi {
   /** The fields (with allowed values) the create screen has for one issue type. */
   createFields(projectKey: string, issueTypeId: string): Promise<JiraCreateField[]>
   createIssue(fields: Record<string, unknown>): Promise<{ id: string; key: string }>
+  /** The id of the site's Sprint custom field (e.g. customfield_10020), if the site has Jira Software. */
+  sprintField(): Promise<string | undefined>
+  /** Board metadata — `type` is scrum | kanban | simple; only scrum boards have sprints. */
+  boardInfo(id: number): Promise<JiraBoard>
+  /** Boards that show a project's issues. */
+  projectBoards(projectKey: string): Promise<JiraBoard[]>
+  /** A board's open sprints, active first then future in start order. */
+  openSprints(boardId: number): Promise<JiraSprint[]>
+  /** The open (active or future) sprint an issue is in, if any. */
+  issueSprint(key: string): Promise<JiraSprint | undefined>
+  /** Move issues into a sprint (out of the backlog or another open sprint). */
+  addToSprint(sprintId: number, keys: string[]): Promise<void>
+}
+
+export interface JiraBoard {
+  id: number
+  name: string
+  type: string
+}
+
+export interface JiraSprint {
+  id: number
+  name: string
+  state: 'active' | 'future' | 'closed'
+  startDate?: string
+  originBoardId?: number
+}
+
+const SPRINT_SCHEMA = 'com.pyxis.greenhopper.jira:gh-sprint'
+
+/** A Sprint field value (the issue's sprints, closed ones included) → the one it is in now: active, else the earliest future. */
+export function currentSprint(value: unknown): JiraSprint | undefined {
+  if (!Array.isArray(value)) return undefined
+  const open = (value as JiraSprint[]).filter((v) => v && typeof v.name === 'string' && (v.state === 'active' || v.state === 'future'))
+  return open.find((v) => v.state === 'active') ?? open.sort((a, b) => (a.startDate ?? '').localeCompare(b.startDate ?? '') || a.id - b.id)[0]
 }
 
 /** Build a client from a resolved `sources.jira` config (env refs already resolved). */
@@ -451,6 +518,7 @@ export function jiraClient(apiBase: string, basic: { email: string; token: strin
   }
   // The Agile API lives beside the REST API: /rest/api/3 → /rest/agile/1.0.
   const agileBase = apiBase.replace(/\/rest\/api\/\d+$/, '/rest/agile/1.0')
+  let sprintFieldId: Promise<string | undefined> | undefined
   return {
     async board(id) {
       const b = await request<{ name?: string; filter?: { id: string } }>(`/board/${id}/configuration`, {}, agileBase)
@@ -459,13 +527,13 @@ export function jiraClient(apiBase: string, basic: { email: string; token: strin
       if (!f.jql) throw new JiraError(404, `filter ${b.filter.id} has no JQL`)
       return { name: b.name ?? `board-${id}`, jql: stripOrderBy(f.jql) }
     },
-    async search(jql) {
+    async search(jql, extraFields = []) {
       const out: JiraIssue[] = []
       let nextPageToken: string | undefined
       do {
         const page = await request<{ issues: JiraIssue[]; nextPageToken?: string; isLast?: boolean }>('/search/jql', {
           method: 'POST',
-          body: JSON.stringify({ jql, fields: FIELDS, maxResults: 100, ...(nextPageToken ? { nextPageToken } : {}) }),
+          body: JSON.stringify({ jql, fields: [...FIELDS, ...extraFields], maxResults: 100, ...(nextPageToken ? { nextPageToken } : {}) }),
         })
         out.push(...(page.issues ?? []))
         nextPageToken = page.isLast === false ? page.nextPageToken : undefined
@@ -491,6 +559,41 @@ export function jiraClient(apiBase: string, basic: { email: string; token: strin
     },
     async createIssue(fields) {
       return request<{ id: string; key: string }>('/issue', { method: 'POST', body: JSON.stringify({ fields }) })
+    },
+    async sprintField() {
+      sprintFieldId ??= request<{ id: string; schema?: { custom?: string } }[]>('/field').then(
+        (fields) => fields.find((f) => f.schema?.custom === SPRINT_SCHEMA)?.id,
+        () => undefined,
+      )
+      return sprintFieldId
+    },
+    async boardInfo(id) {
+      const b = await request<{ id: number; name?: string; type?: string }>(`/board/${id}`, {}, agileBase)
+      return { id: b.id, name: b.name ?? `board-${id}`, type: b.type ?? 'unknown' }
+    },
+    async projectBoards(projectKey) {
+      const r = await request<{ values?: { id: number; name?: string; type?: string }[] }>(`/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`, {}, agileBase)
+      return (r.values ?? []).map((b) => ({ id: b.id, name: b.name ?? `board-${b.id}`, type: b.type ?? 'unknown' }))
+    },
+    async openSprints(boardId) {
+      const out: JiraSprint[] = []
+      let startAt = 0
+      for (;;) {
+        const page = await request<{ values?: JiraSprint[]; isLast?: boolean }>(`/board/${boardId}/sprint?state=active,future&startAt=${startAt}&maxResults=50`, {}, agileBase)
+        out.push(...(page.values ?? []))
+        startAt += page.values?.length ?? 0
+        if (page.isLast !== false || !page.values?.length) break
+      }
+      const rank = (s: JiraSprint) => (s.state === 'active' ? 0 : 1)
+      return out.sort((a, b) => rank(a) - rank(b) || (a.startDate ?? '').localeCompare(b.startDate ?? '') || a.id - b.id)
+    },
+    async issueSprint(key) {
+      const r = await request<{ fields?: { sprint?: JiraSprint | null } }>(`/issue/${encodeURIComponent(key)}?fields=sprint`, {}, agileBase)
+      const s = r.fields?.sprint
+      return s && (s.state === 'active' || s.state === 'future') ? s : undefined
+    },
+    async addToSprint(sprintId, keys) {
+      await request<unknown>(`/sprint/${sprintId}/issue`, { method: 'POST', body: JSON.stringify({ issues: keys }) }, agileBase)
     },
     async comments(key) {
       const out: JiraComment[] = []
@@ -531,6 +634,8 @@ export interface JiraIssue {
     labels?: string[]
     fixVersions?: { name: string }[]
     parent?: { key: string } | null
+    /** Custom fields asked for by id (the Sprint field). */
+    [custom: `customfield_${string}`]: unknown
   }
 }
 export interface JiraComment {

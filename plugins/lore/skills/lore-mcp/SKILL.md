@@ -286,6 +286,12 @@ not a paraphrase of the command.
   created, moved, skipped and why. It runs on the lore host and takes a few
   seconds per ticket. Never push on your own initiative, and never to
   "fix" `drift` you noticed — report drift, offer the push.
+  **Sprints live in Jira, not lore:** never record a sprint on a ticket.
+  A push puts in-flight tickets that are in no sprint into the active one
+  by itself. When someone asks for work in a sprint ("put JNT-3 in this
+  sprint", "add these to Sprint 15"), call `lore_work_push` with those
+  `keys` and `sprint: "active"` or the sprint's name. To answer "what's in
+  the sprint", read the Jira table in recall (`sprint` on each issue).
 
 Tickets carry no estimates or SOW weeks — never add hours or weeks to a
 ticket, and never derive SOW burn from tickets. Reply with the key and what

@@ -42,6 +42,7 @@ function fakeJira() {
     calls: [] as { path: string; body?: Record<string, unknown> }[],
     rateLimitOnce: false,
     pageSize: 100,
+    sprintField: undefined as string | undefined,
   }
   const json = (b: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(b), { status: 200, headers: { 'content-type': 'application/json' }, ...init })
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -70,6 +71,7 @@ function fakeJira() {
       const isLast = start + state.pageSize >= items.length
       return json({ issues: page, isLast, ...(isLast ? {} : { nextPageToken: String(start + state.pageSize) }) })
     }
+    if (path === '/field' && state.sprintField) return json([{ id: 'summary', schema: {} }, { id: state.sprintField, name: 'Sprint', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }])
     if (url.pathname === '/rest/agile/1.0/board/293/configuration') return json({ id: 293, name: 'Jointly scrum', filter: { id: '10444' } })
     if (url.pathname === '/rest/agile/1.0/board/404/configuration') return json({ errorMessages: ['Board does not exist'] }, { status: 404 })
     if (path === '/filter/10444') return json({ id: '10444', jql: 'project = "Input Logic" AND "Client Project[Dropdown]" = Jointly ORDER BY Rank ASC' })
@@ -241,4 +243,34 @@ test('jira: boards scope by the saved filter JQL; channel is the board name; unk
   const sent = j.calls.filter((c) => c.path.startsWith('/rest/api/3/search/jql')).map((c) => String(c.body?.jql))
   assert.ok(sent.every((q) => q.startsWith('(project = "Input Logic" AND "Client Project[Dropdown]" = Jointly) AND')), sent.join('\n'))
   assert.ok(sent.every((q) => !/ORDER BY Rank/.test(q)), 'filter ORDER BY stripped before AND-ing conditions')
+})
+
+test('jira: the sprint an issue is in is mirrored onto the Jira table and its docs; old fingerprints upgrade without a doc burst', async () => {
+  const state = fakeJira()
+  state.sprintField = 'customfield_10020'
+  const sprints = [
+    { id: 13, name: 'Sprint 13', state: 'closed' },
+    { id: 14, name: 'Sprint 14', state: 'active' },
+  ]
+  state.issues = [issue('ACM-1', { customfield_10020: sprints }), issue('ACM-2', { customfield_10020: [{ id: 15, name: 'Sprint 15', state: 'future' }] }), issue('ACM-3')]
+  const r = await jira.fetch(ctx())
+  const table = readWorkTable(r.files!['context/work/jira/ACM.yaml'])
+  const by = Object.fromEntries(table.map((i) => [i.key, [i.sprint, i.sprint_state]]))
+  assert.deepEqual(by, { 'ACM-1': ['Sprint 14', 'active'], 'ACM-2': ['Sprint 15', 'future'], 'ACM-3': [undefined, undefined] })
+  assert.ok(state.calls.find((c) => c.path.endsWith('/search/jql'))!.body!.fields instanceof Array && (state.calls.find((c) => c.path.endsWith('/search/jql'))!.body!.fields as string[]).includes('customfield_10020'))
+  assert.match(r.docs.find((d) => d.id === 'jira-ACM-1')!.text, /sprint: Sprint 14/)
+  assert.match(r.docs.find((d) => d.id === 'jira-ACM-2')!.text, /sprint: Sprint 15 \(planned\)/)
+
+  // A cursor written before sprints were tracked (7-field fingerprints): same issues, no "changed" docs.
+  const cursor = structuredClone(r.nextCursor) as Record<string, { since: string; fingerprints: Record<string, string> }>
+  for (const [k, fp] of Object.entries(cursor.ACM.fingerprints)) cursor.ACM.fingerprints[k] = JSON.stringify((JSON.parse(fp) as unknown[]).slice(0, 7))
+  cursor.ACM.since = '2026-07-15T00:00:00.000Z'
+  const again = await jira.fetch(ctx({ cursor }))
+  assert.deepEqual(again.docs.filter((d) => !d.id.includes('comment')), [])
+  // …but a real move into a sprint afterwards is news.
+  state.issues[2] = issue('ACM-3', { customfield_10020: sprints, updated: '2026-08-02T10:00:00.000+0000' })
+  const next = structuredClone(again.nextCursor) as typeof cursor
+  next.ACM.since = '2026-08-02T00:00:00.000Z'
+  const moved = await jira.fetch(ctx({ cursor: next }))
+  assert.match(moved.docs.find((d) => d.id.startsWith('jira-ACM-3@'))!.text, /is now: To Do · priority: Medium · sprint: Sprint 14/)
 })

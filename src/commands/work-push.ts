@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { resolveEnvRefs } from '../config.js'
-import { jiraApiFromConfig, type JiraApi, type JiraTransition } from '../connectors/jira.js'
+import { jiraApiFromConfig, type JiraApi, type JiraBoard, type JiraSprint, type JiraTransition } from '../connectors/jira.js'
 import { git, readGlobalConfig, resolveContext } from '../context.js'
 import { authorizeWrite } from '../write.js'
 import { applyChange, findItem, type LoreWorkItem, type WorkStatus } from '../work.js'
@@ -10,6 +10,11 @@ import { mutateBatch, type WorkWriteOptions } from './work.js'
 /**
  * `lore work push` — write lore's tracker state out to Jira. Explicit only
  * (SPEC §7: write-back is a human/agent command, never cron).
+ *
+ * Sprints stay Jira's: lore stores none. A pushed ticket that is in flight
+ * in lore (in_progress / blocked) and in no open sprint is added to the
+ * board's active sprint; `--sprint` puts named tickets in a sprint on
+ * request. Either is a history entry (`jira_sprint`) like any other push.
  *
  * Two kinds of push, decided per ticket:
  * - a ticket linked to a Jira issue whose status disagrees with lore's gets a
@@ -30,11 +35,18 @@ export interface WorkPushInput {
   keys?: string[]
   all?: boolean
   dryRun?: boolean
+  /**
+   * Put these tickets in a Jira sprint on request — "active" for the board's
+   * current sprint, or a sprint's name (active or future). Without it, only
+   * tickets in flight in lore (in_progress / blocked) that sit in no open
+   * sprint are added, to the active one.
+   */
+  sprint?: string
 }
 
 export interface PushAction {
   key: string
-  kind: 'create' | 'transition' | 'skip' | 'error'
+  kind: 'create' | 'transition' | 'sprint' | 'skip' | 'error'
   detail: string
   /** The Jira key involved, when there is one. */
   jira?: string
@@ -57,13 +69,15 @@ const HOST_TIMEOUT_MS = 10 * 60_000
 export async function workPush(cwd: string, input: WorkPushInput, opts: WorkWriteOptions = {}, deps: WorkPushDeps = {}): Promise<WorkPushResult> {
   const keys = (input.keys ?? []).map((k) => k.trim()).filter(Boolean)
   if (keys.length === 0 && !input.all) throw new Error('work push: give ticket keys, or --all for every ticket that differs from Jira')
+  const sprintAsk = input.sprint?.trim() || undefined
+  if (sprintAsk && input.all) throw new Error('work push: --sprint puts named tickets in a sprint — give ticket keys, not --all')
   const ctx = resolveContext(cwd, opts)
   const actor = authorizeWrite(ctx, opts, 'work push')
 
   // Off-host: hand the whole command to the host, where Jira is reachable.
   const target = ctx.mode === 'cache' ? sshTargetFromRemote(readGlobalConfig().remote) : undefined
   if (target && ctx.repo) {
-    const args = ['lore', 'work', 'push', '--context', ctx.repo, '--json', '--by', actor, ...(input.dryRun ? ['--dry-run'] : []), ...(input.all ? ['--all'] : []), ...keys]
+    const args = ['lore', 'work', 'push', '--context', ctx.repo, '--json', '--by', actor, ...(input.dryRun ? ['--dry-run'] : []), ...(input.all ? ['--all'] : []), ...(sprintAsk ? ['--sprint', sprintAsk] : []), ...keys]
     const out = (deps.ssh ?? sshExec)(target, args.map(shellQuote).join(' '), HOST_TIMEOUT_MS)
     const start = out.indexOf('{')
     if (start < 0) throw new Error(`work push: the host returned no result: ${out.slice(0, 300)}`)
@@ -89,8 +103,59 @@ export async function workPush(cwd: string, input: WorkPushInput, opts: WorkWrit
   await mutateBatch(cwd, opts, 'work push', async (items, _prefix, by, at) => {
     const selected = input.all ? items : keys.map((k) => findItem(items, k) ?? k)
     const touched: { key: string; source?: string }[] = []
+    const touch = (key: string, source?: string) => {
+      if (!touched.some((t) => t.key === key)) touched.push({ key, source })
+    }
     let target: PushTarget | undefined
     const targetFor = async () => (target ??= await resolvePushTarget(api, resolved, items))
+    let plan: SprintPlan | undefined
+    const planFor = async () => (plan ??= await resolveSprintPlan(api, resolved, items))
+
+    /**
+     * The sprint half of a push, after the issue exists (or would). Returns
+     * whether it reported anything. In-flight tickets already in an open
+     * sprint are left where the client planned them.
+     */
+    const sprintStep = async (item: LoreWorkItem, jiraKey: string | undefined, created: boolean): Promise<boolean> => {
+      const inFlight = item.status === 'in_progress' || item.status === 'blocked'
+      if (!sprintAsk && !inFlight) return false
+      const p = await planFor()
+      const label = jiraKey ?? 'the new issue'
+      if (p.off || !p.board || !p.sprints) {
+        if (!sprintAsk) return false
+        actions.push({ key: item.key, kind: p.off ? 'skip' : 'error', detail: p.off ? 'sprints are off for this client (sources.jira.push.sprints)' : p.note ?? 'no scrum board to take sprints from', ...(jiraKey ? { jira: jiraKey } : {}) })
+        return true
+      }
+      const wanted = sprintAsk && !/^(active|current)$/i.test(sprintAsk) ? sprintAsk : undefined
+      const sprint = wanted ? p.sprints.find((sp) => sp.name.toLowerCase() === wanted.toLowerCase() || String(sp.id) === wanted) : p.active
+      if (!sprint) {
+        const open = p.sprints.map((sp) => `${sp.name}${sp.state === 'future' ? ' (future)' : ''}`).join(', ') || 'none'
+        actions.push({
+          key: item.key,
+          kind: wanted ? 'error' : 'skip',
+          detail: wanted ? `no open sprint "${wanted}" on board ${p.board.name} (open: ${open})` : `no active sprint on board ${p.board.name} — ${label} left in the backlog`,
+          ...(jiraKey ? { jira: jiraKey } : {}),
+        })
+        return true
+      }
+      const current = created || !jiraKey ? undefined : await api.issueSprint(jiraKey)
+      if (current && !sprintAsk) return false
+      if (current?.id === sprint.id) {
+        actions.push({ key: item.key, kind: 'skip', detail: `${jiraKey} is already in sprint ${sprint.name}`, jira: jiraKey })
+        return true
+      }
+      const why = sprintAsk ? 'asked' : `${item.status} in lore`
+      if (input.dryRun || !jiraKey) {
+        actions.push({ key: item.key, kind: 'sprint', detail: `would add ${label} to sprint ${sprint.name}${current ? ` (from ${current.name})` : ''} — ${why}`, ...(jiraKey ? { jira: jiraKey } : {}) })
+        return true
+      }
+      await api.addToSprint(sprint.id, [jiraKey])
+      const url = item.external?.url ?? jiraKey
+      applyChange(item, {}, { at, by, via: opts.via ?? 'cli', reason: `pushed to Jira: ${jiraKey} added to sprint ${sprint.name} (${why})`, sources: [url] }, { jira_sprint: [current?.name ?? null, sprint.name] })
+      touch(item.key, url)
+      actions.push({ key: item.key, kind: 'sprint', detail: `${jiraKey} → sprint ${sprint.name}${current ? ` (from ${current.name})` : ''} — ${why}`, jira: jiraKey })
+      return true
+    }
 
     for (const sel of selected) {
       if (typeof sel === 'string') {
@@ -116,6 +181,7 @@ export async function workPush(cwd: string, input: WorkPushInput, opts: WorkWrit
           const fields = issueFields(item, t)
           if (input.dryRun) {
             actions.push({ key: item.key, kind: 'create', detail: `would create a ${t.issueTypeName} in ${t.project}${t.scopeNote} — "${item.title}"` })
+            await sprintStep(item, undefined, true)
             continue
           }
           const created = await api.createIssue(fields)
@@ -123,7 +189,7 @@ export async function workPush(cwd: string, input: WorkPushInput, opts: WorkWrit
           item.external = { system: 'jira', id: `jira:${created.key}`, key: created.key, url, status: 'To Do', category: 'To Do' }
           if (!item.sources.includes(url)) item.sources.push(url)
           applyChange(item, {}, { at, by, via: opts.via ?? 'cli', reason: `pushed to Jira as ${created.key} (${t.issueTypeName} in ${t.project}${t.scopeNote})`, sources: [url] }, { external: [null, item.external.id] })
-          touched.push({ key: item.key, source: url })
+          touch(item.key, url)
           actions.push({ key: item.key, kind: 'create', detail: `created ${created.key} (${t.issueTypeName} in ${t.project}${t.scopeNote}) ${url}`, jira: created.key })
           if (item.status !== 'todo') {
             const moved = await transitionFor(api, item, false)
@@ -132,33 +198,40 @@ export async function workPush(cwd: string, input: WorkPushInput, opts: WorkWrit
               actions.push({ key: item.key, kind: 'transition', detail: `${created.key} To Do → ${moved.to.name} (lore: ${item.status})`, jira: created.key })
             }
           }
+          await sprintStep(item, created.key, true)
           continue
         }
         // Linked: transition when lore and Jira disagree.
+        const jiraKey = item.external.key
         if (inSync(item)) {
-          if (!input.all) actions.push({ key: item.key, kind: 'skip', detail: `${item.external.key} already ${item.external.status} — in sync with lore's ${item.status}` })
+          const reported = await sprintStep(item, jiraKey, false)
+          if (!reported && !input.all) actions.push({ key: item.key, kind: 'skip', detail: `${jiraKey} already ${item.external.status} — in sync with lore's ${item.status}` })
           continue
         }
         const moved = await transitionFor(api, item, input.dryRun === true)
         if (!moved) {
-          actions.push({ key: item.key, kind: 'skip', detail: `${item.external.key} is ${item.external.status}; no transition to a "${item.status}" status from there`, jira: item.external.key })
+          actions.push({ key: item.key, kind: 'skip', detail: `${jiraKey} is ${item.external.status}; no transition to a "${item.status}" status from there`, jira: jiraKey })
+          await sprintStep(item, jiraKey, false)
           continue
         }
         const from = item.external.status
         if (input.dryRun) {
-          actions.push({ key: item.key, kind: 'transition', detail: `would move ${item.external.key} ${from} → ${moved.to.name} (lore: ${item.status})`, jira: item.external.key })
+          actions.push({ key: item.key, kind: 'transition', detail: `would move ${jiraKey} ${from} → ${moved.to.name} (lore: ${item.status})`, jira: jiraKey })
+          await sprintStep(item, jiraKey, false)
           continue
         }
         applyTransition(item, moved, { at, by, via: opts.via ?? 'cli' })
-        touched.push({ key: item.key, source: item.external.url })
-        actions.push({ key: item.key, kind: 'transition', detail: `${item.external.key} ${from} → ${moved.to.name} (lore: ${item.status})`, jira: item.external.key })
+        touch(item.key, item.external.url)
+        actions.push({ key: item.key, kind: 'transition', detail: `${jiraKey} ${from} → ${moved.to.name} (lore: ${item.status})`, jira: jiraKey })
+        await sprintStep(item, jiraKey, false)
       } catch (err) {
         actions.push({ key: item.key, kind: 'error', detail: err instanceof Error ? err.message : String(err), ...(item.external ? { jira: item.external.key } : {}) })
       }
     }
     const created = actions.filter((a) => a.kind === 'create').length
     const moved = actions.filter((a) => a.kind === 'transition').length
-    return { touched: input.dryRun ? [] : touched, message: `push to Jira: ${created} created, ${moved} moved` }
+    const sprinted = actions.filter((a) => a.kind === 'sprint').length
+    return { touched: input.dryRun ? [] : touched, message: `push to Jira: ${created} created, ${moved} moved${sprinted ? `, ${sprinted} into a sprint` : ''}` }
   })
 
   return { dryRun: input.dryRun === true, ranOn: 'here', actions }
@@ -294,6 +367,41 @@ export async function resolvePushTarget(api: JiraApi, cfg: Record<string, unknow
     notes.push(`${field.name} = ${c.value}`)
   }
   return { project, issueTypeId: type.id, issueTypeName: type.name, fields, scopeNote: notes.length ? `, ${notes.join(', ')}` : '' }
+}
+
+// ---- sprints ----
+
+interface SprintPlan {
+  off?: boolean
+  board?: JiraBoard
+  /** Open sprints on the board: active first, then future by start. Absent when the board has none (kanban). */
+  sprints?: JiraSprint[]
+  active?: JiraSprint
+  /** Why there is no usable board, for an explicit --sprint. */
+  note?: string
+}
+
+/**
+ * Which board's sprints a push uses: `push.board`, else the first configured
+ * board, else the project's only scrum board. Kanban and simple boards have
+ * no sprints; with several scrum boards and none named, lore does not guess.
+ */
+export async function resolveSprintPlan(api: JiraApi, cfg: Record<string, unknown>, items: LoreWorkItem[]): Promise<SprintPlan> {
+  const push = (cfg.push as { board?: number; sprints?: boolean; project?: string } | undefined) ?? {}
+  if (push.sprints === false) return { off: true }
+  const boardId = push.board ?? ((cfg.boards as number[] | undefined) ?? [])[0]
+  let board: JiraBoard
+  if (boardId) board = await api.boardInfo(boardId)
+  else {
+    const project = push.project ?? ((cfg.projects as string[] | undefined) ?? [])[0] ?? mostCommonProject(items)
+    if (!project) return { note: 'no Jira project to find a sprint board in — set sources.jira.push.board' }
+    const scrum = (await api.projectBoards(project)).filter((b) => b.type === 'scrum')
+    if (scrum.length !== 1) return { note: scrum.length ? `${project} has ${scrum.length} scrum boards (${scrum.map((b) => `${b.name} ${b.id}`).join(', ')}) — set sources.jira.push.board` : `${project} has no scrum board, so no sprints` }
+    board = scrum[0]
+  }
+  if (board.type !== 'scrum') return { board, note: `board ${board.name} is a ${board.type} board — it has no sprints` }
+  const sprints = await api.openSprints(board.id)
+  return { board, sprints, active: sprints.find((sp) => sp.state === 'active') }
 }
 
 /** `"Client Project[Dropdown]" = Jointly AND project = INPT` → [{field: 'Client Project', value: 'Jointly'}, {field: 'project', value: 'INPT'}]. */

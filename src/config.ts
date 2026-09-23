@@ -134,12 +134,21 @@ export const sourceSchemas = {
        * (e.g. "Client Project" = Jointly) resolved against the create screen.
        * Set `fields` explicitly (raw Jira field payloads, e.g.
        * {"customfield_10034": {"id": "10434"}}) when inference can't.
+       *
+       * Sprints: a pushed ticket that is in flight in lore (in_progress or
+       * blocked) and in no open sprint goes into the board's active sprint;
+       * `lore work push --sprint` puts named tickets in one on request. The
+       * board is `board`, else the first of `boards`, else the project's
+       * only scrum board. `sprints: false` turns this off for a client.
+       * Lore's tickets never store a sprint — Jira owns sprint planning.
        */
       push: z
         .object({
           project: z.string().regex(/^[A-Z][A-Z0-9_]+$/).optional(),
           issuetype: z.string().optional(),
           fields: z.record(z.string(), z.unknown()).optional(),
+          board: z.number().int().positive().optional(),
+          sprints: z.boolean().optional(),
         })
         .optional(),
       /** Days re-read on every sync (default 1). */

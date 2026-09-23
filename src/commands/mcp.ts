@@ -43,7 +43,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
   { name: 'lore_work_label', writes: true, summary: 'add or remove a project label on several tickets at once' },
-  { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones (explicit only)' },
+  { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones, put in-flight or requested tickets in a sprint (explicit only)' },
 ]
 
 export interface McpCommandOptions extends ResolveOptions {
@@ -430,15 +430,19 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? unavailable
-        : 'Write lore\'s tracker state to Jira for the given tickets: a ticket linked to a Jira issue whose status disagrees with lore\'s gets the matching workflow transition; an open ticket with no Jira issue gets one created on the client\'s board and linked back. Only when a person asks ("push this to Jira", "create the Jira ticket for JNT-3", "sync Jira"); never on your own initiative. Use dry_run first when the person is unsure what will change. Runs on the lore host; takes a few seconds per ticket.',
+        : 'Write lore\'s tracker state to Jira for the given tickets: a ticket linked to a Jira issue whose status disagrees with lore\'s gets the matching workflow transition; an open ticket with no Jira issue gets one created on the client\'s board and linked back. Tickets in progress or blocked in lore that sit in no Jira sprint go into the board\'s active sprint; with sprint, the given tickets go into that sprint. Lore stores no sprints — Jira owns sprint planning. Only when a person asks ("push this to Jira", "create the Jira ticket for JNT-3", "sync Jira"); never on your own initiative. Use dry_run first when the person is unsure what will change. Runs on the lore host; takes a few seconds per ticket.',
       inputSchema: {
         keys: z.array(z.string().min(1)).optional().describe('ticket keys, e.g. ["JNT-3"] — or all: true'),
         all: z.boolean().optional().describe('every ticket that differs from Jira'),
         dry_run: z.boolean().optional().describe('report what would change without changing Jira'),
+        sprint: z
+          .string()
+          .optional()
+          .describe('put the given tickets in a Jira sprint: "active" for the current one, or a sprint name — only when a person asks for tickets to go into a sprint. Without it, in-flight tickets that are in no sprint go into the active one.'),
       },
     },
-    async ({ keys, all, dry_run }) => {
-      const r = await workPush(rememberOpts.cwd, { keys, all, dryRun: dry_run }, workVia)
+    async ({ keys, all, dry_run, sprint }) => {
+      const r = await workPush(rememberOpts.cwd, { keys, all, dryRun: dry_run, sprint }, workVia)
       return text(r)
     },
   )

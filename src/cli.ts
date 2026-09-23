@@ -349,10 +349,11 @@ contextual(
     .argument('[keys...]', 'ticket keys, e.g. JNT-3 JNT-7')
     .option('--all', 'every ticket that differs from Jira')
     .option('--dry-run', 'show what would change, change nothing')
+    .option('--sprint <name>', 'also put these tickets in a Jira sprint: "active" for the board\'s current one, or a sprint name (without it, only in-flight tickets in no sprint go into the active one)')
     .option('--json', 'machine-readable result')
     .option('--by <who>', 'who is pushing (defaults to OS username)'),
 ).action(async (keys: string[], o) => {
-  const r = await workPush(root, { keys, all: o.all, dryRun: o.dryRun }, o)
+  const r = await workPush(root, { keys, all: o.all, dryRun: o.dryRun, sprint: o.sprint }, o)
   if (o.json) console.log(JSON.stringify(r, null, 2))
   else printPush(r)
 })
