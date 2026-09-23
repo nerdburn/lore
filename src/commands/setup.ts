@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { CONFIG_FILE } from '../config.js'
-import { cachePath, git, readGlobalConfig, remoteUrl, writeGlobalConfig, type GlobalConfig } from '../context.js'
+import { cachePath, git, gitCommit, type GlobalConfig, readGlobalConfig, remoteUrl, writeGlobalConfig } from '../context.js'
 import { scaffold, type ScaffoldConfig } from './init.js'
 import { link } from './link.js'
 import { deriveWorkPrefix } from '../work.js'
@@ -185,7 +185,7 @@ export async function setup(cwd: string, repoArg: string | undefined, flags: Set
     }
     git(root, 'checkout', '-B', 'main')
     git(root, 'add', '-A')
-    git(root, 'commit', '--quiet', '-m', 'chore(lore): scaffold context repo')
+    gitCommit(root, '--quiet', '-m', 'chore(lore): scaffold context repo')
     git(root, 'push', '--quiet', '-u', 'origin', 'main')
     console.log(`✓ created and scaffolded ${ref}`)
 
@@ -357,7 +357,7 @@ function ensureWorkflowRegistered(slug: string, root: string): void {
       const path = join(root, '.github/workflows/lore-sync.yml')
       writeFileSync(path, readFileSync(path, 'utf8') + '\n')
       git(root, 'add', '-A')
-      git(root, 'commit', '--quiet', '-m', 'ci: nudge workflow registration')
+      gitCommit(root, '--quiet', '-m', 'ci: nudge workflow registration')
       git(root, 'push', '--quiet')
     }
     execFileSync('sleep', ['5'])

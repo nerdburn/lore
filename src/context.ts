@@ -201,6 +201,21 @@ export function git(root: string, ...args: string[]): string {
 }
 
 /**
+ * `git commit` as whoever git says the user is, or as "lore" when git has no
+ * identity at all (a CI runner, a fresh service account) — so a write never
+ * fails on "Please tell me who you are", and a person's commit stays theirs.
+ */
+export function gitCommit(root: string, ...args: string[]): string {
+  let hasIdentity = false
+  try {
+    hasIdentity = Boolean(git(root, 'config', 'user.email'))
+  } catch {
+    /* unset */
+  }
+  return git(root, ...(hasIdentity ? [] : ['-c', 'user.name=lore', '-c', 'user.email=lore@localhost']), 'commit', ...args)
+}
+
+/**
  * ~/.lore/registry.json maps project name → "owner/repo". Written as a side
  * effect of every cache resolution, so `lore --project <name> …` works from
  * anywhere after the first use.

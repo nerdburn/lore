@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
-import { git, resolveContext, type ResolveOptions } from '../context.js'
+import { git, gitCommit, resolveContext, type ResolveOptions } from '../context.js'
 import type { Pin } from '../types.js'
 import { authorizeWrite } from '../write.js'
 
@@ -61,7 +61,7 @@ export function remember(cwd: string, fact: string, opts: RememberOptions): Pin 
 
   if (ctx.mode === 'cache') {
     git(ctx.root, 'add', 'context/facts.yaml', AUDIT_FILE)
-    git(ctx.root, 'commit', '--quiet', '-m', `lore: remember ${pin.id} (${pin.category})`)
+    gitCommit(ctx.root, '--quiet', '-m', `lore: remember ${pin.id} (${pin.category})`)
     try {
       git(ctx.root, 'push', '--quiet')
     } catch {

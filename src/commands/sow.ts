@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
-import { git, resolveContext, type ResolveOptions } from '../context.js'
+import { git, gitCommit, resolveContext, type ResolveOptions } from '../context.js'
 import { googleDocId, resolveGoogleDoc, type GoogleDoc } from '../gdoc.js'
 import { pdfText, readDocument as readDocumentFile } from '../document.js'
 import { scrub } from '../scrub.js'
@@ -105,7 +105,7 @@ export async function sowAdd(cwd: string, input: SowAddInput, opts: SowAddOption
 
   if (ctx.mode === 'cache') {
     git(ctx.root, 'add', rel, AUDIT_FILE)
-    git(ctx.root, 'commit', '--quiet', '-m', `lore: sow ${existed ? 'update' : 'add'} ${slug} (${meta.weeks} weeks, effective ${meta.start})`)
+    gitCommit(ctx.root, '--quiet', '-m', `lore: sow ${existed ? 'update' : 'add'} ${slug} (${meta.weeks} weeks, effective ${meta.start})`)
     try {
       git(ctx.root, 'push', '--quiet')
     } catch {

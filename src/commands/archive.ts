@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONFIG_FILE, configSchema } from '../config.js'
-import { cachePath, git, githubRepoFromRemote, resolveContext, unregisterProject, type ResolveOptions } from '../context.js'
+import { cachePath, git, gitCommit, githubRepoFromRemote, resolveContext, type ResolveOptions, unregisterProject } from '../context.js'
 
 export interface ArchiveOptions extends ResolveOptions {
   /** Reopen an archived client instead. */
@@ -69,7 +69,7 @@ export function archive(cwd: string, opts: ArchiveOptions, deps: ArchiveDeps = d
 
   if (existsSync(join(root, '.git'))) {
     git(root, 'add', CONFIG_FILE)
-    git(root, 'commit', '--quiet', '-m', `lore: ${opts.restore ? 'restore' : 'archive'} ${config.project}`)
+    gitCommit(root, '--quiet', '-m', `lore: ${opts.restore ? 'restore' : 'archive'} ${config.project}`)
     try {
       git(root, 'push', '--quiet')
       console.log(`✓ pushed`)

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
-import { git, resolveContext, readGlobalConfig, type ResolveOptions } from '../context.js'
+import { git, gitCommit, readGlobalConfig, resolveContext, type ResolveOptions } from '../context.js'
 import { readDocument } from '../document.js'
 import { googleDocId, resolveGoogleDoc, type GoogleDoc } from '../gdoc.js'
 import { writeDocs } from '../streams.js'
@@ -115,7 +115,7 @@ export async function docAdd(cwd: string, input: DocAddInput, opts: DocAddOption
     })
     if (ctx.mode === 'cache') {
       git(ctx.root, 'add', rel, AUDIT_FILE)
-      git(ctx.root, 'commit', '--quiet', '-m', `lore: doc add ${slug} (${Math.round(text.length / 1000)}k chars)`)
+      gitCommit(ctx.root, '--quiet', '-m', `lore: doc add ${slug} (${Math.round(text.length / 1000)}k chars)`)
       try {
         git(ctx.root, 'push', '--quiet')
       } catch {

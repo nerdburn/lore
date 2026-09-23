@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { CONFIG_FILE, KNOWN_SOURCES, configSchema, type SourceName } from '../config.js'
-import { git, readGlobalConfig, resolveContext, type GlobalConfig, type ResolveOptions } from '../context.js'
+import { git, gitCommit, type GlobalConfig, readGlobalConfig, resolveContext, type ResolveOptions } from '../context.js'
 import { formatStale, sourceStatuses, type SourceState } from '../health.js'
 import { loadState } from '../state.js'
 import { authorizeWrite } from '../write.js'
@@ -138,7 +138,7 @@ export async function sourceAdd(cwd: string, input: SourceAddInput, opts: Source
   const what = plan.added.length ? plan.added.join(', ') : plan.reenabled ? 're-enable' : 'update'
   if (ctx.mode === 'cache') {
     git(ctx.root, 'add', CONFIG_FILE, AUDIT_FILE)
-    git(ctx.root, 'commit', '--quiet', '-m', `lore: source add ${kind} ${what}`)
+    gitCommit(ctx.root, '--quiet', '-m', `lore: source add ${kind} ${what}`)
     try {
       git(ctx.root, 'push', '--quiet')
     } catch {
