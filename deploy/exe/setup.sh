@@ -52,6 +52,14 @@ LORE_EXTRACT=0
 # claude-opus-4-8), LORE_MODEL_INCREMENTAL for the routine one-batch delta
 # (default claude-sonnet-5). Set both to the same id to use one model.
 # LORE_CONCURRENCY=3   clients synced at once
+#
+# Web board (list + kanban at /board; docs/DEPLOY_EXE.md §8). Turning it on
+# means the proxy is public: the host's own pages then need an admin sign-in.
+# LORE_BOARD=1
+# LORE_BOARD_ADMINS=you@yourco.com,teammate@yourco.com
+# LORE_BOARD_EMAIL_FROM="Lore <lore@yourco.com>"          # a Resend-verified domain
+# LORE_BOARD_EMAIL_API=https://resend.int.exe.xyz          # the resend http-proxy integration
+# LORE_BOARD_SESSION_EPOCH=0                               # bump to sign everyone out
 ENV
 chmod 640 /etc/lore/env
 chown root:"$LORE_USER" /etc/lore/env
@@ -132,14 +140,15 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
-# --- systemd: the host's page (playbook + live client status) AND the hosted MCP
+# --- systemd: the host's page (playbook + live client status), the web board
+# (/board, when LORE_BOARD=1 in /etc/lore/env) AND the hosted MCP
 # endpoint (/mcp/<context>) on the exe.dev proxy port. Agents on other VMs reach
 # the endpoint through a peer integration (see docs/DEPLOY_EXE.md §6); who may
 # open which context is $LORE_HOME_DIR/agents.json (`lore agents allow …`).
 [ -f "$LORE_HOME_DIR/agents.json" ] || { echo '{}' > "$LORE_HOME_DIR/agents.json"; chown "$LORE_USER":"$LORE_USER" "$LORE_HOME_DIR/agents.json"; }
 cat > /etc/systemd/system/lore-www.service <<UNIT
 [Unit]
-Description=lore: playbook + client status page + hosted MCP endpoint
+Description=lore: playbook + client status page + web board + hosted MCP endpoint
 After=network-online.target
 
 [Service]

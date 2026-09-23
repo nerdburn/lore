@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describeDegraded, sourceStatuses, type SourceStatus } from '../health.js'
 import type { LoreState } from '../state.js'
 import { basename, join } from 'node:path'
@@ -8,6 +9,8 @@ import { execFileSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { configSchema } from '../config.js'
 import { esc, renderMarkdown } from '../markdown.js'
+import { gitShow } from '../bare.js'
+import { BOARD_PATH, createBoardHandler, type BoardHandler, type BoardOptions } from '../board/http.js'
 import { agentsFilePath, createMcpHttpHandler, MCP_PATH, type McpHttpHandler } from '../mcp-http.js'
 
 export interface WwwOptions {
@@ -19,6 +22,13 @@ export interface WwwOptions {
   mcp?: boolean
   /** Agents file for the MCP endpoint (default ~/.lore/agents.json). */
   agents?: string
+  /**
+   * Serve the web board (/board, /api/board — see board/http.ts). Default:
+   * LORE_BOARD=1 in the environment. With the board on, the proxy is meant
+   * to be public, so the host's own pages (playbook, status.json,
+   * mcp-sessions.json) require a signed-in admin (LORE_BOARD_ADMINS).
+   */
+  board?: boolean | Omit<BoardOptions, 'repos'>
 }
 
 export interface ClientStatus {
@@ -49,12 +59,31 @@ export interface ClientStatus {
  * them — the page and the tools share the port because exe.dev proxies one
  * port per VM.
  */
-export function www(opts: WwwOptions): { close(): Promise<void> } {
+export function www(opts: WwwOptions): { close(): Promise<void>; ready: Promise<number> } {
   const mcp: McpHttpHandler | undefined = opts.mcp === false ? undefined : createMcpHttpHandler({ agentsFile: opts.agents })
+  const boardOn = opts.board ?? /^(1|true|yes|on)$/i.test(process.env.LORE_BOARD ?? '')
+  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ repos: opts.repos, ...(typeof boardOn === 'object' ? boardOn : {}) }) : undefined
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
       if (mcp && (await mcp.handle(req, res, url))) return
+      if (board && (await board.handle(req, res, url))) return
+      if (url.pathname === '/healthz') {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.end('ok\n')
+        return
+      }
+      // A public host: everything below is for admins only.
+      if (board && !board.isAdmin(req)) {
+        if (url.pathname === '/' || url.pathname === '/index.html') {
+          res.writeHead(302, { location: `${BOARD_PATH}/` })
+          res.end()
+        } else {
+          res.writeHead(401, { 'content-type': 'text/plain' })
+          res.end('sign in on /board as a host admin\n')
+        }
+        return
+      }
       if (url.pathname === '/status.json') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ generated: new Date().toISOString(), clients: clientStatuses(opts.repos) }, null, 2))
@@ -63,11 +92,6 @@ export function www(opts: WwwOptions): { close(): Promise<void> } {
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
         res.end(page('lore', statusSection(clientStatuses(opts.repos)) + renderMarkdown(playbookMarkdown())))
-        return
-      }
-      if (url.pathname === '/healthz') {
-        res.writeHead(200, { 'content-type': 'text/plain' })
-        res.end('ok\n')
         return
       }
       if (url.pathname === '/mcp-sessions.json') {
@@ -82,11 +106,14 @@ export function www(opts: WwwOptions): { close(): Promise<void> } {
       res.end(`error: ${err instanceof Error ? err.message : err}\n`)
     }
   })
+  const ready = new Promise<number>((resolve) => server.once('listening', () => resolve((server.address() as AddressInfo).port)))
   server.listen(opts.port, opts.host ?? '0.0.0.0', () => {
     console.log(`lore www: http://${opts.host ?? '0.0.0.0'}:${opts.port}/  (repos: ${opts.repos})`)
     if (mcp) console.log(`lore mcp: ${MCP_PATH}/<context>  (agents: ${opts.agents ?? agentsFilePath()})`)
+    if (board) console.log(`lore board: ${BOARD_PATH}/  (host pages now require an admin sign-in)`)
   })
   return {
+    ready,
     close: async () => {
       await mcp?.close()
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
@@ -128,15 +155,6 @@ export function clientStatuses(reposDir: string): ClientStatus[] {
       }
       return status
     })
-}
-
-function gitShow(dir: string, path: string, optional = false): string {
-  try {
-    return execFileSync('git', ['-C', dir, 'show', `HEAD:${path}`], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
-  } catch (err) {
-    if (optional) return ''
-    throw err
-  }
 }
 
 function playbookMarkdown(): string {

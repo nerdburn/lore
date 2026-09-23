@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { agentsAllow, agentsList, agentsRevoke } from './commands/agents.js'
+import { boardAdd, boardEnable, boardRemove, boardShow } from './commands/board.js'
 import { archive } from './commands/archive.js'
 import { auth } from './commands/auth.js'
 import { check } from './commands/check.js'
@@ -129,9 +130,28 @@ program
   .option('--host <addr>', 'bind address (default 0.0.0.0)')
   .option('--agents <file>', 'who may open which context over MCP (default ~/.lore/agents.json; see `lore agents`)')
   .option('--no-mcp', 'serve the page only, no MCP endpoint')
+  .option('--board', 'serve the web board at /board (default: LORE_BOARD=1 in the environment)')
   .action((opts) => {
-    www({ repos: opts.repos, port: Number(opts.port), host: opts.host, agents: opts.agents, mcp: opts.mcp })
+    www({ repos: opts.repos, port: Number(opts.port), host: opts.host, agents: opts.agents, mcp: opts.mcp, board: opts.board })
   })
+
+const board = program
+  .command('board')
+  .description('the web board (list + kanban over the work tracker, `lore www` with LORE_BOARD=1): turn it on per project, and say who may sign in')
+contextual(board.command('enable').description('turn the board on for this project').option('--by <who>', 'who is changing it')).action((o) => void boardEnable(root, true, o))
+contextual(board.command('disable').description('turn the board off (no web view for anyone, admins included)').option('--by <who>', 'who is changing it')).action((o) => void boardEnable(root, false, o))
+contextual(
+  board
+    .command('add')
+    .description('let people sign in: emails, or @domain for everyone at a domain; members may edit, viewers only look')
+    .argument('<entries...>', 'jane@acme.com, @acme.com')
+    .option('--viewer', 'read-only (default: member)')
+    .option('--by <who>', 'who is changing it'),
+).action((entries: string[], o) => void boardAdd(root, entries, o.viewer ? 'viewer' : 'member', o))
+contextual(board.command('remove').description('take people off the board (their sessions stop working at once)').argument('<entries...>').option('--by <who>', 'who is changing it')).action(
+  (entries: string[], o) => void boardRemove(root, entries, o),
+)
+contextual(board.command('show').description('is the board on, and who may sign in').option('--json', 'machine-readable output')).action((o) => void boardShow(root, o))
 
 const agents = program
   .command('agents')
@@ -256,6 +276,7 @@ contextual(
     .command('add')
     .description('add a work item; commits and pushes')
     .argument('<title>', 'what the work is')
+    .option('--description <md>', 'markdown body — what the ticket is')
     .option('--status <s>', `${['todo', 'in_progress', 'blocked', 'done', 'archived'].join(' | ')} (default todo)`)
     .option('--priority <p>', 'P1 | P2 | P3')
     .option('--assignee <who>', 'who is on it')
@@ -265,7 +286,7 @@ contextual(
     .option('--reason <why>', 'why this is being tracked (recorded in history)')
     .option('--by <who>', 'who is adding this (defaults to OS username)'),
 ).action((title: string, o) => {
-  workAdd(root, { title, status: o.status, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external, reason: o.reason }, o)
+  workAdd(root, { title, description: o.description, status: o.status, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external, reason: o.reason }, o)
 })
 contextual(
   work
@@ -294,9 +315,10 @@ contextual(
 contextual(
   work
     .command('set')
-    .description('change title, priority, assignee, labels, evidence, or the linked tracker issue')
+    .description('change title, description, priority, assignee, labels, evidence, or the linked tracker issue')
     .argument('<key>', 'e.g. CAR-3')
     .option('--title <title>')
+    .option('--description <md>', 'markdown body ("" to clear)')
     .option('--priority <p>', 'P1 | P2 | P3')
     .option('--assignee <who>', 'who is on it ("" to clear)')
     .option('--labels <list>', 'comma-separated, replaces the list')
@@ -305,7 +327,7 @@ contextual(
     .requiredOption('--reason <why>', 'why — recorded in history')
     .option('--by <who>', 'who is changing it'),
 ).action((key: string, o) => {
-  workSet(root, key, { title: o.title, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external }, { reason: o.reason }, o)
+  workSet(root, key, { title: o.title, description: o.description, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external }, { reason: o.reason }, o)
 })
 contextual(
   work

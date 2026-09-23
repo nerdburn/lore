@@ -30,7 +30,7 @@ import {
 export interface WorkWriteOptions extends ResolveOptions {
   /** CLI only: who is doing this. MCP callers can never set it. */
   by?: string
-  via?: 'cli' | 'mcp'
+  via?: 'cli' | 'mcp' | 'web'
   /** Hosted MCP only: the platform-attested caller; see WriteGateOptions. */
   actor?: string
 | 'mcp'
@@ -40,6 +40,7 @@ export interface WorkWriteOptions extends ResolveOptions {
 
 export interface WorkAddInput {
   title: string
+  description?: string
   status?: WorkStatus
   priority?: WorkPriority
   assignee?: string
@@ -52,6 +53,8 @@ export interface WorkAddInput {
 
 export interface WorkSetInput {
   title?: string
+  /** Markdown body; "" clears it. */
+  description?: string
   priority?: WorkPriority
   assignee?: string
   labels?: string[]
@@ -200,6 +203,7 @@ export function workAdd(cwd: string, input: WorkAddInput, opts: WorkWriteOptions
     const item: LoreWorkItem = {
       key: nextKey(items, prefix),
       title,
+      ...(input.description?.trim() ? { description: input.description.trim() } : {}),
       status,
       state: stateFor(status),
       ...(priority ? { priority } : {}),
@@ -302,6 +306,7 @@ export function workSet(cwd: string, key: string, fields: WorkSetInput, input: C
       item,
       {
         ...(fields.title?.trim() ? { title: fields.title.trim() } : {}),
+        ...(fields.description !== undefined ? { description: fields.description.trim() || undefined } : {}),
         ...(priority ? { priority } : {}),
         ...(fields.assignee !== undefined ? { assignee: fields.assignee.trim() || undefined } : {}),
         ...(fields.labels ? { labels: cleanList(fields.labels) } : {}),

@@ -31,8 +31,8 @@ export type WorkStatus = 'todo' | 'in_progress' | 'blocked' | 'done' | 'archived
 export const WORK_STATUSES: WorkStatus[] = ['todo', 'in_progress', 'blocked', 'done', 'archived']
 export type WorkPriority = 'P1' | 'P2' | 'P3'
 export const WORK_PRIORITIES: WorkPriority[] = ['P1', 'P2', 'P3']
-/** The surface a change came through. `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
-export type WorkVia = 'cli' | 'mcp' | 'sync' | 'fold'
+/** The surface a change came through. `web` = the board (`lore www`); `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
+export type WorkVia = 'cli' | 'mcp' | 'web' | 'sync' | 'fold'
 export type WorkState = 'open' | 'closed'
 
 export interface ExternalRef {
@@ -68,6 +68,8 @@ export interface WorkHistoryEntry {
 export interface LoreWorkItem {
   key: string
   title: string
+  /** Optional markdown body — what the ticket is, for people reading it on the board. */
+  description?: string
   status: WorkStatus
   state: WorkState
   priority?: WorkPriority
@@ -90,7 +92,7 @@ export interface WorkItemSummary extends Omit<LoreWorkItem, 'history'> {
   drift?: boolean
 }
 
-export const HUMAN_VIAS: WorkVia[] = ['cli', 'mcp']
+export const HUMAN_VIAS: WorkVia[] = ['cli', 'mcp', 'web']
 
 // ---- prefix / file ----
 
@@ -178,7 +180,7 @@ export function findItem(items: LoreWorkItem[], key: string): LoreWorkItem | und
 
 // ---- changes ----
 
-export type WorkFields = Partial<Pick<LoreWorkItem, 'status' | 'priority' | 'title' | 'assignee' | 'labels'>>
+export type WorkFields = Partial<Pick<LoreWorkItem, 'status' | 'priority' | 'title' | 'description' | 'assignee' | 'labels'>>
 
 export interface ChangeMeta {
   at: string

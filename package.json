@@ -8,6 +8,7 @@
   },
   "files": [
     "dist",
+    "web/dist",
     "manifests",
     "docs/PLAYBOOK.md"
   ],
@@ -16,8 +17,9 @@
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "prepare": "npm run build",
-    "prepublishOnly": "npm run build"
+    "prepare": "npm run build && npm run build:web",
+    "prepublishOnly": "npm run build && npm run build:web",
+    "build:web": "npm --prefix web ci --no-audit --no-fund && npm --prefix web run build"
   },
   "engines": {
     "node": ">=20.12"

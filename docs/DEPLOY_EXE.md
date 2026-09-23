@@ -28,7 +28,8 @@ needs the dev toolchain there; the tarball path needs nothing but Node.)
 enables `lore-sync.timer` (every 15 minutes; `INTERVAL=1h` to change), and starts
 `lore-www.service` on the exe.dev proxy port, so `https://lore-host.exe.xyz`
 shows the onboarding playbook and a live client status table (private to the
-account; `ssh exe.dev share` to open it to others). Re-run it to
+account; `ssh exe.dev share` to open it to others — with the web board on,
+the proxy is public and these pages need an admin sign-in, see §8). Re-run it to
 upgrade lore. Logs: `ssh lore-host.exe.xyz journalctl -u lore-sync -f`.
 
 ## 2. Secrets as integrations
@@ -257,3 +258,61 @@ them once the config changes.
   GitHub org through the GitHub integration.
 - Access = SSH access to the VM (`ssh exe.dev share`, or team membership).
   Per-client read scoping is the remote-MCP milestone, not this layer.
+
+## 8. The web board
+
+`lore www` can serve a list + kanban view of each project's tracker at
+`/board`, for your team and the client's people. It is off twice over: per
+host (`LORE_BOARD=1`) and per project (`lore board enable`).
+
+**Turning it on makes the host public.** Clients have no exe.dev account, so
+the proxy has to be opened (`ssh exe.dev share` → public). With the board
+on, everything that used to rely on the proxy being private is gated
+instead: `/`, `/status.json` and `/mcp-sessions.json` need a signed-in host
+admin (others are sent to `/board`). `/mcp/<context>` is unchanged — its
+identity is the `X-Exedev-Source-Vm` header the edge sets on peer requests,
+and it refuses anything without one. Verify that after going public:
+`curl -si https://lore-host.exe.xyz/mcp/lore-acme -H 'x-exedev-source-vm: x'`
+must be a 401 (the edge strips the header from outside callers).
+
+**Email.** Sign-in is an emailed 6-digit code, sent through Resend. The key
+lives in an integration, never on the VM:
+
+```sh
+ssh exe.dev integrations add http-proxy --name resend --target https://api.resend.com \
+    --bearer re_… --attach vm:lore-host
+```
+
+Verify the sending domain in Resend first. Then in `/etc/lore/env`:
+
+```sh
+LORE_BOARD=1
+LORE_BOARD_ADMINS=shawn@inputlogic.ca            # members of every enabled board + the host pages
+LORE_BOARD_EMAIL_FROM="Lore <lore@inputlogic.ca>"
+LORE_BOARD_EMAIL_API=https://resend.int.exe.xyz
+```
+
+`sudo systemctl restart lore-www`. Sessions are signed with a key generated
+once into `~/.lore/board-secret` (or `LORE_BOARD_SECRET`); a session lasts
+90 days and renews as it is used. `LORE_BOARD_SESSION_EPOCH=<new value>` +
+restart signs everyone out.
+
+**Per project** (on the host or from a laptop — it is a lore.json commit):
+
+```sh
+lore board enable --context lore-acme
+lore board add priya@acme.com --context lore-acme          # member
+lore board add @acme.com --viewer --context lore-acme      # the whole domain, read-only
+```
+
+Access is read from lore.json at HEAD on every request, so adding or
+removing someone takes effect at once, with no restart. A disabled board
+has no web view for anyone, admins included. An archived client's board
+is read-only.
+
+What a board write does: the same `lore work` call the CLI makes — history
+entry (`via: web`, `by: <email>`), audit line, commit, push — queued behind
+any MCP write on the same context, since both use the host's one cache
+clone. Codes are rate-limited per address and per IP; asking for a code for
+an address with no access sends nothing and answers the same as one that
+has access.

@@ -233,7 +233,7 @@ async function transitionFor(api: JiraApi, item: LoreWorkItem, _dryRun: boolean)
   return t
 }
 
-function applyTransition(item: LoreWorkItem, t: JiraTransition, meta: { at: string; by: string; via: 'cli' | 'mcp' }): void {
+function applyTransition(item: LoreWorkItem, t: JiraTransition, meta: { at: string; by: string; via: 'cli' | 'mcp' | 'web' }): void {
   const ext = item.external!
   const from = ext.status
   ext.status = t.to.name

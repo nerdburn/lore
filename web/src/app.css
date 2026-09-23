@@ -1,0 +1,80 @@
+@import 'tailwindcss';
+@import '@heroui/styles';
+
+/* Lore's palette on top of HeroUI's light/dark themes: warm paper, ink, and a
+   rust accent — the same colours as the host's status page. */
+@layer base {
+  :root,
+  .light,
+  [data-theme='light'] {
+    --background: oklch(0.984 0.006 85);
+    --foreground: oklch(0.22 0.008 70);
+    --surface: oklch(1 0 0);
+    --muted: oklch(0.52 0.012 70);
+    --default: oklch(0.945 0.008 80);
+    --accent: oklch(0.47 0.11 50);
+    --accent-foreground: oklch(0.985 0.006 85);
+    --border: oklch(0.88 0.012 80);
+    --separator: oklch(0.91 0.01 80);
+    --focus: var(--accent);
+    --link: var(--accent);
+  }
+  .dark,
+  [data-theme='dark'] {
+    --background: oklch(0.19 0.006 70);
+    --foreground: oklch(0.93 0.01 80);
+    --surface: oklch(0.23 0.007 70);
+    --overlay: oklch(0.25 0.008 70);
+    --muted: oklch(0.68 0.012 75);
+    --default: oklch(0.28 0.008 70);
+    --accent: oklch(0.76 0.11 60);
+    --accent-foreground: oklch(0.19 0.006 70);
+    --border: oklch(0.32 0.008 70);
+    --separator: oklch(0.3 0.008 70);
+    --field-background: oklch(0.26 0.008 70);
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Rendered ticket descriptions. */
+.prose-lore p,
+.prose-lore ul,
+.prose-lore ol,
+.prose-lore pre {
+  margin: 0 0 0.6em;
+}
+.prose-lore ul {
+  list-style: disc;
+  padding-left: 1.25em;
+}
+.prose-lore ol {
+  list-style: decimal;
+  padding-left: 1.25em;
+}
+.prose-lore code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--default);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.prose-lore a {
+  color: var(--link);
+  text-decoration: underline;
+}

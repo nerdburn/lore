@@ -4,7 +4,7 @@ import type { ResolvedContext } from './context.js'
 export interface WriteGateOptions {
   /** CLI only: who authorized this. MCP callers can never set it. */
   by?: string
-  via?: 'cli' | 'mcp'
+  via?: 'cli' | 'mcp' | 'web'
   /**
    * Hosted MCP only: the caller the platform vouched for (the peer VM named
    * in X-Exedev-Source-Vm), set by the server from the request — never from
@@ -27,7 +27,10 @@ export function authorizeWrite(ctx: ResolvedContext, opts: WriteGateOptions, nou
   }
   const via = opts.via ?? 'cli'
   const actor = opts.actor ?? (via === 'cli' && opts.by ? opts.by : userInfo().username)
-  const allow = ctx.config.write?.allow
+  // The board checks its own roles (lore.json `board.members`) before it
+  // writes, so `write.allow` — which names OS users and agents — does not
+  // apply to a signed-in email.
+  const allow = via === 'web' ? undefined : ctx.config.write?.allow
   if (allow && !allow.includes(actor)) throw new Error(`"${actor}" is not in lore.json write.allow — ${noun} refused`)
   return actor
 }

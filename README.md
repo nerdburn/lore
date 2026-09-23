@@ -413,6 +413,9 @@ for clients with Jira or GitHub Issues and for clients with nothing.
   `lore work push` writes back.
 - **Moved by people and agents** with `lore work` or the `lore_work_*` MCP
   tools. A reason is required on every move; it is the paper trail.
+- **On the web board** — list and kanban views at `/board` on the lore host,
+  for your team and the client's people. Email one-time-code sign-in, per
+  project, members edit and viewers look (below).
 
 ```sh
 lore work add "Caregiver onboarding email sequence" --priority P1 --source https://slack.com/archives/…
@@ -428,8 +431,29 @@ lore work show CAR-2                            # the ticket with its full histo
 ```
 
 Statuses: `todo`, `in_progress`, `blocked`, `done`, `archived`. Priorities
-`P1`–`P3`; file order is rank. Tickets deliberately carry no estimates or
+`P1`–`P3`; file order is rank. A ticket may carry a markdown `description`
+(`--description`), shown on the board. Tickets deliberately carry no estimates or
 SOW weeks — they are delivery tracking, not capacity burn.
+
+**The board.** An optional web view over the tracker, served by `lore www`
+on the host when `LORE_BOARD=1`: a kanban (drag between columns and within
+one — a move and a rank, as if from `lore work`) and a sortable, filterable
+list, with a ticket drawer for editing fields and the description and
+reading the full history. It is off per project until turned on:
+
+```sh
+lore board enable --context lore-acme
+lore board add jane@acme.com --context lore-acme            # member: create, edit, move
+lore board add @acme.com --viewer --context lore-acme       # everyone at the domain, read-only
+lore board remove jane@acme.com --context lore-acme         # their session stops working at once
+lore board show --context lore-acme
+```
+
+People sign in with an emailed 6-digit code and stay signed in for 90 days.
+Host admins (`LORE_BOARD_ADMINS`) are members of every enabled board. Every
+board change is a history entry `via: web` signed with the person's email,
+committed and pushed like any other write — the fold treats it as a human
+decision. Setup on the host: docs/DEPLOY_EXE.md §8.
 
 **Pushing to Jira.** Lore's state flows back out only when someone asks:
 
@@ -637,7 +661,8 @@ cites sources, never pins uninvited); run them with
 | `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; a failed source doesn't stop the others, but exits non-zero if any enabled source failed) |
 | `lore extract [--report] [--review]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
 | `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
-| `lore www --repos d [--port 8000]` | serve the onboarding playbook + live client status (self-hosted host page) |
+| `lore www --repos d [--port 8000] [--board]` | serve the onboarding playbook + live client status (self-hosted host page), the hosted MCP endpoint, and with `--board`/`LORE_BOARD=1` the web board |
+| `lore board enable\|disable\|add\|remove\|show` | per project: turn the web board on, and say who may sign in (`--viewer` for read-only) |
 | `lore init` | scaffold a context repo by hand |
 | `lore check` | validate config, connectors, env refs; print per-source sync health |
 | `lore manifest slack` | print the bundled Slack app manifest |
@@ -671,7 +696,14 @@ npm install
 npm test          # node:test via tsx — fixtures only, no credentials needed
 npm run typecheck
 npm run build
+npm run build:web # the board SPA (web/, Vite + React + HeroUI) → web/dist
 ```
+
+The board UI lives in `web/` with its own dependencies, so the CLI install
+never pulls in React. For UI work, run `lore www --repos <dir> --board` on
+:8000 and `npm --prefix web run dev` — Vite proxies `/api` to it. Without
+`LORE_BOARD_EMAIL_FROM`/`LORE_BOARD_EMAIL_API`, sign-in codes are printed
+to the server log instead of emailed.
 
 CI (`.github/workflows/ci.yml`) runs the same three on every push and PR.
 Tests cover config validation (typed per-source schemas), the secrets
@@ -680,8 +712,8 @@ scrubber, stream writing and dedup, every connector against a fake API
 Granola OAuth, sync/check failure handling, context resolution, archive,
 recall, every MCP tool over an in-memory transport, `remember` + audit,
 extract output parsing and merging, the self-hosted runner and refresh,
-statements of work (add, recall layer, MCP tool, PDF extraction), and the
-`lore www` host page.
+statements of work (add, recall layer, MCP tool, PDF extraction), the
+`lore www` host page, and the board (sign-in, roles, writes over HTTP).
 
 ## Status
 

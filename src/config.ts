@@ -222,6 +222,12 @@ export const clientSchema = z.object({
 })
 export type Client = z.infer<typeof clientSchema>
 
+/** A board member/viewer: "jane@client.com" or "@client.com" (the whole domain). Lower-cased. */
+export const boardPrincipal = z
+  .string()
+  .transform((e) => e.trim().toLowerCase())
+  .refine((e) => /^@[a-z0-9.-]+\.[a-z]{2,}$/.test(e) || z.string().email().safeParse(e).success, 'board entries are emails or "@domain"')
+
 export const configSchema = z.object({
   project: z.string().min(1),
   client: clientSchema.optional(),
@@ -247,6 +253,19 @@ export const configSchema = z.object({
    * when absent. Written by `lore setup` for new clients.
    */
   work: z.object({ prefix: z.string().regex(/^[A-Z][A-Z0-9]{1,5}$/, 'work.prefix must be 2–6 uppercase letters/digits starting with a letter, e.g. "CAR"') }).optional(),
+  /**
+   * The web board (`lore www` with LORE_BOARD=1): list + kanban over the work
+   * tracker. Off unless `enabled`. `members` may create, edit and move
+   * tickets; `viewers` may only look. Entries are emails, or "@domain" for
+   * everyone at a domain. Managed by `lore board`, never by hand.
+   */
+  board: z
+    .object({
+      enabled: z.boolean().default(false),
+      members: z.array(boardPrincipal).default([]),
+      viewers: z.array(boardPrincipal).default([]),
+    })
+    .optional(),
 })
 
 export type LoreConfig = z.infer<typeof configSchema>

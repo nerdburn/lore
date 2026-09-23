@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { createServer } from './commands/mcp.js'
 import { loreHome, resolveContext } from './context.js'
+import { serializeFor } from './queue.js'
 
 /**
  * The hosted MCP server: one HTTP endpoint on the lore host that every agent
@@ -108,16 +109,6 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
   const idleMs = opts.idleMs ?? 30 * 60_000
   const log = opts.log ?? ((line: string) => console.log(`[mcp] ${line}`))
   const sessions = new Map<string, Session>()
-  // One write at a time per context: every session on it shares a clone.
-  const queues = new Map<string, Promise<unknown>>()
-  const serializeFor = (context: string) => {
-    return <T>(fn: () => Promise<T>): Promise<T> => {
-      const prev = queues.get(context) ?? Promise.resolve()
-      const next = prev.then(fn, fn)
-      queues.set(context, next.catch(() => undefined))
-      return next
-    }
-  }
 
   const reaper = setInterval(() => {
     const now = Date.now()

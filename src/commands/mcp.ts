@@ -315,6 +315,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         : 'Create a work item in the lore tracker (the tracker of record). Use when a person asks to track/ticket something new; to track an existing derived request use lore_work_promote instead. Give a title and a reason; link a Jira/GitHub issue with external ("jira:INPT-9" / "github:owner/repo#42") if one exists.',
       inputSchema: {
         title: z.string().min(1),
+        description: z.string().optional().describe('markdown body: what the ticket is, for people reading it'),
         status: z.enum(WORK_STATUSES as [string, ...string[]]).optional().describe('default todo'),
         priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
         assignee: z.string().optional(),
@@ -324,8 +325,8 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         reason: reasonField,
       },
     },
-    async ({ title, status, priority, assignee, labels, sources, external, reason }) => {
-      const item = workAdd(rememberOpts.cwd, { title, status: status as never, priority: priority as never, assignee, labels, sources, external, reason }, workVia)
+    async ({ title, description, status, priority, assignee, labels, sources, external, reason }) => {
+      const item = workAdd(rememberOpts.cwd, { title, description, status: status as never, priority: priority as never, assignee, labels, sources, external, reason }, workVia)
       return text(`added ${item.key}: ${item.title} [${item.status}]`)
     },
   )
@@ -373,10 +374,11 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? unavailable
-        : 'Change a work item\'s title, priority, assignee, labels, evidence links, linked tracker issue, or rank (rank_above = the key it should sit directly above; "top" / "bottom" also accepted). Always with a reason.',
+        : 'Change a work item\'s title, description, priority, assignee, labels, evidence links, linked tracker issue, or rank (rank_above = the key it should sit directly above; "top" / "bottom" also accepted). Always with a reason.',
       inputSchema: {
         key: z.string().min(1),
         title: z.string().optional(),
+        description: z.string().optional().describe('markdown body; "" clears it'),
         priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
         assignee: z.string().optional().describe('"" clears it'),
         labels: z.array(z.string()).optional().describe('replaces the list'),
@@ -386,10 +388,10 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         reason: reasonField,
       },
     },
-    async ({ key, title, priority, assignee, labels, sources, external, rank_above, reason }) => {
+    async ({ key, title, description, priority, assignee, labels, sources, external, rank_above, reason }) => {
       const notes: string[] = []
-      if (title !== undefined || priority !== undefined || assignee !== undefined || labels !== undefined || sources !== undefined || external !== undefined) {
-        const item = workSet(rememberOpts.cwd, key, { title, priority: priority as never, assignee, labels, sources, external }, { reason }, workVia)
+      if (title !== undefined || description !== undefined || priority !== undefined || assignee !== undefined || labels !== undefined || sources !== undefined || external !== undefined) {
+        const item = workSet(rememberOpts.cwd, key, { title, description, priority: priority as never, assignee, labels, sources, external }, { reason }, workVia)
         notes.push(`updated ${item.key}`)
       }
       if (rank_above !== undefined) {
