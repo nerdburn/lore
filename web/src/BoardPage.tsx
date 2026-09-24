@@ -1,6 +1,6 @@
 import { Plus } from '@gravity-ui/icons'
 import { Button, Label, ListBox, SearchField, Select, Spinner, Tabs, toast } from '@heroui/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Key } from 'react'
 import { api, ApiError, type Board, type Item, type Status } from './api'
 import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
@@ -11,7 +11,6 @@ import { navigate, type Filters, type Route } from './router'
 
 type BoardRoute = Extract<Route, { name: 'board' }>
 
-const ALL = '__all'
 const NONE = 'none'
 const POLL_MS = 30_000
 
@@ -146,8 +145,13 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
-        <FilterSelect label="Label" value={filters.label ?? ALL} options={board.labels} onChange={(label) => setFilters((f) => ({ ...f, label: label === ALL ? undefined : label }))} />
-        <FilterSelect label="Assignee" value={filters.assignee ?? ALL} options={board.assignees} onChange={(assignee) => setFilters((f) => ({ ...f, assignee: assignee === ALL ? undefined : assignee }))} withNone />
+        <FilterSelect label="Label" value={filters.labels} options={board.labels} onChange={(labels) => setFilters((f) => ({ ...f, labels }))} />
+        <FilterSelect label="Assignee" value={filters.assignees} options={board.assignees} onChange={(assignees) => setFilters((f) => ({ ...f, assignees }))} withNone />
+        {(filters.labels.length > 0 || filters.assignees.length > 0 || filters.q) && (
+          <Button size="sm" variant="ghost" onPress={() => setFilters((f) => ({ ...f, q: '', labels: [], assignees: [] }))}>
+            Clear filters
+          </Button>
+        )}
       </div>
 
       {route.view === 'kanban' ? (
@@ -181,29 +185,22 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   )
 }
 
-function FilterSelect({ label, value, options, onChange, withNone }: { label: string; value: string; options: string[]; onChange: (v: string) => void; withNone?: boolean }) {
+/** A multi-select filter: pick any number; none picked means "any". */
+function FilterSelect({ label, value, options, onChange, withNone }: { label: string; value: string[]; options: string[]; onChange: (v: string[]) => void; withNone?: boolean }) {
+  const name = (v: string) => (v === NONE ? 'Unassigned' : v)
+  const summary = value.length === 0 ? `${label}: any` : value.length <= 2 ? `${label}: ${value.map(name).join(', ')}` : `${label}: ${value.length} selected`
   return (
-    <Select className="w-44" selectedKey={value} onSelectionChange={(k) => onChange(String(k ?? ALL))}>
+    <Select className="w-52" selectionMode="multiple" value={value} onChange={(keys) => onChange(((keys as Key[] | null) ?? []).map(String))} aria-label={label}>
       <Label className="sr-only">{label}</Label>
       <Select.Trigger>
-        <Select.Value>{({ defaultChildren, isPlaceholder }) => (value === ALL || isPlaceholder ? `${label}: any` : defaultChildren)}</Select.Value>
+        <Select.Value className="min-w-0 flex-1 pr-2">{() => <span className="block truncate">{summary}</span>}</Select.Value>
         <Select.Indicator />
       </Select.Trigger>
       <Select.Popover>
-        <ListBox>
-          <ListBox.Item id={ALL} textValue={`Any ${label.toLowerCase()}`}>
-            Any {label.toLowerCase()}
-            <ListBox.ItemIndicator />
-          </ListBox.Item>
-          {withNone ? (
-            <ListBox.Item id={NONE} textValue="Unassigned">
-              Unassigned
-              <ListBox.ItemIndicator />
-            </ListBox.Item>
-          ) : null}
-          {options.map((o) => (
-            <ListBox.Item key={o} id={o} textValue={o}>
-              {o}
+        <ListBox selectionMode="multiple">
+          {[...(withNone ? [NONE] : []), ...options].map((o) => (
+            <ListBox.Item key={o} id={o} textValue={name(o)}>
+              {name(o)}
               <ListBox.ItemIndicator />
             </ListBox.Item>
           ))}
@@ -218,8 +215,8 @@ function applyFilters(items: Item[], f: Filters): Item[] {
   return items.filter(
     (i) =>
       (!q || i.key.toLowerCase().includes(q) || i.title.toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q)) &&
-      (!f.label || i.labels.some((l) => l.toLowerCase() === f.label!.toLowerCase())) &&
-      (!f.assignee || (f.assignee === NONE ? !i.assignee : i.assignee === f.assignee)),
+      (f.labels.length === 0 || i.labels.some((l) => f.labels.some((w) => w.toLowerCase() === l.toLowerCase()))) &&
+      (f.assignees.length === 0 || f.assignees.some((a) => (a === NONE ? !i.assignee : i.assignee === a))),
   )
 }
 

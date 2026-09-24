@@ -34,7 +34,7 @@ export function Header({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
           </a>
         )}
         <Dropdown>
-          <Button variant="ghost" size="sm" aria-label="Account">
+          <Button aria-label="Account" className="h-auto min-w-0 rounded-full border-0 bg-transparent p-0 shadow-none ring-2 ring-transparent ring-offset-2 ring-offset-background transition-[box-shadow] outline-none hover:bg-transparent hover:ring-accent/70 focus-visible:ring-accent data-[hovered=true]:bg-transparent data-[pressed=true]:scale-100">
             <PersonAvatar email={me.email} px={32} tooltip={false} />
           </Button>
           <Dropdown.Popover placement="bottom end">

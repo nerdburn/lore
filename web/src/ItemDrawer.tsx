@@ -3,7 +3,7 @@ import { Button, Drawer, Input, Label, Spinner, TextArea, TextField } from '@her
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, PRIORITIES, STATUS_LABEL, UNASSIGNED, WORK_ORDER, type Board, type HistoryEntry, type Item, type Priority, type Status } from './api'
 import { ago, StatusChip } from './bits'
-import { ChoiceSelect, splitLabels } from './fields'
+import { ChoiceSelect, LabelPicker } from './fields'
 import { renderMarkdown } from './md'
 import { TicketThread } from './TicketThread'
 
@@ -102,7 +102,7 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                           onChange={(a) => void update({ assignee: a === UNASSIGNED ? '' : a })}
                           isDisabled={saving}
                         />
-                        <InlineText key={`l-${item.labels.join()}`} label="Labels" value={item.labels.join(', ')} placeholder="comma, separated" onSave={(l) => update({ labels: splitLabels(l) })} />
+                        <LabelPicker value={item.labels} options={board.labels} onChange={(labels) => void update({ labels })} isDisabled={saving} />
                       </>
                     ) : (
                       <>
@@ -173,17 +173,6 @@ function EditableTitle({ value, onSave }: { value: string; onSave: (v: string) =
   return (
     <TextField aria-label="Title" value={draft} onChange={setDraft} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}>
       <Input className="w-full border-transparent bg-transparent px-1 text-xl font-semibold tracking-tight shadow-none hover:bg-default focus:bg-field" />
-    </TextField>
-  )
-}
-
-function InlineText({ label, value, placeholder, onSave }: { label: string; value: string; placeholder?: string; onSave: (v: string) => void }) {
-  const [draft, setDraft] = useState(value)
-  const commit = () => draft.trim() !== value.trim() && onSave(draft.trim())
-  return (
-    <TextField value={draft} onChange={setDraft} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}>
-      <Label>{label}</Label>
-      <Input placeholder={placeholder} />
     </TextField>
   )
 }

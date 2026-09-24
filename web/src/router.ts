@@ -7,14 +7,15 @@ const BASE = '/board'
 
 export interface Filters {
   q: string
-  label?: string
-  /** An assignee's name, or "none" for unassigned. */
-  assignee?: string
+  /** Any of these labels (empty: any). */
+  labels: string[]
+  /** Any of these assignees, "none" meaning unassigned (empty: any). */
+  assignees: string[]
   /** List view: include done and archived. */
   closed: boolean
 }
 
-export const NO_FILTERS: Filters = { q: '', closed: false }
+export const NO_FILTERS: Filters = { q: '', labels: [], assignees: [], closed: false }
 
 export type Route =
   | { name: 'projects' }
@@ -40,7 +41,7 @@ export function parseRoute(loc: Location = window.location): Route {
     context: m[1],
     view: q.get('view') === 'list' ? 'list' : 'kanban',
     item: q.get('item') ?? undefined,
-    filters: { q: q.get('q') ?? '', label: q.get('label') ?? undefined, assignee: q.get('assignee') ?? undefined, closed: q.get('closed') === '1' },
+    filters: { q: q.get('q') ?? '', labels: q.getAll('label'), assignees: q.getAll('assignee'), closed: q.get('closed') === '1' },
   }
 }
 
@@ -55,8 +56,8 @@ export function href(route: Route): string {
   if (route.view === 'list') q.set('view', 'list')
   const f = route.filters
   if (f.q) q.set('q', f.q)
-  if (f.label) q.set('label', f.label)
-  if (f.assignee) q.set('assignee', f.assignee)
+  for (const l of f.labels) q.append('label', l)
+  for (const a of f.assignees) q.append('assignee', a)
   if (f.closed) q.set('closed', '1')
   if (route.item) q.set('item', route.item)
   const qs = q.toString()

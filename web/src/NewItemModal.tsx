@@ -1,7 +1,7 @@
 import { Button, Input, Label, Modal, TextArea, TextField } from '@heroui/react'
 import { useState, type FormEvent } from 'react'
 import { BOARD_COLUMNS, PRIORITIES, STATUS_LABEL, UNASSIGNED, type Board, type Item, type Priority, type Status } from './api'
-import { ChoiceSelect, splitLabels } from './fields'
+import { ChoiceSelect, LabelPicker } from './fields'
 
 type NewFields = Partial<Pick<Item, 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'labels'>>
 
@@ -11,7 +11,7 @@ export function NewItemModal({ isOpen, onOpenChange, board, onCreate }: { isOpen
   const [status, setStatus] = useState<Status>('todo')
   const [priority, setPriority] = useState<Priority>()
   const [assignee, setAssignee] = useState('')
-  const [labels, setLabels] = useState('')
+  const [labels, setLabels] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
 
   const reset = () => {
@@ -20,7 +20,7 @@ export function NewItemModal({ isOpen, onOpenChange, board, onCreate }: { isOpen
     setStatus('todo')
     setPriority(undefined)
     setAssignee('')
-    setLabels('')
+    setLabels([])
   }
 
   async function submit(e?: FormEvent) {
@@ -33,7 +33,7 @@ export function NewItemModal({ isOpen, onOpenChange, board, onCreate }: { isOpen
       status,
       ...(priority ? { priority } : {}),
       ...(assignee.trim() ? { assignee: assignee.trim() } : {}),
-      labels: splitLabels(labels),
+      labels,
     })
     setBusy(false)
     if (ok) {
@@ -65,10 +65,7 @@ export function NewItemModal({ isOpen, onOpenChange, board, onCreate }: { isOpen
                   <ChoiceSelect label="Status" value={status} options={BOARD_COLUMNS} render={(s) => STATUS_LABEL[s]} onChange={setStatus} />
                   <ChoiceSelect label="Priority" value={priority} options={PRIORITIES} render={(p) => p} onChange={setPriority} />
                   <ChoiceSelect label="Assignee" value={assignee || UNASSIGNED} options={[UNASSIGNED, ...board.assignees]} render={(a) => (a === UNASSIGNED ? 'Unassigned' : a)} onChange={(a) => setAssignee(a === UNASSIGNED ? '' : a)} />
-                  <TextField value={labels} onChange={setLabels}>
-                    <Label>Labels</Label>
-                    <Input placeholder={board.labels.slice(0, 2).join(', ') || 'comma, separated'} />
-                  </TextField>
+                  <LabelPicker value={labels} options={board.labels} onChange={setLabels} />
                 </div>
               </Modal.Body>
               <Modal.Footer>
