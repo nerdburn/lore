@@ -10,8 +10,11 @@ import { parse } from 'yaml'
 import { configSchema } from '../config.js'
 import { esc, renderMarkdown } from '../markdown.js'
 import { gitShow } from '../bare.js'
-import { BOARD_PATH, createBoardHandler, type BoardHandler, type BoardOptions } from '../board/http.js'
-import { agentsFilePath, createMcpHttpHandler, MCP_PATH, type McpHttpHandler } from '../mcp-http.js'
+import { adminsFromEnv, BOARD_PATH, createBoardHandler, type BoardHandler, type BoardOptions } from '../board/http.js'
+import { bareProject, boardRole } from '../board/access.js'
+import { boardSecret } from '../board/auth.js'
+import { createOAuth, type OAuthServer } from '../oauth.js'
+import { agentsFilePath, createMcpHttpHandler, MCP_PATH, type McpHttpHandler, type UserAuth } from '../mcp-http.js'
 
 export interface WwwOptions {
   /** Directory of bare context repos — the client registry. */
@@ -60,18 +63,36 @@ export interface ClientStatus {
  * port per VM.
  */
 export function www(opts: WwwOptions): { close(): Promise<void>; ready: Promise<number> } {
-  const mcp: McpHttpHandler | undefined = opts.mcp === false ? undefined : createMcpHttpHandler({ agentsFile: opts.agents })
   const boardOn = opts.board ?? /^(1|true|yes|on)$/i.test(process.env.LORE_BOARD ?? '')
+  const boardOpts = typeof boardOn === 'object' ? boardOn : {}
+  // With the board on, people can also reach MCP from outside with OAuth
+  // (oauth.ts): the same sign-in, the same roles, the same signing secret.
+  const secret = boardOn ? (boardOpts.secret ?? boardSecret()) : ''
+  const admins = boardOpts.admins ?? adminsFromEnv()
+  const oauth: OAuthServer | undefined = boardOn ? createOAuth({ secret, publicUrl: process.env.LORE_PUBLIC_URL, ...(boardOpts.oauthFile ? { file: boardOpts.oauthFile } : {}), ...(boardOpts.now ? { now: boardOpts.now } : {}) }) : undefined
+  const users: UserAuth | undefined = oauth
+    ? {
+        verify: oauth.verify,
+        contextOf: oauth.contextOf,
+        challenge: oauth.challenge,
+        roleFor: (context, email) => {
+          const p = bareProject(opts.repos, context)
+          return p ? boardRole(p.config, email, admins) : undefined
+        },
+      }
+    : undefined
+  const mcp: McpHttpHandler | undefined = opts.mcp === false ? undefined : createMcpHttpHandler({ agentsFile: opts.agents, ...(users ? { users } : {}) })
   const hostStatus = () => ({
     generated: new Date().toISOString(),
     clients: clientStatuses(opts.repos),
     sessions: mcp?.sessions() ?? [],
     playbook: renderMarkdown(playbookMarkdown()),
   })
-  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ repos: opts.repos, hostStatus, ...(typeof boardOn === 'object' ? boardOn : {}) }) : undefined
+  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ ...boardOpts, repos: opts.repos, hostStatus, secret, admins, oauth }) : undefined
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
+      if (oauth && (await oauth.handle(req, res, url))) return
       if (mcp && (await mcp.handle(req, res, url))) return
       if (board && (await board.handle(req, res, url))) return
       if (url.pathname === '/healthz') {

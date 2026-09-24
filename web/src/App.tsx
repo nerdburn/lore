@@ -4,6 +4,8 @@ import { api, ApiError, type Me } from './api'
 import { BoardPage } from './BoardPage'
 import { Header } from './Header'
 import { HostPage } from './HostPage'
+import { AuthorizePage } from './AuthorizePage'
+import { ConnectPage } from './ConnectPage'
 import { Login } from './Login'
 import { Projects } from './Projects'
 import { useRoute } from './router'
@@ -44,6 +46,10 @@ export function App() {
               <Projects onUnauthorized={onUnauthorized} />
             ) : route.name === 'host' ? (
               <HostPage onUnauthorized={onUnauthorized} />
+            ) : route.name === 'connect' ? (
+              <ConnectPage onUnauthorized={onUnauthorized} />
+            ) : route.name === 'authorize' ? (
+              <AuthorizePage id={route.request} me={me} onUnauthorized={onUnauthorized} />
             ) : (
               <BoardPage key={route.context} route={route} onUnauthorized={onUnauthorized} />
             )}

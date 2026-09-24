@@ -43,7 +43,10 @@ export function Header({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
               <div className="text-muted">Signed in as</div>
               <div className="font-medium">{me.email}</div>
             </div>
-            <Dropdown.Menu onAction={(k) => k === 'signout' && onSignOut()}>
+            <Dropdown.Menu onAction={(k) => (k === 'signout' ? onSignOut() : k === 'connect' ? navigate({ name: 'connect' }) : undefined)}>
+              <Dropdown.Item id="connect" textValue="Connect Claude Code">
+                <Label>Connect Claude Code</Label>
+              </Dropdown.Item>
               <Dropdown.Item id="signout" textValue="Sign out">
                 <Label>Sign out</Label>
               </Dropdown.Item>

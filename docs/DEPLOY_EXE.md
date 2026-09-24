@@ -351,3 +351,32 @@ ssh exe.dev integrations add http-proxy --name linear-uploads --target https://u
 
 and in the client's `lore.json`:
 `"linear": { "teams": ["PRP"], "api_base": "https://linear.int.exe.xyz/graphql", "uploads_base": "https://linear-uploads.int.exe.xyz" }`.
+
+## 10. MCP from laptops — OAuth
+
+With the board on, `/mcp/<context>` accepts two kinds of caller: a VM
+through the `lore-mcp` peer integration (§6, unchanged), and a person with
+an OAuth access token — Claude Code on a laptop, no SSH, no integration.
+
+```sh
+claude mcp add --transport http lore-acme https://lore.inputlogic.com/mcp/lore-acme
+# then in Claude Code: /mcp → lore-acme → Authenticate (a browser opens)
+```
+
+What happens: the 401 carries `WWW-Authenticate: Bearer resource_metadata=…`;
+Claude Code reads `/.well-known/oauth-protected-resource/mcp/<context>` and
+`/.well-known/oauth-authorization-server`, registers itself
+(`/oauth/register`, public client + PKCE), sends the browser to
+`/oauth/authorize` → the board's consent page (`/board/authorize`, after the
+usual email-code sign-in), and trades the code at `/oauth/token`.
+
+- Access tokens are signed with the board secret and live an hour; refresh
+  tokens (90 days, rotated on every use) are stored only as hashes in
+  `~/.lore/oauth.json`. People revoke their own on the board (*Connect
+  Claude Code*); `LORE_BOARD_SESSION_EPOCH` does not touch them — delete
+  `~/.lore/oauth.json` to end every connection.
+- Nothing about access is in the token: every MCP request re-checks the
+  person's board role on that context. Members get every tool, viewers the
+  read tools only; a token asked for one context opens only that one.
+- Set `LORE_PUBLIC_URL=https://lore.inputlogic.com` in `/etc/lore/env` so
+  the metadata names one canonical, https origin.

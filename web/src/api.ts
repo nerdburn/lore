@@ -134,6 +134,24 @@ export interface Comment {
 
 export const SOURCE_NAME: Record<string, string> = { board: 'Board', jira: 'Jira', github: 'GitHub', linear: 'Linear' }
 
+export interface OAuthRequest {
+  client: string
+  redirect: string
+  context: string | null
+  role: Role | null
+  projects: { context: string; name: string; role: Role }[]
+}
+
+export interface Connection {
+  id: string
+  client_id: string
+  client_name: string
+  resource?: string
+  created: string
+  last_used: string
+  expires: string
+}
+
 export interface Me {
   email: string
   admin: boolean
@@ -170,6 +188,10 @@ export const api = {
   logout: () => call<{ ok: true }>('/logout', { body: {} }),
   projects: () => call<{ projects: ProjectSummary[] }>('/projects'),
   host: () => call<HostStatus>('/host'),
+  oauthRequest: (id: string) => call<OAuthRequest>(`/oauth/request/${enc(id)}`),
+  oauthDecide: (id: string, approve: boolean) => call<{ redirect: string }>(`/oauth/request/${enc(id)}`, { body: { approve } }),
+  connections: () => call<{ connections: Connection[] }>('/oauth/connections'),
+  revokeConnection: (id: string) => call<{ ok: true }>(`/oauth/connections/${enc(id)}/revoke`, { body: {} }),
   board: (context: string) => call<Board>(`/p/${enc(context)}`),
   item: (context: string, key: string) => call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`),
   add: (context: string, fields: Partial<Pick<Item, 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'labels'>>) =>

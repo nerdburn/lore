@@ -601,6 +601,17 @@ removing @lore from the Slack channels.
 
 ### For agents (MCP)
 
+**From your own machine (Claude Code, no SSH).** With the board on, the
+host's MCP endpoint also takes OAuth: run the command the board's *Connect
+Claude Code* page shows (`claude mcp add --transport http lore-acme
+https://<host>/mcp/lore-acme`), then `/mcp` in Claude Code to sign in — a
+browser opens, you sign in with the board's email code and approve. Access
+follows your board role on that project: members get every tool (writes are
+attributed to your email), viewers the read tools only; being removed from
+a board ends it. Connected apps are listed, and revocable, on the same page.
+Agent VMs keep using the peer integration (§6 of docs/DEPLOY_EXE.md).
+
+
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
 `lore_recall`, `lore_sync_now`, `lore_source_list`, `lore_remember`,
 `lore_sow_add`, `lore_doc_add`, `lore_source_add` (widen what is synced — a

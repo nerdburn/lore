@@ -19,11 +19,15 @@ export const NO_FILTERS: Filters = { q: '', closed: false }
 export type Route =
   | { name: 'projects' }
   | { name: 'host' }
+  | { name: 'connect' }
+  | { name: 'authorize'; request: string }
   | { name: 'board'; context: string; view: 'list' | 'kanban'; item?: string; filters: Filters }
 
 export function parseRoute(loc: Location = window.location): Route {
   const path = loc.pathname.startsWith(BASE) ? loc.pathname.slice(BASE.length) : loc.pathname
   if (/^\/host\/?$/.test(path)) return { name: 'host' }
+  if (/^\/connect\/?$/.test(path)) return { name: 'connect' }
+  if (/^\/authorize\/?$/.test(path)) return { name: 'authorize', request: new URLSearchParams(loc.search).get('request') ?? '' }
   const m = /^\/p\/([\w.-]+)\/?$/.exec(path)
   if (!m) return { name: 'projects' }
   const q = new URLSearchParams(loc.search)
@@ -39,6 +43,8 @@ export function parseRoute(loc: Location = window.location): Route {
 export function href(route: Route): string {
   if (route.name === 'projects') return `${BASE}/`
   if (route.name === 'host') return `${BASE}/host`
+  if (route.name === 'connect') return `${BASE}/connect`
+  if (route.name === 'authorize') return `${BASE}/authorize?request=${encodeURIComponent(route.request)}`
   const q = new URLSearchParams()
   if (route.view === 'list') q.set('view', 'list')
   const f = route.filters

@@ -79,6 +79,8 @@ export interface ServerHooks {
    * sessions on one clone can serialise their commits. Reads are not wrapped.
    */
   serialize?: <T>(fn: () => Promise<T>) => Promise<T>
+  /** Register only the read tools (a board viewer connecting over OAuth). */
+  readOnly?: boolean
 }
 
 /**
@@ -113,6 +115,8 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   // registerTool with the write hook applied: the name decides, so the table
   // above stays the one place that says which tools write.
   const tool: McpServer['registerTool'] = (name, def, handler) => {
+    // Read-only sessions never see the write tools at all.
+    if (hooks.readOnly && writes.has(name)) return undefined as unknown as ReturnType<McpServer['registerTool']>
     const wrapped = writes.has(name) && hooks.serialize ? ((...args: Parameters<typeof handler>) => hooks.serialize!(async () => (handler as (...a: unknown[]) => Promise<unknown>)(...args))) : handler
     return server.registerTool(name, def, wrapped as typeof handler)
   }

@@ -46,6 +46,22 @@ export interface McpHttpOptions {
   /** Close a session idle this long. Default 30 min. */
   idleMs?: number
   log?: (line: string) => void
+  /**
+   * People, not VMs: OAuth bearer tokens (oauth.ts) for requests that did
+   * not come through a peer integration — Claude Code on a laptop. Access
+   * follows the person's board role on the context, checked every request.
+   */
+  users?: UserAuth
+}
+
+export interface UserAuth {
+  verify(token: string): { email: string; resource?: string } | undefined
+  /** "lore-acme" from a token's resource URL, when it is bound to one. */
+  contextOf(resource: string | undefined): string | undefined
+  /** members: every tool; viewers: read tools; undefined: no access. */
+  roleFor(context: string, email: string): 'member' | 'viewer' | undefined
+  /** WWW-Authenticate for a 401, pointing at the resource metadata. */
+  challenge(req: IncomingMessage, context?: string, error?: string): string
 }
 
 export interface AgentGrant {
@@ -59,7 +75,9 @@ export type AgentsFile = Record<string, AgentGrant>
 
 interface Session {
   id: string
+  /** The VM name, or "user:<email>" for a person over OAuth. */
   agent: string
+  readOnly?: boolean
   context: string
   transport: StreamableHTTPServerTransport
   server: McpServer
@@ -133,8 +151,8 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
     }
   }
 
-  const deny = (res: ServerResponse, code: number, message: string) => {
-    res.writeHead(code, { 'content-type': 'application/json' })
+  const deny = (res: ServerResponse, code: number, message: string, headers: Record<string, string> = {}) => {
+    res.writeHead(code, { 'content-type': 'application/json', ...headers })
     res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message }, id: null }))
   }
 
@@ -142,7 +160,37 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
     if (url.pathname !== MCP_PATH && !url.pathname.startsWith(`${MCP_PATH}/`)) return false
     const context = url.pathname.slice(MCP_PATH.length + 1).replace(/\/+$/, '')
     const agent = firstHeader(req, header)
-    if (!agent) {
+    // Who is calling: a VM the exe.dev edge vouched for, or a person with an
+    // OAuth token. The edge strips the header from outside callers, so a
+    // request carrying it came through a peer integration.
+    let caller: { id: string; actor: string; readOnly: boolean; viaOAuth: boolean } | undefined
+    if (agent) {
+      caller = { id: agent, actor: agent, readOnly: false, viaOAuth: false }
+    } else if (opts.users) {
+      const users = opts.users
+      const bearer = /^Bearer\s+(\S+)$/i.exec(firstHeader(req, 'authorization') ?? '')?.[1]
+      const scoped = /^[\w.-]+$/.test(context) ? context : undefined
+      if (!bearer) {
+        deny(res, 401, 'sign in: this endpoint takes an OAuth bearer token (your MCP client will open a browser)', { 'www-authenticate': users.challenge(req, scoped) })
+        return true
+      }
+      const claims = users.verify(bearer)
+      if (!claims) {
+        deny(res, 401, 'the access token is invalid or expired', { 'www-authenticate': users.challenge(req, scoped, 'invalid_token') })
+        return true
+      }
+      const bound = users.contextOf(claims.resource)
+      if (bound && bound !== context) {
+        deny(res, 403, `this token is for ${bound}, not ${context}`)
+        return true
+      }
+      const role = scoped ? users.roleFor(scoped, claims.email) : undefined
+      if (scoped && !role) {
+        deny(res, 403, `${claims.email} has no board access to ${context} — ask a host admin to add you (lore board add)`)
+        return true
+      }
+      caller = { id: `user:${claims.email}`, actor: claims.email, readOnly: role === 'viewer', viaOAuth: true }
+    } else {
       deny(res, 401, `no caller identity: requests must arrive through a peer integration that sets ${header}`)
       return true
     }
@@ -172,8 +220,14 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
         deny(res, 404, 'unknown or expired session — initialize again')
         return true
       }
-      if (s.agent !== agent || s.context !== context) {
+      if (s.agent !== caller.id || s.context !== context) {
         deny(res, 403, 'session belongs to another caller or context')
+        return true
+      }
+      // A person's role can change mid-session (removed, or made a viewer): start over.
+      if (caller.viaOAuth && Boolean(s.readOnly) !== caller.readOnly) {
+        await closeSession(s, 'role changed')
+        deny(res, 404, 'your access to this board changed — initialize again')
         return true
       }
       s.lastSeen = Date.now()
@@ -191,21 +245,26 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
       return true
     }
 
-    let grants: AgentsFile
-    try {
-      grants = readAgentsFile(agentsFile)
-    } catch (err) {
-      log(`agents file unreadable: ${err instanceof Error ? err.message : err}`)
-      deny(res, 500, 'agents file on the host is invalid')
-      return true
+    let actor = caller.actor
+    if (!caller.viaOAuth) {
+      let grants: AgentsFile
+      try {
+        grants = readAgentsFile(agentsFile)
+      } catch (err) {
+        log(`agents file unreadable: ${err instanceof Error ? err.message : err}`)
+        deny(res, 500, 'agents file on the host is invalid')
+        return true
+      }
+      const grant = grants[caller.id]
+      if (!grantAllows(grant, context)) {
+        log(`${caller.id} → ${context}: refused (${grant ? 'context not granted' : 'agent not in agents file'})`)
+        deny(res, 403, `${caller.id} is not allowed to open ${context} on this host`)
+        return true
+      }
+      actor = grant!.actor ?? caller.id
     }
-    const grant = grants[agent]
-    if (!grantAllows(grant, context)) {
-      log(`${agent} → ${context}: refused (${grant ? 'context not granted' : 'agent not in agents file'})`)
-      deny(res, 403, `${agent} is not allowed to open ${context} on this host`)
-      return true
-    }
-    const actor = grant!.actor ?? agent
+    const agentId = caller.id
+    const readOnly = caller.readOnly
 
     // Resolve under the context's write queue: two agents initializing at
     // once must not both `git pull` the same clone.
@@ -214,11 +273,11 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
     try {
       server = await serialize(async () => {
         const ctx = resolveContext(cwd, { context })
-        return createServer(ctx, { cwd, opts: { context, actor } }, { serialize })
+        return createServer(ctx, { cwd, opts: { context, actor } }, { serialize, readOnly })
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      log(`${agent} → ${context}: cannot open (${message.split('\n')[0]})`)
+      log(`${agentId} → ${context}: cannot open (${message.split('\n')[0]})`)
       deny(res, 404, `cannot open ${context}: ${message.split('\n')[0]}`)
       return true
     }
@@ -226,8 +285,8 @@ export function createMcpHttpHandler(opts: McpHttpOptions = {}): McpHttpHandler 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        sessions.set(id, { id, agent, context, transport, server, lastSeen: Date.now() })
-        log(`${agent} → ${context}: session opened (as ${actor})`)
+        sessions.set(id, { id, agent: agentId, context, transport, server, lastSeen: Date.now(), ...(readOnly ? { readOnly } : {}) })
+        log(`${agentId} → ${context}: session opened (as ${actor}${readOnly ? ', read-only' : ''})`)
       },
     })
     transport.onclose = () => {

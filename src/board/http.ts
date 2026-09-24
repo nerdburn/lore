@@ -12,6 +12,7 @@ import { findItem, labelCounts, summarizeForRecall, WORK_PRIORITIES, WORK_STATUS
 import { assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
+import type { OAuthServer } from '../oauth.js'
 
 /**
  * The board: a list + kanban web view over the lore work tracker, served by
@@ -43,6 +44,10 @@ export interface BoardOptions {
   now?: () => number
   /** The host's own status (client health, MCP sessions, playbook) for admins at /api/board/host — supplied by `lore www`. */
   hostStatus?: () => unknown
+  /** MCP OAuth (oauth.ts): the board hosts its consent page and "connected apps". */
+  oauth?: OAuthServer
+  /** Test seam: where OAuth keeps clients and refresh grants. */
+  oauthFile?: string
 }
 
 export interface BoardHandler {
@@ -145,6 +150,34 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       const email = s.email
 
       if (route === '/me' && method === 'GET') return send(res, 200, { email, admin: admins.includes(email) }), true
+
+      // ---- MCP OAuth: consent, and the person's connected apps ----
+      const oauthReq = /^\/oauth\/request\/([\w-]+)$/.exec(route)
+      if (oauthReq && opts.oauth) {
+        const r = opts.oauth.request(oauthReq[1])
+        if (!r) return send(res, 404, { error: 'this sign-in request has expired — start again from your MCP client' }), true
+        const context = opts.oauth.contextOf(r.resource)
+        const role = context ? (() => { const p = bareProject(opts.repos, context); return p ? boardRole(p.config, email, admins) : undefined })() : undefined
+        if (method === 'GET') {
+          const reachable = bareProjects(opts.repos)
+            .map((p) => ({ context: p.context, name: p.config.client?.name ?? p.config.project, role: boardRole(p.config, email, admins) }))
+            .filter((p) => p.role)
+          return send(res, 200, { client: r.client.client_name, redirect: new URL(r.redirect_uri).host, context: context ?? null, role: role ?? null, projects: reachable }), true
+        }
+        if (method === 'POST') {
+          const body = await readBody(req)
+          const approve = body.approve === true
+          if (approve && context && !role) return send(res, 403, { error: `you don't have access to ${context}` }), true
+          const redirect = opts.oauth.decide(r.id, email, approve)
+          log(`${email} ${approve ? 'approved' : 'denied'} MCP access for "${r.client.client_name}"${context ? ` to ${context}` : ''}`)
+          return send(res, 200, { redirect }), true
+        }
+      }
+      if (route === '/oauth/connections' && method === 'GET' && opts.oauth) return send(res, 200, { connections: opts.oauth.grants(email) }), true
+      const revokeRoute = /^\/oauth\/connections\/([\w-]+)\/revoke$/.exec(route)
+      if (revokeRoute && method === 'POST' && opts.oauth) {
+        return (opts.oauth.revoke(email, revokeRoute[1]) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'no such connection' })), true
+      }
 
       if (route === '/host' && method === 'GET') {
         if (!admins.includes(email)) return send(res, 403, { error: 'host status is for host admins' }), true
