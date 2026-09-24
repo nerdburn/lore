@@ -38,8 +38,7 @@ export function Header({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
             <PersonAvatar email={me.email} px={32} tooltip={false} />
           </Button>
           <Dropdown.Popover placement="bottom end">
-            <div className="px-3 pt-3 pb-1 text-sm">
-              <div className="text-muted">Signed in as</div>
+            <div className="mx-1 border-b border-separator px-2 pt-3 pb-3 text-sm">
               <div className="font-medium">{me.name ?? me.email}</div>
               {me.name && <div className="text-xs text-muted">{me.email}</div>}
             </div>
