@@ -323,7 +323,9 @@ test('board: with the board on, the host pages need an admin', async () => {
   const host = await api('/host', { cookie: boss })
   assert.equal(host.status, 200)
   assert.deepEqual(host.body.clients.map((c: any) => c.name), ['lore-acme', 'lore-beta'])
-  assert.match(host.body.playbook, /<h1/)
+  assert.equal(host.body.playbook, undefined, 'the playbook lives on Help now')
+  assert.match((await api('/help', { cookie: boss })).body.playbook, /<h1/)
+  assert.equal((await api('/help', { cookie: await session('jane@acme.com') })).body.playbook, null, 'members get the board guide, not the playbook')
   assert.equal((await api('/host', { cookie: await signIn('jane@acme.com') })).status, 403, 'members are not host admins')
 })
 

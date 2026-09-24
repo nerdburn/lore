@@ -86,9 +86,9 @@ export function www(opts: WwwOptions): { close(): Promise<void>; ready: Promise<
     generated: new Date().toISOString(),
     clients: clientStatuses(opts.repos),
     sessions: mcp?.sessions() ?? [],
-    playbook: renderMarkdown(playbookMarkdown()),
   })
-  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ ...boardOpts, repos: opts.repos, hostStatus, secret, admins, oauth }) : undefined
+  const playbook = () => renderMarkdown(playbookMarkdown())
+  const board: BoardHandler | undefined = boardOn ? createBoardHandler({ ...boardOpts, repos: opts.repos, hostStatus, playbook, secret, admins, oauth }) : undefined
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {

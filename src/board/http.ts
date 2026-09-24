@@ -43,8 +43,10 @@ export interface BoardOptions {
   log?: (line: string) => void
   /** Test seam. */
   now?: () => number
-  /** The host's own status (client health, MCP sessions, playbook) for admins at /api/board/host — supplied by `lore www`. */
+  /** The host's own status (client health, MCP sessions) for admins at /api/board/host — supplied by `lore www`. */
   hostStatus?: () => unknown
+  /** The client onboarding playbook as HTML, for admins on the Help page — supplied by `lore www`. */
+  playbook?: () => string
   /** MCP OAuth (oauth.ts): the board hosts its consent page and "connected apps". */
   oauth?: OAuthServer
   /** Test seam: where OAuth keeps clients and refresh grants. */
@@ -234,6 +236,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       const revokeRoute = /^\/oauth\/connections\/([\w-]+)\/revoke$/.exec(route)
       if (revokeRoute && method === 'POST' && opts.oauth) {
         return (opts.oauth.revoke(email, revokeRoute[1]) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'no such connection' })), true
+      }
+
+      // Help: everyone gets the board guide (in the SPA); admins also the onboarding playbook.
+      if (route === '/help' && method === 'GET') {
+        return send(res, 200, { playbook: admins.includes(email) ? (opts.playbook?.() ?? null) : null }), true
       }
 
       if (route === '/host' && method === 'GET') {

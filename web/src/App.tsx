@@ -8,6 +8,8 @@ import { AuthorizePage } from './AuthorizePage'
 import { ConnectPage } from './ConnectPage'
 import { PeopleProvider } from './people'
 import { ProfilePage } from './ProfilePage'
+import { HelpPage } from './HelpPage'
+import { Footer } from './Footer'
 import { Login } from './Login'
 import { Projects } from './Projects'
 import { useRoute } from './router'
@@ -49,6 +51,8 @@ export function App() {
               <Projects onUnauthorized={onUnauthorized} />
             ) : route.name === 'host' ? (
               <HostPage onUnauthorized={onUnauthorized} />
+            ) : route.name === 'help' ? (
+              <HelpPage me={me} />
             ) : route.name === 'profile' ? (
               <ProfilePage me={me} onChanged={setMe} />
             ) : route.name === 'connect' ? (
@@ -59,6 +63,7 @@ export function App() {
               <BoardPage key={route.context} route={route} onUnauthorized={onUnauthorized} />
             )}
           </main>
+          <Footer />
         </div>
         </PeopleProvider>
       )}

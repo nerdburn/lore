@@ -21,6 +21,7 @@ export type Route =
   | { name: 'host' }
   | { name: 'connect' }
   | { name: 'profile' }
+  | { name: 'help' }
   | { name: 'authorize'; request: string }
   | { name: 'board'; context: string; view: 'list' | 'kanban'; item?: string; filters: Filters }
 
@@ -29,6 +30,7 @@ export function parseRoute(loc: Location = window.location): Route {
   if (/^\/host\/?$/.test(path)) return { name: 'host' }
   if (/^\/connect\/?$/.test(path)) return { name: 'connect' }
   if (/^\/profile\/?$/.test(path)) return { name: 'profile' }
+  if (/^\/help\/?$/.test(path)) return { name: 'help' }
   if (/^\/authorize\/?$/.test(path)) return { name: 'authorize', request: new URLSearchParams(loc.search).get('request') ?? '' }
   const m = /^\/p\/([\w.-]+)\/?$/.exec(path)
   if (!m) return { name: 'projects' }
@@ -47,6 +49,7 @@ export function href(route: Route): string {
   if (route.name === 'host') return `${BASE}/host`
   if (route.name === 'connect') return `${BASE}/connect`
   if (route.name === 'profile') return `${BASE}/profile`
+  if (route.name === 'help') return `${BASE}/help`
   if (route.name === 'authorize') return `${BASE}/authorize?request=${encodeURIComponent(route.request)}`
   const q = new URLSearchParams()
   if (route.view === 'list') q.set('view', 'list')

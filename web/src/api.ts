@@ -102,8 +102,6 @@ export interface HostStatus {
   generated: string
   clients: ClientStatus[]
   sessions: { agent: string; context: string; idleMs: number }[]
-  /** The onboarding playbook, rendered to HTML on the host. */
-  playbook: string
 }
 
 export interface Attachment {
@@ -196,6 +194,8 @@ export const api = {
   logout: () => call<{ ok: true }>('/logout', { body: {} }),
   projects: () => call<{ projects: ProjectSummary[] }>('/projects'),
   host: () => call<HostStatus>('/host'),
+  /** The client onboarding playbook (HTML) for host admins; null for everyone else. */
+  help: () => call<{ playbook: string | null }>('/help'),
   people: () => call<{ people: Person[]; contacts: Record<string, string> }>('/people'),
   setName: (name: string) => call<{ name: string | null; avatar: string | null }>('/profile', { method: 'PATCH', body: { name } }),
   removeAvatar: () => call<{ name: string | null; avatar: string | null }>('/profile/avatar/remove', { body: {} }),

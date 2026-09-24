@@ -1,9 +1,9 @@
-import { Card, Chip, Spinner, Table } from '@heroui/react'
+import { Chip, Spinner, Table } from '@heroui/react'
 import { useEffect, useState } from 'react'
 import { api, ApiError, type ClientStatus, type HostStatus } from './api'
 import { ago } from './bits'
 
-/** The host's own status — every client's sync health, open agent sessions, and the onboarding playbook. Admins only. */
+/** The host's own status — every client's sync health and open agent sessions. Admins only. */
 export function HostPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [status, setStatus] = useState<HostStatus>()
   const [error, setError] = useState<string>()
@@ -117,9 +117,6 @@ export function HostPage({ onUnauthorized }: { onUnauthorized: () => void }) {
         </section>
       )}
 
-      <Card className="p-6">
-        <div className="prose-lore host-playbook max-w-[75ch]" dangerouslySetInnerHTML={{ __html: status.playbook }} />
-      </Card>
     </div>
   )
 }
