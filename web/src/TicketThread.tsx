@@ -1,4 +1,4 @@
-import { ArrowUpRightFromSquare, FileText, Paperclip, Play } from '@gravity-ui/icons'
+import { ArrowUpRightFromSquare, FileText, Paperclip, Play, Xmark } from '@gravity-ui/icons'
 import { Avatar, Button, Chip, Modal, ProgressBar, Spinner, TextArea } from '@heroui/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, SOURCE_NAME, type Attachment, type Comment } from './api'
@@ -31,6 +31,8 @@ export function TicketThread({ context, itemKey, canEdit, onError, onChanged }: 
   const [pending, setPending] = useState<Pending[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [open, setOpen] = useState<Attachment>()
+  const [removing, setRemoving] = useState<Attachment>()
+  const [busyRemove, setBusyRemove] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const seq = useRef(0)
   const errors = useRef(onError)
@@ -137,7 +139,20 @@ export function TicketThread({ context, itemKey, canEdit, onError, onChanged }: 
         ) : (
           <div className="grid grid-cols-3 gap-2">
             {attachments.map((a) => (
-              <Tile key={`${a.sha256 ?? a.name}-${a.source}`} context={context} a={a} onOpen={() => setOpen(a)} />
+              <div key={`${a.sha256 ?? a.source_id ?? a.name}-${a.source}`} className="group relative">
+                <Tile context={context} a={a} onOpen={() => setOpen(a)} />
+                {canEdit && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${a.name}`}
+                    title="Remove from this ticket"
+                    onClick={() => setRemoving(a)}
+                    className="absolute top-1 right-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition group-hover:opacity-100 hover:bg-black/80 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus"
+                  >
+                    <Xmark className="size-3.5" />
+                  </button>
+                )}
+              </div>
             ))}
             {pending.map((p) => (
               <div key={p.id} className="flex aspect-square flex-col justify-end gap-1 rounded-xl border border-dashed border-border p-2">
@@ -171,6 +186,48 @@ export function TicketThread({ context, itemKey, canEdit, onError, onChanged }: 
       </section>
 
       <Viewer context={context} a={open} onClose={() => setOpen(undefined)} />
+      <Modal>
+        <Modal.Backdrop isOpen={Boolean(removing)} onOpenChange={(o) => !o && !busyRemove && setRemoving(undefined)}>
+          <Modal.Container size="sm">
+            <Modal.Dialog aria-label="Remove attachment">
+              <Modal.Header>
+                <Modal.Heading>Remove attachment?</Modal.Heading>
+              </Modal.Header>
+              <Modal.Body>
+                <p className="text-sm">
+                  <span className="font-medium break-all">{removing?.name}</span> will be taken off {itemKey}
+                  {removing && removing.source !== 'board' ? `. It stays on the ${SOURCE_NAME[removing.source]} issue, and lore won't import it again.` : '.'}
+                </p>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="secondary" isDisabled={busyRemove} onPress={() => setRemoving(undefined)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  isPending={busyRemove}
+                  onPress={async () => {
+                    if (!removing) return
+                    setBusyRemove(true)
+                    try {
+                      await api.detach(context, itemKey, removing.sha256 ? { sha256: removing.sha256 } : { source_id: removing.source_id })
+                      setRemoving(undefined)
+                      await load()
+                      onChanged()
+                    } catch (err) {
+                      errors.current(err)
+                    } finally {
+                      setBusyRemove(false)
+                    }
+                  }}
+                >
+                  Remove
+                </Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </>
   )
 }

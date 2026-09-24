@@ -39,6 +39,17 @@ export interface AttachmentRecord {
   at: string
   /** Why it was not imported. */
   skipped?: string
+  /**
+   * Taken off the ticket. The record stays (a tombstone) so a re-scan of the
+   * external issue does not import the file again; the board hides it and
+   * no longer serves it.
+   */
+  removed?: { by: string; at: string }
+}
+
+/** Records the board shows and serves: not removed. */
+export function liveAttachments(records: AttachmentRecord[]): AttachmentRecord[] {
+  return records.filter((r) => !r.removed)
 }
 
 export function parseAttachments(text: string | undefined): AttachmentRecord[] {
@@ -120,19 +131,49 @@ export async function attachUpload(cwd: string, key: string, upload: NewUpload, 
   }
   const records = readAttachments(ctx.root)
   const existing = records.find((r) => r.ticket === item.key && r.sha256 === upload.sha)
-  if (existing) {
+  if (existing && !existing.removed) {
     rmSync(upload.tmp, { force: true })
     return existing
   }
   await store.put(upload.tmp, upload.sha, upload.type)
   const at = new Date().toISOString()
   const record: AttachmentRecord = { sha256: upload.sha, ticket: item.key, name: cleanName(upload.name), type: upload.type, size: upload.size, source: 'board', by: actor, at }
+  // Re-attaching a file that was removed replaces its tombstone.
+  if (existing) records.splice(records.indexOf(existing), 1)
   records.push(record)
   writeAttachments(ctx.root, records)
   applyChange(item, {}, { at, by: actor, via: opts.via ?? 'cli', reason: `attached ${record.name}` }, { attached: [null, record.name] })
   const rel = writeWorkItems(ctx.root, prefix, items)
   appendAudit(ctx.root, { at, action: 'attach', actor, via: opts.via ?? 'cli', id: item.key, source: `sha256:${upload.sha}` })
   commitWork(ctx, [rel, ATTACHMENTS_FILE], `lore: attach ${record.name} to ${item.key}`)
+  return record
+}
+
+/**
+ * Take a file off a ticket — by its sha256, or (a too-large import that was
+ * only ever a link) by its source id. Recorded in the ticket's history;
+ * the bytes stay in the store, where another ticket may use them.
+ */
+export function removeAttachment(cwd: string, key: string, which: { sha256?: string; source_id?: string }, opts: WorkWriteOptions = {}): AttachmentRecord {
+  if (!which.sha256 && !which.source_id) throw new Error('attachment: say which file (sha256 or source_id)')
+  const ctx = resolveContext(cwd, opts)
+  const actor = authorizeWrite(ctx, opts, 'attachment removal')
+  const prefix = workPrefix(ctx.config)
+  const items = readWorkItems(ctx.root, prefix)
+  const item = findItem(items, key)
+  if (!item) throw new Error(`work: no item ${key}`)
+  const records = readAttachments(ctx.root)
+  const record = records.find(
+    (r) => r.ticket === item.key && !r.removed && (which.sha256 ? r.sha256 === which.sha256 : r.source_id === which.source_id),
+  )
+  if (!record) throw new Error(`attachment: no such file on ${item.key}`)
+  const at = new Date().toISOString()
+  record.removed = { by: actor, at }
+  writeAttachments(ctx.root, records)
+  applyChange(item, {}, { at, by: actor, via: opts.via ?? 'cli', reason: `removed ${record.name}` }, { detached: [record.name, null] })
+  const rel = writeWorkItems(ctx.root, prefix, items)
+  appendAudit(ctx.root, { at, action: 'attach', actor, via: opts.via ?? 'cli', id: item.key, source: `removed ${record.sha256 ? `sha256:${record.sha256}` : record.source_id}` })
+  commitWork(ctx, [rel, ATTACHMENTS_FILE], `lore: remove ${record.name} from ${item.key}`)
   return record
 }
 

@@ -1,7 +1,7 @@
 import { ArrowUpRightFromSquare } from '@gravity-ui/icons'
 import { Button, Drawer, Input, Label, Spinner, TextArea, TextField } from '@heroui/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, PRIORITIES, STATUS_LABEL, WORK_ORDER, type Board, type HistoryEntry, type Item, type Priority, type Status } from './api'
+import { api, PRIORITIES, STATUS_LABEL, UNASSIGNED, WORK_ORDER, type Board, type HistoryEntry, type Item, type Priority, type Status } from './api'
 import { ago, StatusChip } from './bits'
 import { ChoiceSelect, splitLabels } from './fields'
 import { renderMarkdown } from './md'
@@ -94,7 +94,14 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                       <>
                         <ChoiceSelect label="Status" value={item.status} options={WORK_ORDER} render={(s) => STATUS_LABEL[s]} onChange={(s) => void moveTo(s)} isDisabled={saving} />
                         <ChoiceSelect label="Priority" value={item.priority} options={PRIORITIES} render={(p) => p} onChange={(p: Priority) => void update({ priority: p })} isDisabled={saving} />
-                        <InlineText key={`a-${item.assignee}`} label="Assignee" value={item.assignee ?? ''} placeholder="Unassigned" onSave={(assignee) => update({ assignee })} />
+                        <ChoiceSelect
+                          label="Assignee"
+                          value={item.assignee ?? UNASSIGNED}
+                          options={[UNASSIGNED, ...board.assignees.filter((a) => a !== item.assignee), ...(item.assignee ? [item.assignee] : [])].filter((v, i, all) => all.indexOf(v) === i)}
+                          render={(a) => (a === UNASSIGNED ? 'Unassigned' : a)}
+                          onChange={(a) => void update({ assignee: a === UNASSIGNED ? '' : a })}
+                          isDisabled={saving}
+                        />
                         <InlineText key={`l-${item.labels.join()}`} label="Labels" value={item.labels.join(', ')} placeholder="comma, separated" onSave={(l) => update({ labels: splitLabels(l) })} />
                       </>
                     ) : (
@@ -248,6 +255,7 @@ function describeChange(change: Record<string, unknown>): string {
     const show = (x: unknown) => (x === null || x === undefined || x === '' ? '—' : Array.isArray(x) ? x.join(', ') || '—' : field === 'status' ? (STATUS_LABEL[x as Status] ?? String(x)) : String(x))
     if (field === 'description') return 'edited the description'
     if (field === 'attached') return `attached ${show(to)}`
+    if (field === 'detached') return `removed ${show(from)}`
     if (field === 'jira_sprint') return `put it in Jira sprint ${show(to)}`
     if (field === 'rank') return `ranked ${from} → ${to}`
     if (field === 'sources') return 'added evidence'

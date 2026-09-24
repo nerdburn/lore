@@ -113,11 +113,15 @@ export interface Attachment {
   type: string
   size?: number
   source: 'board' | 'jira' | 'github' | 'linear'
+  source_id?: string
   source_url?: string
   by: string
   at: string
   skipped?: string
 }
+
+/** Select value for "nobody". */
+export const UNASSIGNED = '__unassigned'
 
 export interface Comment {
   id: string
@@ -173,6 +177,8 @@ export const api = {
   update: (context: string, key: string, fields: Partial<Pick<Item, 'title' | 'description' | 'priority' | 'assignee' | 'labels'>> & { note?: string }) =>
     call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`, { method: 'PATCH', body: fields }),
   thread: (context: string, key: string) => call<{ comments: Comment[]; attachments: Attachment[] }>(`/p/${enc(context)}/items/${enc(key)}/thread`),
+  detach: (context: string, key: string, which: { sha256?: string; source_id?: string }) =>
+    call<{ attachment: Attachment }>(`/p/${enc(context)}/items/${enc(key)}/detach`, { body: which }),
   comment: (context: string, key: string, body: string) => call<{ comment: Comment }>(`/p/${enc(context)}/items/${enc(key)}/comments`, { body: { body } }),
   fileUrl: (context: string, sha: string) => `/api/board/p/${enc(context)}/files/${sha}`,
   /** Raw upload with progress (fetch can't report upload progress). */

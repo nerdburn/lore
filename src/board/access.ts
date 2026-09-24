@@ -58,6 +58,19 @@ export function bareProject(reposDir: string, context: string): BareProject | un
   }
 }
 
+/**
+ * Who a ticket may be assigned to on the board: everyone already assigned
+ * somewhere in the project (Jira/GitHub/Linear names included) and the
+ * people in lore.json `client.contacts`. The board offers only these — no
+ * free text — so a typo can't create a phantom assignee.
+ */
+export function assigneeOptions(config: LoreConfig, items: Pick<LoreWorkItem, 'assignee'>[]): string[] {
+  const names = new Set<string>()
+  for (const i of items) if (i.assignee?.trim()) names.add(i.assignee.trim())
+  for (const c of config.client?.contacts ?? []) if (c.name.trim()) names.add(c.name.trim())
+  return [...names].sort((a, b) => a.localeCompare(b))
+}
+
 /** The tracker table at HEAD of the bare repo — always current, no clone involved. */
 export function bareWorkItems(reposDir: string, p: BareProject): { prefix: string; items: LoreWorkItem[] } {
   const prefix = workPrefix(p.config)

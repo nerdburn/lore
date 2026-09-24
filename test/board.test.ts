@@ -417,3 +417,39 @@ test('board comments: a member comments; the thread merges the board comment wit
   assert.equal((await api('/p/lore-acme/items/ACM-3/comments', { cookie: await session('bob3@viewers.io'), body: { body: 'hi' } })).status, 403)
   assert.equal((await api('/p/lore-acme/items/ACM-3/comments', { cookie: jane, body: { body: '   ' } })).status, 400)
 })
+
+test('board assignees: offered from the project, and nothing else is accepted', async () => {
+  const jane = await session('jane@acme.com')
+  const board = await api('/p/lore-acme', { cookie: jane })
+  assert.ok(Array.isArray(board.body.assignees))
+  const bad = await api('/p/lore-acme/items/ACM-2', { method: 'PATCH', cookie: jane, body: { assignee: 'Somebody Made Up' } })
+  assert.equal(bad.status, 400)
+  assert.match(bad.body.error, /not someone on this project/)
+  assert.equal((await api('/p/lore-acme/items', { cookie: jane, body: { title: 'x', assignee: 'Nope' } })).status, 400)
+  // Clearing is always allowed.
+  const cleared = await api('/p/lore-acme/items/ACM-2', { method: 'PATCH', cookie: jane, body: { assignee: '', priority: 'P3' } })
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body))
+})
+
+test('board files: a member removes a file — it leaves the ticket and is no longer served; history says so', async () => {
+  const jane = await session('jane@acme.com')
+  const bytes = Buffer.from('a file to remove '.repeat(20))
+  const up = await upload(jane, 'ACM-2', 'remove-me.txt', bytes, 'text/plain')
+  const sha = up.body.attachment.sha256
+  assert.equal((await fetch(`${base}/api/board/p/lore-acme/files/${sha}`, { headers: { cookie: jane } })).status, 200)
+
+  assert.equal((await api('/p/lore-acme/items/ACM-2/detach', { cookie: await session('bob4@viewers.io'), body: { sha256: sha } })).status, 403, 'viewers cannot remove')
+  const gone = await api('/p/lore-acme/items/ACM-2/detach', { cookie: jane, body: { sha256: sha } })
+  assert.equal(gone.status, 200, JSON.stringify(gone.body))
+  const thread = await api('/p/lore-acme/items/ACM-2/thread', { cookie: jane })
+  assert.ok(!thread.body.attachments.some((a: any) => a.sha256 === sha))
+  assert.equal((await fetch(`${base}/api/board/p/lore-acme/files/${sha}`, { headers: { cookie: jane } })).status, 404)
+  const item = headTracker().find((i) => i.key === 'ACM-2')!
+  assert.deepEqual(item.history.at(-1).change, { detached: ['remove-me.txt', null] })
+  assert.equal((await api('/p/lore-acme/items/ACM-2/detach', { cookie: jane, body: { sha256: sha } })).status, 400, 'already removed')
+
+  // Attaching the same file again brings it back.
+  const again = await upload(jane, 'ACM-2', 'remove-me.txt', bytes, 'text/plain')
+  assert.equal(again.status, 201)
+  assert.equal((await fetch(`${base}/api/board/p/lore-acme/files/${sha}`, { headers: { cookie: jane } })).status, 200)
+})

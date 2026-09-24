@@ -6,14 +6,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, test } from 'node:test'
-import { importAttachments, readAttachments } from '../src/attachments.js'
+import { importAttachments, readAttachments, removeAttachment } from '../src/attachments.js'
 import { createBlobStore, writeHashed } from '../src/blobs.js'
 import { parseStreamFile, ticketThread } from '../src/comments.js'
 import { embeddedMedia } from '../src/connectors/github.js'
 import { linear, readWorkTable as readLinearTable, uploadLinks } from '../src/connectors/linear.js'
 import type { Connector, RemoteAttachment } from '../src/types.js'
 import { mirrorExternal, readWorkItems } from '../src/work.js'
-import { ACME, makeContextRepo } from './helpers.js'
+import { ACME, captureConsole, makeContextRepo } from './helpers.js'
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const realFetch = globalThis.fetch
@@ -142,6 +142,21 @@ test('attachments import: files on open linked tickets are stored and recorded o
   mirrorExternal(root, ACME)
   const closed = fakeTracker({ 'jira:ACM-7': [{ name: 'late.png', bytes: Buffer.from('x') }] })
   assert.deepEqual(await importAttachments(root, ACME as never, { jira: closed }, store, cfg), { imported: 0, skipped: 0, errors: [] })
+})
+
+test('attachments import: a file someone removed from the ticket is not imported again', async () => {
+  const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable([{ key: 'ACM-7', category: 'To Do' }]) }, { ...ACME, sources: { jira: { projects: ['ACM'], site: 'https://acme.atlassian.net', api_base: 'https://jira.int.example/rest/api/3' } } })
+  mirrorExternal(root, ACME)
+  const tracker = fakeTracker({ 'jira:ACM-7': [{ name: 'noise.png', bytes: Buffer.from('noise') }] })
+  const store = createBlobStore({ dir: mkdtempSync(join(tmpdir(), 'lore-blobs-')) })
+  await importAttachments(root, ACME as never, { jira: tracker }, store, () => ({}))
+  const [rec] = readAttachments(root)
+  await captureConsole(() => removeAttachment(root, 'ACM-1', { sha256: rec.sha256 }, { context: root, by: 'shawn' }))
+  assert.deepEqual(readAttachments(root)[0].removed?.by, 'shawn')
+  const again = await importAttachments(root, ACME as never, { jira: tracker }, store, () => ({}))
+  assert.deepEqual(again, { imported: 0, skipped: 0, errors: [] })
+  assert.equal(readAttachments(root).length, 1)
+  assert.deepEqual(readWorkItems(root, 'ACM')[0].history.at(-1)!.change, { detached: ['noise.png', null] })
 })
 
 test('attachments import: a failed download is reported and retried next time, never fatal', async () => {

@@ -2,14 +2,14 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { attachUpload, ATTACHMENTS_FILE, cleanName, guessType, parseAttachments, type AttachmentRecord } from '../attachments.js'
+import { attachUpload, ATTACHMENTS_FILE, cleanName, guessType, liveAttachments, parseAttachments, removeAttachment, type AttachmentRecord } from '../attachments.js'
 import { gitShow } from '../bare.js'
 import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
 import { addComment, ticketThread } from '../comments.js'
 import { workAdd, workMove, workRank, workSet, type WorkWriteOptions } from '../commands/work.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
-import { bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
+import { assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
 
@@ -164,7 +164,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       }
 
       const fileRoute = /^\/p\/([\w.-]+)\/files\/([a-f0-9]{64})$/.exec(route)
-      const m = fileRoute ? null : /^\/p\/([\w.-]+)(?:\/items(?:\/([\w.-]+)(?:\/(move|rank|thread|comments|files))?)?)?$/.exec(route)
+      const m = fileRoute ? null : /^\/p\/([\w.-]+)(?:\/items(?:\/([\w.-]+)(?:\/(move|rank|thread|comments|files|detach))?)?)?$/.exec(route)
       if (!m && !fileRoute) return send(res, 404, { error: 'not found' }), true
       const [, context, key, action] = (m ?? [route, fileRoute![1], undefined, undefined]) as unknown as [string, string, string | undefined, string | undefined]
       const project = bareProject(opts.repos, context)
@@ -176,7 +176,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       // A file: only one this board's record names, so a hash alone opens nothing.
       if (fileRoute && method === 'GET') {
         const sha = fileRoute[2]
-        const record = parseAttachments(gitShow(bare, ATTACHMENTS_FILE, true)).find((r) => r.sha256 === sha)
+        const record = liveAttachments(parseAttachments(gitShow(bare, ATTACHMENTS_FILE, true))).find((r) => r.sha256 === sha)
         const path = record ? await store.path(sha) : undefined
         if (!record || !path) return send(res, 404, { error: 'no such file' }), true
         serveFile(req, res, path, record)
@@ -186,7 +186,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       if (key && action === 'thread' && method === 'GET') {
         const item = findItem(bareWorkItems(opts.repos, project).items, key)
         if (!item) return send(res, 404, { error: `no item ${key}` }), true
-        const attachments = parseAttachments(gitShow(bare, ATTACHMENTS_FILE, true)).filter((r) => r.ticket === item.key)
+        const attachments = liveAttachments(parseAttachments(gitShow(bare, ATTACHMENTS_FILE, true))).filter((r) => r.ticket === item.key)
         return send(res, 200, { comments: ticketThread(bare, item), attachments }), true
       }
 
@@ -207,7 +207,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
             statuses: WORK_STATUSES,
             priorities: WORK_PRIORITIES,
             labels: Object.keys(labelCounts(items)).sort((a, b) => a.localeCompare(b)),
-            assignees: [...new Set(items.map((i) => i.assignee).filter((a): a is string => Boolean(a)))].sort(),
+            assignees: assigneeOptions(project.config, items),
             items: items.map((i) => summarizeForRecall(i)),
           }),
           true
@@ -235,6 +235,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       }
 
       const body = await readBody(req)
+      // Assignees come from a fixed list on the board (see assigneeOptions); "" clears.
+      if (typeof body.assignee === 'string' && body.assignee.trim()) {
+        const options = assigneeOptions(project.config, bareWorkItems(opts.repos, project).items)
+        if (!options.includes(body.assignee.trim())) return send(res, 400, { error: `"${body.assignee}" is not someone on this project — pick from the list` }), true
+      }
       const reason = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined
       const w: WorkWriteOptions = { context, via: 'web', actor: email }
       const write = (fn: () => LoreWorkItem) => serializeFor(context)(async () => fn())
@@ -286,6 +291,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           return item
         })
         return send(res, 200, { item }), true
+      }
+      if (key && action === 'detach' && method === 'POST') {
+        const which = { sha256: str(body.sha256), source_id: str(body.source_id) }
+        const record = await serializeFor(context)(async () => removeAttachment(cwd, key, which, { context, via: 'web', actor: email }))
+        return send(res, 200, { attachment: record }), true
       }
       if (key && action === 'comments' && method === 'POST') {
         const comment = await serializeFor(context)(async () => addComment(cwd, key, typeof body.body === 'string' ? body.body : '', { context, via: 'web', actor: email }))
