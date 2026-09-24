@@ -174,6 +174,7 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   "granola": { "folders": ["Acme"], "attendee_domains": ["acme.com"] },
   "notion":  { "roots": ["<page or database url>"], "token": "env:NOTION_TOKEN" },
   "jira":    { "projects": ["ACM"], "site": "https://acme.atlassian.net", "email": "env:JIRA_EMAIL", "token": "env:JIRA_TOKEN" },
+  "linear":  { "teams": ["PRP"], "token": "env:LINEAR_API_KEY" },
   "gmail":   { "users": "all", "admin": "shawn@inputlogic.ca", "exclude": [], "query": "-subject:\"Invitation:\" -label:newsletters" }
 }
 ```
@@ -184,6 +185,14 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   `thread_window_days` (default 30), so late replies to old threads are
   picked up regardless of the overlap. Channels added to `lore.json` later
   backfill automatically.
+- **Linear** syncs issues and comments for each team through the GraphQL
+  API and maintains `context/work/linear/<TEAM>.yaml` — the live issue
+  table (`category` is Linear's state type), seeded with every open issue
+  on the first sync and mirrored into the lore tracker like Jira: `started`
+  is in progress, `completed`/`canceled` are done. A personal API key goes
+  in as `Authorization` — on the host through two http-proxy integrations,
+  `api_base` for api.linear.app and `uploads_base` for uploads.linear.app,
+  where files pasted into issues live.
 - **GitHub** syncs issues, pull requests, comments, reviews, commits, and
   releases for each repo, and maintains
   `context/work/github/<owner>__<repo>.yaml` — the live issue/PR table,
@@ -454,6 +463,20 @@ Host admins (`LORE_BOARD_ADMINS`) are members of every enabled board. Every
 board change is a history entry `via: web` signed with the person's email,
 committed and pushed like any other write — the fold treats it as a human
 decision. Setup on the host: docs/DEPLOY_EXE.md §8.
+
+**Attachments and comments.** A ticket's drawer on the board shows its
+files — screenshots, recordings, PDFs, dropped, pasted or picked on the
+board, or imported by `lore sync` from the linked Jira, GitHub or Linear
+issue — and one comment thread: comments made on the board (or with
+`lore work comment CAR-3 "…"`, or an agent's `lore_work_comment`) together
+with the linked issue's own comments. Board comments are stream docs
+(`context/streams/board/<KEY>/`), so they are searchable and the fold reads
+them; nothing is posted back to the tracker. Files are content-addressed:
+git holds only `context/attachments.yaml` (name, type, size, sha256, where
+it came from); the bytes live in the asset store — Cloudflare R2 behind a
+small Worker, with a cache on the host (docs/DEPLOY_EXE.md §9). Sync imports
+files on **open** linked tickets only, up to 100 MB each; a larger one is
+recorded as a link to where it lives.
 
 **Pushing to Jira.** Lore's state flows back out only when someone asks:
 

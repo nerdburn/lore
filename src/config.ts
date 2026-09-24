@@ -157,6 +157,21 @@ export const sourceSchemas = {
     .refine((j) => (j.projects?.length ?? 0) > 0 || (j.boards?.length ?? 0) > 0, { message: 'jira needs projects and/or boards', path: ['projects'] })
     .refine((j) => j.site || j.api_base, { message: 'jira needs site (https://x.atlassian.net) or api_base', path: ['site'] })
     .refine((j) => (j.email && j.token) || j.api_base, { message: 'jira needs email + token (env:…) or an api_base proxy that injects them', path: ['token'] }),
+  linear: baseSource
+    .extend({
+      /** Team keys, e.g. ["PRP"]. */
+      teams: z.array(z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/, 'Linear team keys are uppercase, e.g. PRP')).min(1),
+      /** Personal API key (env:LINEAR_API_KEY), sent as Authorization; optional when api_base is a proxy that injects it. */
+      token: envRef.optional(),
+      /** GraphQL endpoint (default https://api.linear.app/graphql); a proxy URL when the key lives off-host. */
+      api_base: z.string().url().optional(),
+      /** Proxy for https://uploads.linear.app (files pasted into issues), when the key lives off-host. */
+      uploads_base: z.string().url().optional(),
+      /** Default: issues + comments. */
+      include: z.array(z.enum(['issues', 'comments'])).optional(),
+      overlap_days: z.number().min(0).optional(),
+    })
+    .refine((l) => l.token || l.api_base, { message: 'linear needs token (env:LINEAR_API_KEY) or an api_base proxy that injects it', path: ['token'] }),
   gmail: baseSource.extend({
     /** Service account key JSON as an env ref (env:GMAIL_SA_KEY); or leave both unset for `key_file`. */
     key: envRef.optional(),

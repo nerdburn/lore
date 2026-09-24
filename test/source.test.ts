@@ -52,7 +52,7 @@ test('source add: validates identifiers and refuses to write an invalid lore.jso
   const root = makeContextRepo()
   const before = readFileSync(join(root, 'lore.json'), 'utf8')
   await assert.rejects(sourceAdd(root, { kind: 'github', scope: ['not-a-repo'] }, { context: root }), /is not "owner\/repo"/)
-  await assert.rejects(sourceAdd(root, { kind: 'linear', scope: ['x'] }, { context: root }), /not a source lore syncs \(one of slack, github/)
+  await assert.rejects(sourceAdd(root, { kind: 'asana', scope: ['x'] }, { context: root }), /not a source lore syncs \(one of slack, github/)
   await assert.rejects(sourceAdd(root, { kind: 'jira', scope: ['9abc'] }, { context: root }), /not a Jira project key/)
   await assert.rejects(sourceAdd(root, { kind: 'figma', scope: ['https://www.figma.com/deck/8KDHUykKTwbvIXqqUcedIg/Vision'] }, { context: root }), /Slides deck/)
   await assert.rejects(sourceAdd(root, { kind: 'gmail', scope: ['nobody'] }, { context: root }), /not an email address/)
@@ -194,7 +194,7 @@ test('mcp: lore_source_add widens scope with the server identity as actor; lore_
   const bad = await call('lore_source_add', { kind: 'github', scope: ['nope'] })
   assert.equal(bad.isError, true)
   assert.match(bad.text, /owner\/repo/)
-  const unknown = await call('lore_source_add', { kind: 'linear', scope: ['x'] })
+  const unknown = await call('lore_source_add', { kind: 'asana', scope: ['x'] })
   assert.equal(unknown.isError, true, 'the kind enum rejects unknown sources')
 
   const list = JSON.parse((await call('lore_source_list')).text) as { name: string; scope: string[] }[]

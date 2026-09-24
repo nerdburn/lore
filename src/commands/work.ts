@@ -98,9 +98,9 @@ function mutate(
  * pushed a sync commit meanwhile, so a rejected push is rebased once and
  * retried before giving up — a ticket move must not be lost to timing.
  */
-export function commitWork(ctx: ResolvedContext, rel: string, message: string): void {
+export function commitWork(ctx: ResolvedContext, rel: string | string[], message: string): void {
   if (ctx.mode !== 'cache') return
-  git(ctx.root, 'add', rel, AUDIT_FILE)
+  git(ctx.root, 'add', ...(Array.isArray(rel) ? rel : [rel]), AUDIT_FILE)
   git(ctx.root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', message)
   try {
     git(ctx.root, 'push', '--quiet')
@@ -171,13 +171,17 @@ function cleanList(list: string[] | undefined): string[] | undefined {
 
 /** "jira:INPT-9" / "github:owner/repo#42" → an ExternalRef, with the tracker's state when its table has the issue. */
 function resolveExternal(ctx: ResolvedContext, spec: string): ExternalRef {
-  const m = /^(jira|github):(.+)$/i.exec(spec.trim())
-  if (!m) throw new Error('work: --external must be "jira:<KEY>" or "github:<owner>/<repo>#<n>"')
-  const system = m[1].toLowerCase() as 'jira' | 'github'
+  const m = /^(jira|github|linear):(.+)$/i.exec(spec.trim())
+  if (!m) throw new Error('work: --external must be "jira:<KEY>", "github:<owner>/<repo>#<n>" or "linear:<KEY>"')
+  const system = m[1].toLowerCase() as 'jira' | 'github' | 'linear'
   const rest = m[2].trim()
-  const id = system === 'jira' ? `jira:${rest.toUpperCase()}` : `github:${rest}`
+  const id = system === 'github' ? `github:${rest}` : `${system}:${rest.toUpperCase()}`
   const known = readExternalIssues(ctx.root).find((i) => i.ref.id === id)
   if (known) return known.ref
+  if (system === 'linear') {
+    if (!/^[A-Z][A-Z0-9]*-\d+$/i.test(rest)) throw new Error('work: --external linear form is "linear:<TEAM>-<n>", e.g. linear:PRP-12')
+    return { system, id, key: rest.toUpperCase(), url: '', status: 'unknown', category: 'unknown' }
+  }
   if (system === 'jira') {
     const site = ((ctx.config.sources.jira as { site?: string } | undefined)?.site ?? '').replace(/\/$/, '')
     return { system, id, key: rest.toUpperCase(), url: site ? `${site}/browse/${rest.toUpperCase()}` : '', status: 'unknown', category: 'unknown' }

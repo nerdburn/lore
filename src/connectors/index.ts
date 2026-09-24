@@ -4,6 +4,7 @@ import { github } from './github.js'
 import { gmail } from './gmail.js'
 import { granola } from './granola.js'
 import { jira } from './jira.js'
+import { linear } from './linear.js'
 import { notion } from './notion.js'
 import { slack } from './slack.js'
 
@@ -19,6 +20,7 @@ export const connectors: Record<string, Connector> = {
   granola,
   notion,
   jira,
+  linear,
   gmail,
   figma,
 }

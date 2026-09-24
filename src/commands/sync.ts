@@ -8,6 +8,8 @@ import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
 import { mirrorExternal } from '../work.js'
 import { writeStatus } from '../status.js'
+import { importAttachments } from '../attachments.js'
+import { blobStoreFromEnv, type BlobStore } from '../blobs.js'
 
 /** Connector-supplied paths must stay inside context/. */
 function safeRel(rel: string): string {
@@ -43,7 +45,7 @@ export interface SyncSummary {
  * instead: see run-all, where a partial sync is `degraded`, not `failed`.
  * Only `"disabled": true` skips a source quietly.
  */
-export async function sync(root: string, registry: Record<string, Connector> = connectors): Promise<SyncSummary> {
+export async function sync(root: string, registry: Record<string, Connector> = connectors, opts: { store?: BlobStore } = {}): Promise<SyncSummary> {
   const config = loadConfig(root)
   const summary: SyncSummary = { ok: true, sources: {} }
   if (config.lifecycle === 'archived') {
@@ -128,6 +130,27 @@ export async function sync(root: string, registry: Record<string, Connector> = c
   } catch (err) {
     console.error(`✗ work: ${err instanceof Error ? err.message : String(err)}`)
     summary.ok = false
+  }
+
+  // Files on the external issues behind open tickets → the asset store.
+  // Never fails the sync: what is missing is retried next run.
+  try {
+    const imported = await importAttachments(
+      root,
+      config,
+      registry,
+      opts.store ?? blobStoreFromEnv(),
+      (source) => {
+        const raw = config.sources[source]
+        if (!raw || raw.disabled || summary.sources[source]?.status === 'failed') return undefined
+        const { resolved, missing } = resolveEnvRefs(raw)
+        return missing.length ? undefined : resolved
+      },
+      (line) => console.log(line),
+    )
+    for (const e of imported.errors) console.error(`✗ attachments: ${e}`)
+  } catch (err) {
+    console.error(`✗ attachments: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   // Only sync's half of state.json — a fold may be checkpointing its own

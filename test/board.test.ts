@@ -10,6 +10,7 @@ import { CodeStore, SessionSigner } from '../src/board/auth.js'
 import type { MailMessage } from '../src/board/email.js'
 import { boardAdd, boardEnable, boardRemove } from '../src/commands/board.js'
 import { www } from '../src/commands/www.js'
+import { createBlobStore } from '../src/blobs.js'
 import { configSchema } from '../src/config.js'
 import { writeGlobalConfig } from '../src/context.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
@@ -95,7 +96,7 @@ before(async () => {
     port: 0,
     host: '127.0.0.1',
     mcp: false,
-    board: { cwd: home, admins: ['boss@inputlogic.ca'], secret: 'test-secret', webDir, now: () => clock, sendMail: async (m) => void mail.push(m), log: () => {} },
+    board: { cwd: home, admins: ['boss@inputlogic.ca'], secret: 'test-secret', webDir, now: () => clock, store: createBlobStore({ dir: join(home, 'assets') }), sendMail: async (m) => void mail.push(m), log: () => {} },
   })
   host = h
   base = `http://127.0.0.1:${await h.ready}`
@@ -120,6 +121,16 @@ async function api(path: string, init: { method?: string; body?: unknown; cookie
   })
   const text = await res.text()
   return { status: res.status, body: text ? (JSON.parse(text) as Record<string, any>) : {}, setCookie: res.headers.get('set-cookie') ?? '' }
+}
+
+const sessions = new Map<string, string>()
+/** A session for this address — fresh sign-in the first time, the same cookie after (the per-address limit is 5 an hour). */
+async function session(email: string): Promise<string> {
+  if (!sessions.has(email)) {
+    clock += 3_600_000 // a new hour: the per-address window has passed
+    sessions.set(email, await signIn(email))
+  }
+  return sessions.get(email)!
 }
 
 async function signIn(email: string): Promise<string> {
@@ -327,4 +338,82 @@ test('board: `lore board` edits lore.json in the context repo', async () => {
   const cfg = JSON.parse(git(join(bares, 'lore-beta.git'), 'show', 'HEAD:lore.json'))
   assert.deepEqual(cfg.board, { enabled: true, members: ['jane@acme.com', 'priya@beta.com'], viewers: [] })
   assert.throws(() => boardAdd(home, ['nope'], 'member', opts), /not an email or @domain/)
+})
+
+// ---- files and comments ----
+
+async function upload(cookie: string, key: string, name: string, bytes: Buffer, type: string, context = 'lore-acme') {
+  const res = await fetch(`${base}/api/board/p/${context}/items/${key}/files`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': type, 'x-file-name': encodeURIComponent(name) },
+    body: bytes,
+  })
+  return { status: res.status, body: (await res.json()) as Record<string, any> }
+}
+
+test('board files: a member uploads, the record lands in git, the bytes in the store; anyone on the board can fetch it, with ranges', async () => {
+  const jane = await session('jane@acme.com')
+  const png = Buffer.from('\x89PNG\r\n\x1a\n fake image bytes '.repeat(50))
+  const up = await upload(jane, 'ACM-1', 'hero shot.png', png, 'image/png')
+  assert.equal(up.status, 201, JSON.stringify(up.body))
+  const sha = up.body.attachment.sha256
+  assert.match(sha, /^[a-f0-9]{64}$/)
+
+  const records = parse(git(join(bares, 'lore-acme.git'), 'show', 'HEAD:context/attachments.yaml').replace(/^(#.*\n)+/, ''))
+  assert.deepEqual(
+    records.map((r: any) => [r.ticket, r.name, r.type, r.size, r.source, r.by]),
+    [['ACM-1', 'hero shot.png', 'image/png', png.length, 'board', 'jane@acme.com']],
+  )
+  assert.equal(headTracker().find((i) => i.key === 'ACM-1')!.history.at(-1).reason, 'attached hero shot.png')
+  assert.ok(!git(join(bares, 'lore-acme.git'), 'ls-tree', '-r', '--name-only', 'HEAD').split('\n').some((f) => f.endsWith('.png')), 'no bytes in git')
+
+  // The same file again: recorded once.
+  assert.equal((await upload(jane, 'ACM-1', 'again.png', png, 'image/png')).body.attachment.name, 'hero shot.png')
+
+  const bob = await session('bob2@viewers.io')
+  const got = await fetch(`${base}/api/board/p/lore-acme/files/${sha}`, { headers: { cookie: bob } })
+  assert.equal(got.status, 200)
+  assert.equal(got.headers.get('content-type'), 'image/png')
+  assert.match(got.headers.get('content-disposition')!, /^inline; filename\*=UTF-8''hero%20shot\.png/)
+  assert.match(got.headers.get('content-security-policy')!, /sandbox/)
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), png)
+  const part = await fetch(`${base}/api/board/p/lore-acme/files/${sha}`, { headers: { cookie: bob, range: 'bytes=0-3' } })
+  assert.equal(part.status, 206)
+  assert.equal(part.headers.get('content-range'), `bytes 0-3/${png.length}`)
+  assert.deepEqual(Buffer.from(await part.arrayBuffer()), png.subarray(0, 4))
+
+  assert.equal((await upload(bob, 'ACM-1', 'x.png', png, 'image/png')).status, 403, 'viewers cannot upload')
+  assert.equal((await fetch(`${base}/api/board/p/lore-acme/files/${sha}`)).status, 401, 'no session, no file')
+  assert.equal((await fetch(`${base}/api/board/p/lore-acme/files/${'0'.repeat(64)}`, { headers: { cookie: bob } })).status, 404, 'a hash no record names opens nothing')
+})
+
+test('board files: script-capable types download instead of rendering; oversize uploads are refused', async () => {
+  const jane = await session('jane@acme.com')
+  const svg = await upload(jane, 'ACM-2', 'logo.svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), 'image/svg+xml')
+  const res = await fetch(`${base}/api/board/p/lore-acme/files/${svg.body.attachment.sha256}`, { headers: { cookie: jane } })
+  assert.match(res.headers.get('content-disposition')!, /^attachment;/)
+
+  const big = await fetch(`${base}/api/board/p/lore-acme/items/ACM-2/files`, {
+    method: 'POST',
+    headers: { cookie: jane, 'content-type': 'video/mp4', 'x-file-name': 'huge.mp4', 'content-length': String(200 * 1024 * 1024) },
+    body: Buffer.alloc(10),
+  }).catch((err) => ({ status: 413, err }))
+  assert.equal(big.status, 413)
+})
+
+test('board comments: a member comments; the thread merges the board comment with the linked Jira issue\'s comments', async () => {
+  const jane = await session('jane@acme.com')
+  const posted = await api('/p/lore-acme/items/ACM-3/comments', { cookie: jane, body: { body: 'Is the **promo** code still live?' } })
+  assert.equal(posted.status, 201, JSON.stringify(posted.body))
+  const files = git(join(bares, 'lore-acme.git'), 'ls-tree', '-r', '--name-only', 'HEAD', 'context/streams/board')
+  assert.match(files, /^context\/streams\/board\/ACM-3\/\d{4}-\d{2}-\d{2}\.md$/)
+
+  const thread = await api('/p/lore-acme/items/ACM-3/thread', { cookie: jane })
+  assert.deepEqual(
+    thread.body.comments.map((c: any) => [c.author, c.source, c.body]),
+    [['jane@acme.com', 'board', 'Is the **promo** code still live?']],
+  )
+  assert.deepEqual(thread.body.attachments, [])
+  assert.equal((await api('/p/lore-acme/items/ACM-3/comments', { cookie: await session('bob3@viewers.io'), body: { body: 'hi' } })).status, 403)
+  assert.equal((await api('/p/lore-acme/items/ACM-3/comments', { cookie: jane, body: { body: '   ' } })).status, 400)
 })

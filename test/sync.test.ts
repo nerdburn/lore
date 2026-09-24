@@ -46,23 +46,23 @@ test('sync: a healthy source writes docs, advances its cursor, records lastSucce
 })
 
 test('sync: a configured source with no connector fails the run and is recorded', async () => {
-  const root = makeContextRepo({}, config({ linear: { teams: ['ACME'] } }))
+  const root = makeContextRepo({}, config({ asana: { teams: ['ACME'] } }))
   const { result, err } = await captureConsole(() => sync(root, {}))
   assert.equal(result.ok, false)
-  assert.equal(result.sources.linear.status, 'failed')
-  assert.match(result.sources.linear.errors[0], /no such connector "linear"/)
-  assert.match(err, /sync failed: linear/)
+  assert.equal(result.sources.asana.status, 'failed')
+  assert.match(result.sources.asana.errors[0], /no such connector "asana"/)
+  assert.match(err, /sync failed: asana/)
   const state = JSON.parse(readFileSync(join(root, 'state.json'), 'utf8'))
-  assert.match(state.sources.linear.lastError.message, /no such connector/)
-  assert.equal(state.sources.linear.lastSuccess, undefined)
+  assert.match(state.sources.asana.lastError.message, /no such connector/)
+  assert.equal(state.sources.asana.lastSuccess, undefined)
 })
 
 test('sync: disabled sources are skipped without failing', async () => {
-  const root = makeContextRepo({}, config({ linear: { teams: ['x'], disabled: true } }))
+  const root = makeContextRepo({}, config({ asana: { teams: ['x'], disabled: true } }))
   const { result, out } = await captureConsole(() => sync(root, {}))
   assert.equal(result.ok, true)
-  assert.equal(result.sources.linear.status, 'disabled')
-  assert.match(out, /linear: disabled — skipped/)
+  assert.equal(result.sources.asana.status, 'disabled')
+  assert.match(out, /asana: disabled — skipped/)
 })
 
 test('sync: missing env vars fail the source', async () => {
@@ -149,16 +149,16 @@ test('sync: redaction count is reported', async () => {
 })
 
 test('check: fails for an unsupported configured source, passes when it is disabled', async () => {
-  const bad = makeContextRepo({}, config({ linear: { teams: ['x'] } }))
+  const bad = makeContextRepo({}, config({ asana: { teams: ['x'] } }))
   const r1 = await captureConsole(() => check(bad, {}))
   assert.equal(r1.result, false)
   assert.match(r1.err, /no such connector/)
   assert.match(r1.err, /"disabled": true/)
 
-  const disabled = makeContextRepo({}, config({ linear: { teams: ['x'], disabled: true } }))
+  const disabled = makeContextRepo({}, config({ asana: { teams: ['x'], disabled: true } }))
   const r2 = await captureConsole(() => check(disabled, {}))
   assert.equal(r2.result, true)
-  assert.match(r2.out, /linear": disabled/)
+  assert.match(r2.out, /asana": disabled/)
 })
 
 test('check: reports missing env and shows source health from state.json', async () => {

@@ -5,6 +5,7 @@ import { api, PRIORITIES, STATUS_LABEL, WORK_ORDER, type Board, type HistoryEntr
 import { ago, StatusChip } from './bits'
 import { ChoiceSelect, splitLabels } from './fields'
 import { renderMarkdown } from './md'
+import { TicketThread } from './TicketThread'
 
 interface Props {
   context: string
@@ -74,7 +75,7 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                     <span className="mono">{item.key}</span>
                     {item.external && (
                       <a href={item.external.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
-                        {item.external.system === 'jira' ? 'Jira' : 'GitHub'} {item.external.key} · {item.external.status}
+                        {({ jira: 'Jira', github: 'GitHub', linear: 'Linear' } as Record<string, string>)[item.external.system] ?? item.external.system} {item.external.key} · {item.external.status}
                         <ArrowUpRightFromSquare className="size-3" />
                       </a>
                     )}
@@ -110,6 +111,8 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
 
                   <Description key={item.description ?? ''} value={item.description ?? ''} canEdit={canEdit} saving={saving} onSave={(description) => update({ description })} />
 
+                  <TicketThread context={context} itemKey={item.key} canEdit={canEdit} onError={onError} onChanged={() => void refresh()} />
+
                   {item.sources.length > 0 && (
                     <section>
                       <h3 className="mb-2 text-sm font-semibold">Evidence</h3>
@@ -126,7 +129,7 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                   )}
 
                   <section>
-                    <h3 className="mb-3 text-sm font-semibold">Activity</h3>
+                    <h3 className="mb-3 text-sm font-semibold">History</h3>
                     <ol className="flex flex-col gap-3 border-l border-separator pl-4">
                       {[...(item.history ?? [])].reverse().map((h, n) => (
                         <HistoryRow key={`${h.at}-${n}`} h={h} />
@@ -244,6 +247,8 @@ function describeChange(change: Record<string, unknown>): string {
     const [from, to] = v as [unknown, unknown]
     const show = (x: unknown) => (x === null || x === undefined || x === '' ? '—' : Array.isArray(x) ? x.join(', ') || '—' : field === 'status' ? (STATUS_LABEL[x as Status] ?? String(x)) : String(x))
     if (field === 'description') return 'edited the description'
+    if (field === 'attached') return `attached ${show(to)}`
+    if (field === 'jira_sprint') return `put it in Jira sprint ${show(to)}`
     if (field === 'rank') return `ranked ${from} → ${to}`
     if (field === 'sources') return 'added evidence'
     return `${field.replace('_', ' ')} ${show(from)} → ${show(to)}`

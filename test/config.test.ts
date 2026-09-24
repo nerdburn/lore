@@ -117,8 +117,8 @@ test('config: validation errors name the source and field', () => {
 })
 
 test('config: unknown sources are accepted structurally (connector may come later)', () => {
-  const cfg = configSchema.parse({ project: 'x', sources: { linear: { team: 'ACME', disabled: true } } })
-  assert.equal(cfg.sources.linear.disabled, true)
+  const cfg = configSchema.parse({ project: 'x', sources: { asana: { team: 'ACME', disabled: true } } })
+  assert.equal(cfg.sources.asana.disabled, true)
 })
 
 test('config: client block — domains normalised, contacts default to the client side', () => {

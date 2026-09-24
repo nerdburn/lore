@@ -1,5 +1,5 @@
 import { parse as parseYaml, stringify } from 'yaml'
-import type { Connector, ConnectorContext, Doc } from '../types.js'
+import type { Connector, ConnectorContext, Doc, RemoteAttachment } from '../types.js'
 
 /**
  * Jira Cloud connector (backlog §10/§11 — Jira as the canonical tracker).
@@ -63,6 +63,36 @@ export interface JiraWorkItem {
 
 export const jira: Connector = {
   name: 'jira',
+
+  async attachments(ctx, refs) {
+    const { api, apiBase } = clientFor(ctx.config)
+    const keys = refs.filter((r) => r.startsWith('jira:')).map((r) => r.slice(5))
+    const out: RemoteAttachment[] = []
+    for (let i = 0; i < keys.length; i += 50) {
+      const batch = keys.slice(i, i + 50)
+      for (const issue of await api.search(`key in (${batch.map((k) => `"${k}"`).join(',')})`, ['attachment'])) {
+        for (const a of (issue.fields.attachment as JiraAttachment[] | undefined) ?? []) {
+          out.push({
+            ref: `jira:${issue.key}`,
+            sourceId: String(a.id),
+            name: a.filename,
+            ...(a.mimeType ? { mime: a.mimeType } : {}),
+            ...(typeof a.size === 'number' ? { size: a.size } : {}),
+            url: `${apiBase}/attachment/content/${a.id}`,
+            ...(a.created ? { created: iso(a.created) } : {}),
+            ...(a.author?.displayName ? { author: a.author.displayName } : {}),
+          })
+        }
+      }
+    }
+    return out
+  },
+
+  async download(ctx, att) {
+    // /attachment/content/{id} redirects to a signed media URL; fetch drops
+    // the auth header on the cross-origin hop, which is what the media host wants.
+    return fetch(att.url, { headers: authHeaders(ctx.config) })
+  },
 
   async fetch(ctx: ConnectorContext) {
     const email = ctx.config.email as string | undefined
@@ -489,6 +519,27 @@ export function currentSprint(value: unknown): JiraSprint | undefined {
   return open.find((v) => v.state === 'active') ?? open.sort((a, b) => (a.startDate ?? '').localeCompare(b.startDate ?? '') || a.id - b.id)[0]
 }
 
+interface JiraAttachment {
+  id: string | number
+  filename: string
+  mimeType?: string
+  size?: number
+  created?: string
+  author?: { displayName?: string }
+}
+
+function authHeaders(cfg: Record<string, unknown>): Record<string, string> {
+  const email = cfg.email as string | undefined
+  const token = cfg.token as string | undefined
+  return email && token ? { Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}` } : {}
+}
+
+function clientFor(cfg: Record<string, unknown>): { api: JiraApi; apiBase: string } {
+  const site = ((cfg.site as string | undefined) ?? '').replace(/\/$/, '')
+  const apiBase = ((cfg.api_base as string | undefined) ?? (site ? `${site}/rest/api/3` : '')).replace(/\/$/, '')
+  return { api: jiraApiFromConfig(cfg).api, apiBase }
+}
+
 /** Build a client from a resolved `sources.jira` config (env refs already resolved). */
 export function jiraApiFromConfig(cfg: Record<string, unknown>): { api: JiraApi; site: string } {
   const email = cfg.email as string | undefined
@@ -634,6 +685,8 @@ export interface JiraIssue {
     labels?: string[]
     fixVersions?: { name: string }[]
     parent?: { key: string } | null
+    /** Only when asked for (attachment import). */
+    attachment?: unknown
     /** Custom fields asked for by id (the Sprint field). */
     [custom: `customfield_${string}`]: unknown
   }

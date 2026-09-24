@@ -316,3 +316,38 @@ any MCP write on the same context, since both use the host's one cache
 clone. Codes are rate-limited per address and per IP; asking for a code for
 an address with no access sends nothing and answers the same as one that
 has access.
+
+## 9. Attachments — the asset store (R2)
+
+Files on tickets never go in git: `context/attachments.yaml` records them,
+the bytes live in Cloudflare R2, and the host keeps a cache under
+`~/.lore/assets`. Everything is fetched through lore (the board checks who
+is asking); nothing is a public URL. Until R2 is set up, the host cache is
+the only copy — set it up before relying on attachments.
+
+One-time, from a laptop logged in to Cloudflare (`npx wrangler login`):
+
+```sh
+cd deploy/r2-worker
+npx wrangler r2 bucket create lore-assets
+npx wrangler deploy                                  # prints https://lore-assets.<you>.workers.dev
+openssl rand -base64 32 | tee /dev/stderr | npx wrangler secret put LORE_ASSETS_SECRET
+ssh exe.dev integrations add http-proxy --name lore-assets --target https://lore-assets.<you>.workers.dev \
+    --bearer '<that secret>' --attach vm:lore-host
+```
+
+Then in `/etc/lore/env`: `LORE_ASSETS_API=https://lore-assets.int.exe.xyz`,
+and `sudo systemctl restart lore-www`. The Worker refuses a PUT whose bytes
+don't hash to the name, and the host verifies what it reads back, so the
+store can only ever hold what the records say.
+
+**Linear** (for clients who use it) needs two integrations, since uploads
+live on their own host:
+
+```sh
+ssh exe.dev integrations add http-proxy --name linear         --target https://api.linear.app     --header "Authorization:lin_api_…" --attach tag:lore
+ssh exe.dev integrations add http-proxy --name linear-uploads --target https://uploads.linear.app --header "Authorization:lin_api_…" --attach tag:lore
+```
+
+and in the client's `lore.json`:
+`"linear": { "teams": ["PRP"], "api_base": "https://linear.int.exe.xyz/graphql", "uploads_base": "https://linear-uploads.int.exe.xyz" }`.

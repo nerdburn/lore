@@ -1,7 +1,11 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { attachUpload, ATTACHMENTS_FILE, cleanName, guessType, parseAttachments, type AttachmentRecord } from '../attachments.js'
+import { gitShow } from '../bare.js'
+import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
+import { addComment, ticketThread } from '../comments.js'
 import { workAdd, workMove, workRank, workSet, type WorkWriteOptions } from '../commands/work.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
@@ -32,6 +36,8 @@ export interface BoardOptions {
   sendMail?: SendMail
   /** Built SPA. Default: web/dist in the install. */
   webDir?: string
+  /** Where attachment bytes live (default: from the environment — see blobs.ts). */
+  store?: BlobStore
   log?: (line: string) => void
   /** Test seam. */
   now?: () => number
@@ -66,6 +72,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
   const sendMail = opts.sendMail ?? createSendMail(emailConfigFromEnv(), log)
   const cwd = opts.cwd ?? process.cwd()
   const webDir = opts.webDir ?? defaultWebDir()
+  const store = opts.store ?? blobStoreFromEnv()
   const perEmail = new RateLimiter(5, 3_600_000)
   const perEmailBurst = new RateLimiter(1, 30_000)
   const perIp = new RateLimiter(30, 3_600_000)
@@ -156,13 +163,32 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         return send(res, 200, { projects }), true
       }
 
-      const m = /^\/p\/([\w.-]+)(?:\/items(?:\/([\w.-]+)(?:\/(move|rank))?)?)?$/.exec(route)
-      if (!m) return send(res, 404, { error: 'not found' }), true
-      const [, context, key, action] = m
+      const fileRoute = /^\/p\/([\w.-]+)\/files\/([a-f0-9]{64})$/.exec(route)
+      const m = fileRoute ? null : /^\/p\/([\w.-]+)(?:\/items(?:\/([\w.-]+)(?:\/(move|rank|thread|comments|files))?)?)?$/.exec(route)
+      if (!m && !fileRoute) return send(res, 404, { error: 'not found' }), true
+      const [, context, key, action] = (m ?? [route, fileRoute![1], undefined, undefined]) as unknown as [string, string, string | undefined, string | undefined]
       const project = bareProject(opts.repos, context)
       const role = project ? boardRole(project.config, email, admins) : undefined
       // A board you can't see and a board that doesn't exist look the same.
       if (!project || !role) return send(res, 404, { error: 'no such board' }), true
+      const bare = join(opts.repos, `${context}.git`)
+
+      // A file: only one this board's record names, so a hash alone opens nothing.
+      if (fileRoute && method === 'GET') {
+        const sha = fileRoute[2]
+        const record = parseAttachments(gitShow(bare, ATTACHMENTS_FILE, true)).find((r) => r.sha256 === sha)
+        const path = record ? await store.path(sha) : undefined
+        if (!record || !path) return send(res, 404, { error: 'no such file' }), true
+        serveFile(req, res, path, record)
+        return true
+      }
+
+      if (key && action === 'thread' && method === 'GET') {
+        const item = findItem(bareWorkItems(opts.repos, project).items, key)
+        if (!item) return send(res, 404, { error: `no item ${key}` }), true
+        const attachments = parseAttachments(gitShow(bare, ATTACHMENTS_FILE, true)).filter((r) => r.ticket === item.key)
+        return send(res, 200, { comments: ticketThread(bare, item), attachments }), true
+      }
 
       if (method === 'GET') {
         const { prefix, items } = bareWorkItems(opts.repos, project)
@@ -189,6 +215,25 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       }
 
       if (role !== 'member') return send(res, 403, { error: 'you can view this board but not change it' }), true
+
+      // Uploads are the raw bytes, hashed to a temp file as they stream in
+      // (capped), then stored and recorded on the context's write queue.
+      if (key && action === 'files' && method === 'POST') {
+        const name = cleanName(decodeHeader(header(req, 'x-file-name')) || 'upload')
+        const declared = Number(req.headers['content-length'])
+        if (declared > MAX_ATTACHMENT_BYTES) return send(res, 413, { error: `files are limited to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB` }), true
+        let upload
+        try {
+          upload = await writeHashed(req, store.dir, MAX_ATTACHMENT_BYTES)
+        } catch (err) {
+          if (err instanceof TooLarge) return send(res, 413, { error: err.message }), true
+          throw err
+        }
+        const type = guessType(name, header(req, 'content-type'))
+        const record = await serializeFor(context)(() => attachUpload(cwd, key, { ...upload, name, type }, store, { context, via: 'web', actor: email }))
+        return send(res, 201, { attachment: record }), true
+      }
+
       const body = await readBody(req)
       const reason = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined
       const w: WorkWriteOptions = { context, via: 'web', actor: email }
@@ -241,6 +286,10 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           return item
         })
         return send(res, 200, { item }), true
+      }
+      if (key && action === 'comments' && method === 'POST') {
+        const comment = await serializeFor(context)(async () => addComment(cwd, key, typeof body.body === 'string' ? body.body : '', { context, via: 'web', actor: email }))
+        return send(res, 201, { comment }), true
       }
       if (key && action === 'rank' && method === 'POST') {
         const target = rankTarget(body, bareWorkItems(opts.repos, project).items, key)
@@ -365,6 +414,56 @@ function clientIp(req: IncomingMessage): string {
   const xff = req.headers['x-forwarded-for']
   const last = (Array.isArray(xff) ? xff.join(',') : xff ?? '').split(',').map((s) => s.trim()).filter(Boolean).pop()
   return last ?? req.socket.remoteAddress ?? 'unknown'
+}
+
+// ---- files ----
+
+/** RFC 5987-ish: the board sends the file name URI-encoded in a header. */
+function decodeHeader(v: string | undefined): string {
+  if (!v) return ''
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return v
+  }
+}
+
+/** Shown in the page: pictures, video, audio, PDF. Everything else downloads. SVG downloads too — it can carry script. */
+function inlineType(type: string): boolean {
+  return (/^(image|video|audio)\//.test(type) && type !== 'image/svg+xml') || type === 'application/pdf'
+}
+
+function serveFile(req: IncomingMessage, res: ServerResponse, path: string, record: AttachmentRecord): void {
+  const size = statSync(path).size
+  const headers: Record<string, string> = {
+    'content-type': record.type || 'application/octet-stream',
+    'content-disposition': `${inlineType(record.type) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(record.name)}`,
+    // Content-addressed: the bytes behind a hash never change; private, since access is per person.
+    'cache-control': 'private, max-age=31536000, immutable',
+    'accept-ranges': 'bytes',
+    // Whatever the file is, it may not run in the board's origin.
+    'content-security-policy': "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'",
+    ...SECURITY_HEADERS,
+  }
+  const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''))
+  if (range && (range[1] || range[2])) {
+    let start = range[1] ? Number(range[1]) : size - Number(range[2])
+    let end = range[1] && range[2] ? Number(range[2]) : size - 1
+    if (!range[1]) end = size - 1
+    start = Math.max(0, start)
+    end = Math.min(end, size - 1)
+    if (start > end || start >= size) {
+      res.writeHead(416, { 'content-range': `bytes */${size}` })
+      res.end()
+      return
+    }
+    res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) })
+    createReadStream(path, { start, end }).pipe(res)
+    return
+  }
+  res.writeHead(200, { ...headers, 'content-length': String(size) })
+  if (req.method === 'HEAD') res.end()
+  else createReadStream(path).pipe(res)
 }
 
 // ---- the SPA ----

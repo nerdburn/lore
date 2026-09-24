@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { Command } from 'commander'
 import { agentsAllow, agentsList, agentsRevoke } from './commands/agents.js'
 import { boardAdd, boardEnable, boardRemove, boardShow } from './commands/board.js'
+import { addComment } from './comments.js'
 import { archive } from './commands/archive.js'
 import { auth } from './commands/auth.js'
 import { check } from './commands/check.js'
@@ -282,7 +283,7 @@ contextual(
     .option('--assignee <who>', 'who is on it')
     .option('--labels <list>', 'comma-separated labels')
     .option('--source <urls>', 'comma-separated evidence links (a Slack permalink, an email)')
-    .option('--external <ref>', 'link an existing tracker issue: "jira:INPT-9" or "github:owner/repo#42"')
+    .option('--external <ref>', 'link an existing tracker issue: "jira:INPT-9", "github:owner/repo#42" or "linear:PRP-12"')
     .option('--reason <why>', 'why this is being tracked (recorded in history)')
     .option('--by <who>', 'who is adding this (defaults to OS username)'),
 ).action((title: string, o) => {
@@ -323,7 +324,7 @@ contextual(
     .option('--assignee <who>', 'who is on it ("" to clear)')
     .option('--labels <list>', 'comma-separated, replaces the list')
     .option('--source <urls>', 'comma-separated evidence links to add')
-    .option('--external <ref>', '"jira:INPT-9" or "github:owner/repo#42"')
+    .option('--external <ref>', '"jira:INPT-9", "github:owner/repo#42" or "linear:PRP-12"')
     .requiredOption('--reason <why>', 'why — recorded in history')
     .option('--by <who>', 'who is changing it'),
 ).action((key: string, o) => {
@@ -372,6 +373,17 @@ contextual(
 contextual(
   work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--label <label>', 'only items carrying this label').option('--json', 'machine-readable output'),
 ).action((o) => void workList(root, o))
+contextual(
+  work
+    .command('comment')
+    .description('comment on a ticket (shown on the board with the linked issue\'s comments; never posted to the tracker); commits and pushes')
+    .argument('<key>', 'e.g. CAR-3')
+    .argument('<body>', 'the comment, markdown')
+    .option('--by <who>', 'who is commenting (defaults to OS username)'),
+).action((key: string, body: string, o) => {
+  const c = addComment(root, key, body, o)
+  console.log(`commented on ${key.toUpperCase()} as ${c.author}`)
+})
 contextual(work.command('show').description('one item with its full history').argument('<key>').option('--json', 'machine-readable output')).action((key: string, o) => void workShow(root, key, o))
 
 const source = program.command('source').description('what memory is synced from — add a repo, channel, folder, page, design file, board, or mailbox to an existing client (identifiers only; credentials stay in proxies / env)')

@@ -12,6 +12,7 @@ import { remember } from './remember.js'
 import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
 import { workAdd, workLabel, workMove, workPromote, workRank, workSet } from './work.js'
+import { addComment } from '../comments.js'
 import { workPush } from './work-push.js'
 import { sourceAdd, sourceList } from './source.js'
 import { KNOWN_SOURCES } from '../config.js'
@@ -43,6 +44,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
   { name: 'lore_work_label', writes: true, summary: 'add or remove a project label on several tickets at once' },
+  { name: 'lore_work_comment', writes: true, summary: 'comment on a work item (shown on the board with the linked issue\'s comments)' },
   { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones, put in-flight or requested tickets in a sprint (explicit only)' },
 ]
 
@@ -321,7 +323,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         assignee: z.string().optional(),
         labels: z.array(z.string()).optional(),
         sources: sourcesField,
-        external: z.string().optional().describe('"jira:<KEY>" or "github:<owner>/<repo>#<n>"'),
+        external: z.string().optional().describe('"jira:<KEY>", "github:<owner>/<repo>#<n>" or "linear:<KEY>"'),
         reason: reasonField,
       },
     },
@@ -383,7 +385,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         assignee: z.string().optional().describe('"" clears it'),
         labels: z.array(z.string()).optional().describe('replaces the list'),
         sources: sourcesField,
-        external: z.string().optional().describe('"jira:<KEY>" or "github:<owner>/<repo>#<n>"'),
+        external: z.string().optional().describe('"jira:<KEY>", "github:<owner>/<repo>#<n>" or "linear:<KEY>"'),
         rank_above: z.string().optional().describe('a key, or "top" / "bottom"'),
         reason: reasonField,
       },
@@ -422,6 +424,23 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       const lines = r.labeled.map((l) => `${l.key}: ${l.title} — labels: ${l.labels.join(', ') || '(none)'}`)
       if (r.unchanged.length) lines.push(`unchanged (already so): ${r.unchanged.join(', ')}`)
       return text(lines.join('\n') || 'nothing changed')
+    },
+  )
+
+  tool(
+    'lore_work_comment',
+    {
+      description: archived
+        ? unavailable
+        : 'Add a comment to a work item — what a person would write on the ticket: a question, an update, a decision about it. Shown on the board next to the linked Jira/GitHub/Linear issue\'s own comments, and read by the fold like any conversation. Not posted to the external tracker. Use when a person asks you to note something on a ticket, or to reply on it.',
+      inputSchema: {
+        key: z.string().min(1).describe('e.g. CAR-3'),
+        body: z.string().min(1).describe('markdown'),
+      },
+    },
+    async ({ key, body }) => {
+      const c = addComment(rememberOpts.cwd, key, body, workVia)
+      return text(`commented on ${key.toUpperCase()} as ${c.author}`)
     },
   )
 

@@ -28,7 +28,7 @@ export interface HistoryEntry {
 }
 
 export interface ExternalRef {
-  system: 'jira' | 'github'
+  system: 'jira' | 'github' | 'linear'
   key: string
   url: string
   status: string
@@ -106,6 +106,30 @@ export interface HostStatus {
   playbook: string
 }
 
+export interface Attachment {
+  sha256?: string
+  ticket: string
+  name: string
+  type: string
+  size?: number
+  source: 'board' | 'jira' | 'github' | 'linear'
+  source_url?: string
+  by: string
+  at: string
+  skipped?: string
+}
+
+export interface Comment {
+  id: string
+  author: string
+  at: string
+  body: string
+  source: 'board' | 'jira' | 'github' | 'linear'
+  url?: string
+}
+
+export const SOURCE_NAME: Record<string, string> = { board: 'Board', jira: 'Jira', github: 'GitHub', linear: 'Linear' }
+
 export interface Me {
   email: string
   admin: boolean
@@ -148,6 +172,31 @@ export const api = {
     call<{ item: Item }>(`/p/${enc(context)}/items`, { body: fields }),
   update: (context: string, key: string, fields: Partial<Pick<Item, 'title' | 'description' | 'priority' | 'assignee' | 'labels'>> & { note?: string }) =>
     call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`, { method: 'PATCH', body: fields }),
+  thread: (context: string, key: string) => call<{ comments: Comment[]; attachments: Attachment[] }>(`/p/${enc(context)}/items/${enc(key)}/thread`),
+  comment: (context: string, key: string, body: string) => call<{ comment: Comment }>(`/p/${enc(context)}/items/${enc(key)}/comments`, { body: { body } }),
+  fileUrl: (context: string, sha: string) => `/api/board/p/${enc(context)}/files/${sha}`,
+  /** Raw upload with progress (fetch can't report upload progress). */
+  upload(context: string, key: string, file: File, onProgress?: (fraction: number) => void): Promise<{ attachment: Attachment }> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `/api/board/p/${enc(context)}/items/${enc(key)}/files`)
+      xhr.setRequestHeader('content-type', file.type || 'application/octet-stream')
+      xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name || 'pasted image.png'))
+      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total)
+      xhr.onload = () => {
+        let data: Record<string, unknown> = {}
+        try {
+          data = JSON.parse(xhr.responseText || '{}')
+        } catch {
+          /* not JSON */
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data as { attachment: Attachment })
+        else reject(new ApiError(xhr.status, typeof data.error === 'string' ? data.error : `upload failed (${xhr.status})`))
+      }
+      xhr.onerror = () => reject(new ApiError(0, 'upload failed — check your connection'))
+      xhr.send(file)
+    })
+  },
   move: (context: string, key: string, body: { status?: Status; above?: string; below?: string; note?: string }) =>
     call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}/move`, { body }),
 }

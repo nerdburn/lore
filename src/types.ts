@@ -67,6 +67,34 @@ export interface FetchResult {
 export interface Connector {
   name: string
   fetch(ctx: ConnectorContext): Promise<FetchResult>
+  /**
+   * Files attached to these external issues (ExternalRef ids, e.g.
+   * "jira:INPT-12"), for sync to import into the asset store. Optional:
+   * sources without issues have none.
+   */
+  attachments?(ctx: AttachmentContext, refs: string[]): Promise<RemoteAttachment[]>
+  /** Fetch one attachment's bytes (auth as the connector does it). */
+  download?(ctx: AttachmentContext, att: RemoteAttachment): Promise<Response>
+}
+
+export interface AttachmentContext {
+  config: Record<string, unknown>
+  log: (msg: string) => void
+}
+
+/** A file on an external issue, as the source describes it. */
+export interface RemoteAttachment {
+  /** The issue: an ExternalRef id ("jira:INPT-12", "github:owner/repo#4", "linear:PRP-3"). */
+  ref: string
+  /** Stable id within the source (Jira attachment id, the upload URL…) — how a re-scan knows it has it. */
+  sourceId: string
+  name: string
+  mime?: string
+  /** Bytes, when the source says (Jira does; embedded uploads don't). */
+  size?: number
+  url: string
+  created?: string
+  author?: string
 }
 
 export interface Pin {

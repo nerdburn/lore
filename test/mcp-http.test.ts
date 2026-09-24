@@ -133,7 +133,7 @@ test('mcp-http: a context that is not on the host → 404', async () => {
 test('mcp-http: a granted agent gets the full tool set over HTTP, and writes are attributed to it', async () => {
   const s = await connect('accord-agent')
   const tools = (await s.client.listTools()).tools.map((t) => t.name)
-  assert.equal(tools.length, 16)
+  assert.equal(tools.length, 17)
   assert.ok(tools.includes('lore_recall'))
   assert.deepEqual(handler.sessions().map((x) => [x.agent, x.context]), [['accord-agent', 'lore-acme']])
 

@@ -276,6 +276,10 @@ not a paraphrase of the command.
   that theme's tickets, open and closed. Labels added in lore survive
   Jira/GitHub syncs; the tracker keeps owning its own labels.
 
+- **`lore_work_comment`** — add a comment to a ticket (`key`, markdown
+  `body`) when a person asks you to note, ask or answer something on it.
+  It shows on the board next to the linked Jira/GitHub/Linear issue's own
+  comments and the fold reads it; it is never posted to the tracker.
 - **`lore_work_push`** — write lore's state out to Jira, **only when a
   person asks** ("push this to Jira", "create the Jira ticket for JNT-3",
   "sync Jira with lore"). A linked ticket whose status differs gets the

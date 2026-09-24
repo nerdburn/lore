@@ -4,6 +4,7 @@ import { parse, stringify } from 'yaml'
 import type { LoreConfig } from './config.js'
 import { readWorkTable as readGithubTable, type WorkItem as GithubItem } from './connectors/github.js'
 import { readWorkTable as readJiraTable, type JiraWorkItem } from './connectors/jira.js'
+import { readWorkTable as readLinearTable, type LinearWorkItem } from './connectors/linear.js'
 
 /**
  * The lore work tracker — `context/work/lore/<PREFIX>.yaml`.
@@ -36,7 +37,7 @@ export type WorkVia = 'cli' | 'mcp' | 'web' | 'sync' | 'fold'
 export type WorkState = 'open' | 'closed'
 
 export interface ExternalRef {
-  system: 'jira' | 'github'
+  system: 'jira' | 'github' | 'linear'
   /** Stable identity for matching: "jira:INPT-123", "github:owner/repo#42". */
   id: string
   /** The tracker's own key: "INPT-123", "#42". */
@@ -277,8 +278,12 @@ export function summarizeForRecall(item: LoreWorkItem): WorkItemSummary {
 
 // ---- mirroring external trackers ----
 
+export const SYSTEM_NAME: Record<ExternalRef['system'], string> = { jira: 'Jira', github: 'GitHub', linear: 'Linear' }
+
 function externalDone(ext: Pick<ExternalRef, 'system' | 'category'>): boolean {
-  return ext.system === 'github' ? ext.category === 'closed' : /^done$/i.test(ext.category)
+  if (ext.system === 'github') return ext.category === 'closed'
+  if (ext.system === 'linear') return ext.category === 'completed' || ext.category === 'canceled'
+  return /^done$/i.test(ext.category)
 }
 
 /** Tracker state → lore status. A status named "Blocked" or a "blocked" label wins while the item is open. */
@@ -286,6 +291,7 @@ export function mapExternalStatus(ext: Pick<ExternalRef, 'system' | 'category' |
   if (externalDone(ext)) return 'done'
   if (/block/i.test(ext.status) || labels.some((l) => /^blocked$/i.test(l))) return 'blocked'
   if (ext.system === 'jira' && /in progress/i.test(ext.category)) return 'in_progress'
+  if (ext.system === 'linear' && ext.category === 'started') return 'in_progress'
   return 'todo'
 }
 
@@ -294,6 +300,7 @@ export function mapPriority(raw: string | undefined, labels: string[] = []): Wor
   if (label) return label.toUpperCase() as WorkPriority
   if (!raw) return undefined
   if (/^(highest|high|urgent|critical|blocker)$/i.test(raw)) return 'P1'
+  // Linear's "No priority" is no priority.
   if (/^(medium|normal)$/i.test(raw)) return 'P2'
   if (/^(low|lowest|minor|trivial)$/i.test(raw)) return 'P3'
   return undefined
@@ -342,6 +349,21 @@ export function readExternalIssues(root: string): ExternalIssue[] {
       }
     }
   }
+  const linearDir = join(root, 'context/work/linear')
+  if (existsSync(linearDir)) {
+    for (const entry of readdirSync(linearDir).sort()) {
+      if (!/\.ya?ml$/.test(entry)) continue
+      for (const i of readLinearTable(readFileSync(join(linearDir, entry), 'utf8')) as LinearWorkItem[]) {
+        out.push({
+          ref: { system: 'linear', id: `linear:${i.key}`, key: i.key, url: i.url, status: i.status, category: i.category },
+          title: i.title,
+          labels: i.labels ?? [],
+          assignee: i.assignee,
+          priority: mapPriority(i.priority, i.labels ?? []),
+        })
+      }
+    }
+  }
   return out
 }
 
@@ -370,7 +392,7 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
   let created = 0
   let updated = 0
   for (const issue of issues) {
-    const label = `${issue.ref.system === 'jira' ? 'Jira' : 'GitHub'} ${issue.ref.key}`
+    const label = `${SYSTEM_NAME[issue.ref.system]} ${issue.ref.key}`
     const known = byExternal.get(issue.ref.id)
     if (!known) {
       if (externalDone(issue.ref)) continue

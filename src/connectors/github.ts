@@ -58,8 +58,65 @@ export interface WorkItem {
   url: string
 }
 
+/**
+ * Files pasted into an issue (github.com/user-attachments/…) are not
+ * reachable through a repo-scoped proxy, but GitHub's HTML rendering of the
+ * issue — a repo path — carries each one as a short-lived signed
+ * private-user-images URL that needs no token. So: read the issue and its
+ * comments as HTML, collect <img>/<video> sources, download them at once.
+ */
+export function embeddedMedia(html: string | null | undefined): { url: string; sourceId: string; name: string }[] {
+  const out: { url: string; sourceId: string; name: string }[] = []
+  if (!html) return out
+  for (const m of html.matchAll(/<(img|video|source)\b[^>]*?\bsrc="([^"]+)"[^>]*>/gi)) {
+    const url = m[2].replace(/&amp;/g, '&')
+    if (!/^https:\/\/(private-user-images\.githubusercontent\.com|user-images\.githubusercontent\.com|github\.com\/user-attachments)\//.test(url)) continue
+    const sourceId = url.split('?')[0]
+    if (out.some((o) => o.sourceId === sourceId)) continue
+    const alt = /\balt="([^"]*)"/i.exec(m[0])?.[1]
+    const tail = decodeURIComponent(sourceId.split('/').pop() ?? 'file')
+    out.push({ url, sourceId, name: alt && alt !== 'image' ? `${alt}${/\.[a-z0-9]{2,4}$/i.test(alt) ? '' : extOf(tail)}` : tail })
+  }
+  return out
+}
+
+function extOf(name: string): string {
+  return /\.[a-z0-9]{2,4}$/i.exec(name)?.[0] ?? ''
+}
+
 export const github: Connector = {
   name: 'github',
+
+  async attachments(ctx, refs) {
+    const token = ctx.config.token as string | undefined
+    const apiBase = ((ctx.config.api_base as string | undefined) ?? API).replace(/\/$/, '')
+    const api = githubClient(apiBase, token)
+    const out: import('../types.js').RemoteAttachment[] = []
+    const HTML = 'application/vnd.github.html+json'
+    for (const ref of refs) {
+      const m = /^github:([^/#]+\/[^/#]+)#(\d+)$/.exec(ref)
+      if (!m) continue
+      const [, repo, n] = m
+      try {
+        const issue = await api.get<{ body_html?: string; created_at: string; user?: GhUser }>(`/repos/${repo}/issues/${n}`, {}, HTML)
+        const comments = await api.get<{ body_html?: string; created_at: string; user?: GhUser }[]>(`/repos/${repo}/issues/${n}/comments`, { per_page: '100' }, HTML)
+        for (const part of [issue, ...comments]) {
+          for (const e of embeddedMedia(part.body_html)) {
+            if (out.some((o) => o.ref === ref && o.sourceId === e.sourceId)) continue
+            out.push({ ref, sourceId: e.sourceId, name: e.name, url: e.url, created: part.created_at, ...(part.user?.login ? { author: part.user.login } : {}) })
+          }
+        }
+      } catch (err) {
+        ctx.log(`github: attachments for ${repo}#${n}: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+    return out
+  },
+
+  async download(_ctx, att) {
+    // Signed URLs: no credentials, and none may be sent to another host.
+    return fetch(att.url, { headers: { 'User-Agent': 'lore' } })
+  },
 
   async fetch(ctx: ConnectorContext) {
     const token = ctx.config.token as string | undefined
@@ -337,7 +394,7 @@ class GithubError extends Error {
 }
 
 interface Api {
-  get<T>(path: string, params: Record<string, string>): Promise<T>
+  get<T>(path: string, params: Record<string, string>, accept?: string): Promise<T>
   paginate<T>(path: string, params: Record<string, string>): Promise<T[]>
 }
 
@@ -348,9 +405,9 @@ function githubClient(apiBase: string, token: string | undefined): Api {
     'User-Agent': 'lore',
   }
   if (token) headers.Authorization = `Bearer ${token}`
-  async function request(url: string): Promise<Response> {
+  async function request(url: string, accept?: string): Promise<Response> {
     for (;;) {
-      const res = await fetch(url, { headers })
+      const res = await fetch(url, { headers: accept ? { ...headers, Accept: accept } : headers })
       if (res.status === 429 || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0')) {
         const retryAfter = Number(res.headers.get('retry-after'))
         const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000
@@ -366,8 +423,8 @@ function githubClient(apiBase: string, token: string | undefined): Api {
     }
   }
   return {
-    async get<T>(path: string, params: Record<string, string>) {
-      const res = await request(`${apiBase}${path}?${new URLSearchParams(params)}`)
+    async get<T>(path: string, params: Record<string, string>, accept?: string) {
+      const res = await request(`${apiBase}${path}?${new URLSearchParams(params)}`, accept)
       return (await res.json()) as T
     },
     async paginate<T>(path: string, params: Record<string, string>) {

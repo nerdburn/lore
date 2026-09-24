@@ -1,0 +1,10 @@
+{
+  // lore asset store: `npx wrangler deploy` from this directory, then
+  // `npx wrangler secret put LORE_ASSETS_SECRET` (see docs/DEPLOY_EXE.md §9).
+  "name": "lore-assets",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "lore-assets" }],
+  "observability": { "enabled": true }
+}
