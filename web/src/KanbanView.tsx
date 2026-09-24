@@ -1,10 +1,10 @@
 import { CollisionPriority } from '@dnd-kit/abstract'
 import { pointerIntersection } from '@dnd-kit/collision'
 import { DragDropProvider, DragOverlay, useDraggable, useDroppable } from '@dnd-kit/react'
-import { Avatar } from '@heroui/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BOARD_COLUMNS, STATUS_LABEL, type Item, type Status } from './api'
-import { ExternalBadge, initials, Labels, PriorityChip } from './bits'
+import { ExternalBadge, Labels, PriorityChip } from './bits'
+import { PersonAvatar } from './people'
 
 type Columns = Record<Status, string[]>
 
@@ -134,11 +134,7 @@ function CardBody({ item, className = '' }: { item: Item; className?: string }) 
         <PriorityChip priority={item.priority} />
         <ExternalBadge item={item} />
         <span className="flex-1" />
-        {item.assignee && (
-          <Avatar size="sm" className="size-6 text-[10px]" aria-label={item.assignee}>
-            <Avatar.Fallback>{initials(item.assignee)}</Avatar.Fallback>
-          </Avatar>
-        )}
+        {item.assignee && <PersonAvatar name={item.assignee} className="size-6 text-[10px]" />}
       </div>
       {item.labels.length > 0 && (
         <div className="mt-2">

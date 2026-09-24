@@ -43,7 +43,7 @@ export function Login({ onSignedIn }: { onSignedIn: (me: Me) => void }) {
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
-      <Card className="w-full max-w-sm p-2">
+      <Card className="w-full max-w-sm p-6">
         <Card.Header className="gap-3">
           <div className="flex items-center gap-2 text-lg font-semibold tracking-tight">
             <Logo className="size-7" />

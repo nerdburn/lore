@@ -6,6 +6,8 @@ import { Header } from './Header'
 import { HostPage } from './HostPage'
 import { AuthorizePage } from './AuthorizePage'
 import { ConnectPage } from './ConnectPage'
+import { PeopleProvider } from './people'
+import { ProfilePage } from './ProfilePage'
 import { Login } from './Login'
 import { Projects } from './Projects'
 import { useRoute } from './router'
@@ -39,6 +41,7 @@ export function App() {
       {me === null ? (
         <Login onSignedIn={setMe} />
       ) : (
+        <PeopleProvider>
         <div className="flex min-h-screen flex-col">
           <Header me={me} onSignOut={signOut} />
           <main className="flex-1">
@@ -46,6 +49,8 @@ export function App() {
               <Projects onUnauthorized={onUnauthorized} />
             ) : route.name === 'host' ? (
               <HostPage onUnauthorized={onUnauthorized} />
+            ) : route.name === 'profile' ? (
+              <ProfilePage me={me} onChanged={setMe} />
             ) : route.name === 'connect' ? (
               <ConnectPage onUnauthorized={onUnauthorized} />
             ) : route.name === 'authorize' ? (
@@ -55,6 +60,7 @@ export function App() {
             )}
           </main>
         </div>
+        </PeopleProvider>
       )}
     </>
   )

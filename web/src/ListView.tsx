@@ -2,6 +2,7 @@ import { Switch, Table, type SortDescriptor } from '@heroui/react'
 import { useMemo, useState } from 'react'
 import { WORK_ORDER, type Item } from './api'
 import { ago, ExternalBadge, Labels, PriorityChip, StatusChip } from './bits'
+import { PersonAvatar } from './people'
 
 type Col = 'rank' | 'key' | 'title' | 'status' | 'priority' | 'assignee' | 'updated'
 
@@ -86,7 +87,16 @@ export function ListView({ items, onOpen, showClosed, onShowClosed }: { items: I
                   <Table.Cell>
                     <PriorityChip priority={i.priority} />
                   </Table.Cell>
-                  <Table.Cell className="text-sm">{i.assignee ?? <span className="text-muted">—</span>}</Table.Cell>
+                  <Table.Cell className="text-sm">
+                    {i.assignee ? (
+                      <span className="inline-flex items-center gap-2">
+                        <PersonAvatar name={i.assignee} className="size-5 text-[9px]" />
+                        {i.assignee}
+                      </span>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </Table.Cell>
                   <Table.Cell className="text-sm text-muted">
                     <span title={i.last ? `${i.last.by}: ${i.last.reason}` : undefined}>{ago(i.last?.at ?? i.updated)}</span>
                   </Table.Cell>

@@ -205,6 +205,13 @@ test('oauth: a viewer gets only read tools; someone not on the board is refused'
   assert.equal(outsider.decided, 403, 'cannot approve access to a board you are not on')
 })
 
+test('oauth: a mistyped MCP URL is called out as no such project, not "no access"', async () => {
+  const reg = await register()
+  const typo = await authorize(reg.body.client_id, 'jane@acme.com', { resource: `${base}/mcp/lore-acm` })
+  assert.match(typo.shown.error, /no project called "lore-acm" on this host — check the URL/)
+  assert.equal(typo.decided, 404)
+})
+
 test('oauth: denied consent goes back as access_denied; junk tokens and bad registrations are refused', async () => {
   const reg = await register()
   const d = await authorize(reg.body.client_id, 'jane@acme.com', { approve: false })

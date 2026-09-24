@@ -155,6 +155,14 @@ export interface Connection {
 export interface Me {
   email: string
   admin: boolean
+  name?: string | null
+  avatar?: string | null
+}
+
+export interface Person {
+  email: string
+  name: string | null
+  avatar: string | null
 }
 
 export class ApiError extends Error {
@@ -188,6 +196,16 @@ export const api = {
   logout: () => call<{ ok: true }>('/logout', { body: {} }),
   projects: () => call<{ projects: ProjectSummary[] }>('/projects'),
   host: () => call<HostStatus>('/host'),
+  people: () => call<{ people: Person[]; contacts: Record<string, string> }>('/people'),
+  setName: (name: string) => call<{ name: string | null; avatar: string | null }>('/profile', { method: 'PATCH', body: { name } }),
+  removeAvatar: () => call<{ name: string | null; avatar: string | null }>('/profile/avatar/remove', { body: {} }),
+  async setAvatar(image: Blob): Promise<{ name: string | null; avatar: string | null }> {
+    const res = await fetch('/api/board/profile/avatar', { method: 'POST', headers: { 'content-type': image.type }, body: image, credentials: 'same-origin' })
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) throw new ApiError(res.status, typeof data.error === 'string' ? data.error : `upload failed (${res.status})`)
+    return data as { name: string | null; avatar: string | null }
+  },
+  avatarUrl: (sha: string) => `/api/board/avatars/${sha}`,
   oauthRequest: (id: string) => call<OAuthRequest>(`/oauth/request/${enc(id)}`),
   oauthDecide: (id: string, approve: boolean) => call<{ redirect: string }>(`/oauth/request/${enc(id)}`, { body: { approve } }),
   connections: () => call<{ connections: Connection[] }>('/oauth/connections'),

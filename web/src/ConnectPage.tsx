@@ -35,7 +35,7 @@ export function ConnectPage({ onUnauthorized }: { onUnauthorized: () => void }) 
           projects.map((p) => {
             const cmd = `claude mcp add --transport http lore-${p.context.replace(/^lore-/, '')} ${origin}/mcp/${p.context}`
             return (
-              <Card key={p.context} className="p-4">
+              <Card key={p.context} className="p-5">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="font-medium">{p.client ?? p.project}</span>
                   <Chip size="sm" variant="soft" color={p.role === 'member' ? 'accent' : 'default'}>

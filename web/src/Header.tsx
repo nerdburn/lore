@@ -1,4 +1,5 @@
-import { Avatar, Button, Dropdown, Label } from '@heroui/react'
+import { Button, Dropdown, Label } from '@heroui/react'
+import { PersonAvatar } from './people'
 import type { Me } from './api'
 import { Logo } from './Logo'
 import { href, navigate } from './router'
@@ -34,16 +35,18 @@ export function Header({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
         )}
         <Dropdown>
           <Button variant="ghost" size="sm" aria-label="Account">
-            <Avatar size="sm">
-              <Avatar.Fallback>{me.email.slice(0, 2).toUpperCase()}</Avatar.Fallback>
-            </Avatar>
+            <PersonAvatar email={me.email} className="size-8 text-xs" />
           </Button>
           <Dropdown.Popover placement="bottom end">
             <div className="px-3 pt-3 pb-1 text-sm">
               <div className="text-muted">Signed in as</div>
-              <div className="font-medium">{me.email}</div>
+              <div className="font-medium">{me.name ?? me.email}</div>
+              {me.name && <div className="text-xs text-muted">{me.email}</div>}
             </div>
-            <Dropdown.Menu onAction={(k) => (k === 'signout' ? onSignOut() : k === 'connect' ? navigate({ name: 'connect' }) : undefined)}>
+            <Dropdown.Menu onAction={(k) => (k === 'signout' ? onSignOut() : k === 'connect' ? navigate({ name: 'connect' }) : k === 'profile' ? navigate({ name: 'profile' }) : undefined)}>
+              <Dropdown.Item id="profile" textValue="Profile">
+                <Label>Profile</Label>
+              </Dropdown.Item>
               <Dropdown.Item id="connect" textValue="Connect Claude Code">
                 <Label>Connect Claude Code</Label>
               </Dropdown.Item>

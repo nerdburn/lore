@@ -96,7 +96,7 @@ before(async () => {
     port: 0,
     host: '127.0.0.1',
     mcp: false,
-    board: { cwd: home, admins: ['boss@inputlogic.ca'], secret: 'test-secret', webDir, now: () => clock, store: createBlobStore({ dir: join(home, 'assets') }), sendMail: async (m) => void mail.push(m), log: () => {} },
+    board: { cwd: home, admins: ['boss@inputlogic.ca'], secret: 'test-secret', webDir, now: () => clock, store: createBlobStore({ dir: join(home, 'assets') }), profilesFile: join(home, 'profiles.json'), sendMail: async (m) => void mail.push(m), log: () => {} },
   })
   host = h
   base = `http://127.0.0.1:${await h.ready}`
@@ -212,7 +212,7 @@ test('board: a wrong code is refused; the right one sets a long-lived HttpOnly c
   assert.equal(ok.status, 200)
   assert.match(ok.setCookie, /lore_board=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=7776000/)
   const me = await api('/me', { cookie: ok.setCookie.split(';')[0] })
-  assert.deepEqual(me.body, { email: 'jane@acme.com', admin: false })
+  assert.deepEqual(me.body, { email: 'jane@acme.com', admin: false, name: null, avatar: null })
 })
 
 test('board: a wrong code reads the same whether or not a code was ever sent', async () => {
@@ -452,4 +452,37 @@ test('board files: a member removes a file — it leaves the ticket and is no lo
   const again = await upload(jane, 'ACM-2', 'remove-me.txt', bytes, 'text/plain')
   assert.equal(again.status, 201)
   assert.equal((await fetch(`${base}/api/board/p/lore-acme/files/${sha}`, { headers: { cookie: jane } })).status, 200)
+})
+
+test('board profiles: a name and a photo, seen only by people who share a board', async () => {
+  const jane = await session('jane@acme.com')
+  const named = await api('/profile', { method: 'PATCH', cookie: jane, body: { name: '  Jane   Doe ' } })
+  assert.deepEqual(named.body, { name: 'Jane Doe', avatar: null })
+
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.from('fake png body')])
+  const up = await fetch(`${base}/api/board/profile/avatar`, { method: 'POST', headers: { cookie: jane, 'content-type': 'image/png' }, body: png })
+  assert.equal(up.status, 200)
+  const { avatar } = (await up.json()) as { avatar: string }
+  assert.match(avatar, /^[a-f0-9]{64}$/)
+  const svg = await fetch(`${base}/api/board/profile/avatar`, { method: 'POST', headers: { cookie: jane, 'content-type': 'image/svg+xml' }, body: '<svg/>' })
+  assert.equal(svg.status, 415)
+
+  const me = await api('/me', { cookie: jane })
+  assert.equal(me.body.name, 'Jane Doe')
+  assert.equal(me.body.avatar, avatar)
+
+  // A viewer of the same board sees Jane and her photo; the contacts map names to emails.
+  const vic = await session('vic5@viewers.io')
+  const people = await api('/people', { cookie: vic })
+  assert.deepEqual(people.body.people.find((p: any) => p.email === 'jane@acme.com'), { email: 'jane@acme.com', name: 'Jane Doe', avatar })
+  const pic = await fetch(`${base}/api/board/avatars/${avatar}`, { headers: { cookie: vic } })
+  assert.equal(pic.status, 200)
+  assert.equal(pic.headers.get('content-type'), 'image/png')
+
+  // Host admins see everyone. (Someone on no board can't sign in at all.)
+  const boss = await session('boss@inputlogic.ca')
+  assert.ok((await api('/people', { cookie: boss })).body.people.some((p: any) => p.email === 'jane@acme.com'), 'admins see everyone')
+
+  await api('/profile/avatar/remove', { cookie: jane, body: {} })
+  assert.equal((await fetch(`${base}/api/board/avatars/${avatar}`, { headers: { cookie: vic } })).status, 404, 'a removed photo is not served')
 })

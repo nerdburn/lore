@@ -29,8 +29,8 @@ export function AuthorizePage({ id, me, onUnauthorized }: { id: string; me: Me; 
   const noAccess = req && (req.context ? !req.role : req.projects.length === 0)
   return (
     <div className="flex min-h-[80vh] items-center justify-center px-4">
-      <Card className="w-full max-w-md p-2">
-        <Card.Header className="gap-2">
+      <Card className="w-full max-w-md p-6 sm:p-8">
+        <Card.Header className="gap-3">
           <Logo className="size-7" />
           <Card.Title className="pt-2 text-xl">{req ? `Connect ${req.client} to lore?` : 'Connect to lore'}</Card.Title>
           <Card.Description>
@@ -42,14 +42,14 @@ export function AuthorizePage({ id, me, onUnauthorized }: { id: string; me: Me; 
             ) : null}
           </Card.Description>
         </Card.Header>
-        <Card.Content className="flex flex-col gap-4">
+        <Card.Content className="flex flex-col gap-5 pt-2">
           {error ? (
             <p className="text-sm text-danger">{error}</p>
           ) : !req ? (
             <Spinner />
           ) : (
             <>
-              <div className="rounded-xl bg-default/60 p-3 text-sm">
+              <div className="rounded-xl bg-default/60 p-4 text-sm">
                 {req.context ? (
                   req.role ? (
                     <div className="flex items-center justify-between gap-2">

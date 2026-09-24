@@ -1,8 +1,9 @@
 import { ArrowUpRightFromSquare, FileText, Paperclip, Play, Xmark } from '@gravity-ui/icons'
-import { Avatar, Button, Chip, Modal, ProgressBar, Spinner, TextArea } from '@heroui/react'
+import { Button, Chip, Modal, ProgressBar, Spinner, TextArea } from '@heroui/react'
+import { PersonAvatar, useDisplayName } from './people'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, SOURCE_NAME, type Attachment, type Comment } from './api'
-import { ago, initials } from './bits'
+import { ago } from './bits'
 import { renderMarkdown } from './md'
 
 interface Props {
@@ -316,12 +317,12 @@ function Viewer({ context, a, onClose }: { context: string; a?: Attachment; onCl
 function CommentRow({ c }: { c: Comment }) {
   return (
     <div className="flex gap-3">
-      <Avatar size="sm" className="mt-0.5 size-7 shrink-0 text-[10px]">
-        <Avatar.Fallback>{initials(c.author)}</Avatar.Fallback>
-      </Avatar>
+      <PersonAvatar {...(c.author.includes('@') ? { email: c.author } : { name: c.author })} className="mt-0.5 size-7 shrink-0 text-[10px]" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 text-sm">
-          <span className="font-medium">{c.author}</span>
+          <span className="font-medium">
+            <DisplayName who={c.author} />
+          </span>
           {c.source !== 'board' && (
             <Chip size="sm" variant="soft">
               {SOURCE_NAME[c.source]}
@@ -385,4 +386,8 @@ function size(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function DisplayName({ who }: { who: string }) {
+  return <>{useDisplayName(who)}</>
 }

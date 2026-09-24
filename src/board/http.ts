@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,7 @@ import { assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, t
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
 import type { OAuthServer } from '../oauth.js'
+import { profilesFile, readProfiles, updateProfile, visiblePeople } from './profiles.js'
 
 /**
  * The board: a list + kanban web view over the lore work tracker, served by
@@ -48,6 +49,8 @@ export interface BoardOptions {
   oauth?: OAuthServer
   /** Test seam: where OAuth keeps clients and refresh grants. */
   oauthFile?: string
+  /** Test seam: where profiles (name, avatar) live. */
+  profilesFile?: string
 }
 
 export interface BoardHandler {
@@ -78,6 +81,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
   const cwd = opts.cwd ?? process.cwd()
   const webDir = opts.webDir ?? defaultWebDir()
   const store = opts.store ?? blobStoreFromEnv()
+  const profiles = opts.profilesFile ?? profilesFile()
   const perEmail = new RateLimiter(5, 3_600_000)
   const perEmailBurst = new RateLimiter(1, 30_000)
   const perIp = new RateLimiter(30, 3_600_000)
@@ -149,7 +153,57 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       if (signer.stale(s, now())) res.setHeader('set-cookie', cookieHeader(signer.issue(s.email, now()).value, { secure: isHttps(req) }))
       const email = s.email
 
-      if (route === '/me' && method === 'GET') return send(res, 200, { email, admin: admins.includes(email) }), true
+      if (route === '/me' && method === 'GET') {
+        const p = readProfiles(profiles)[email]
+        return send(res, 200, { email, admin: admins.includes(email), name: p?.name ?? null, avatar: p?.avatar ?? null }), true
+      }
+
+      // ---- profile: display name + avatar, host-wide ----
+      if (route === '/profile' && method === 'PATCH') {
+        const body = await readBody(req)
+        const p = updateProfile(email, { name: typeof body.name === 'string' ? body.name : undefined }, profiles)
+        return send(res, 200, { name: p.name ?? null, avatar: p.avatar ?? null }), true
+      }
+      if (route === '/profile/avatar' && method === 'POST') {
+        const type = (header(req, 'content-type') ?? '').split(';')[0].toLowerCase()
+        if (!AVATAR_TYPES.has(type)) return send(res, 415, { error: 'avatars are PNG, JPEG, WebP or GIF' }), true
+        if (Number(req.headers['content-length']) > MAX_AVATAR) return send(res, 413, { error: 'avatars are limited to 2 MB' }), true
+        let got
+        try {
+          got = await writeHashed(req, store.dir, MAX_AVATAR)
+        } catch (err) {
+          if (err instanceof TooLarge) return send(res, 413, { error: 'avatars are limited to 2 MB' }), true
+          throw err
+        }
+        await store.put(got.tmp, got.sha, type)
+        const p = updateProfile(email, { avatar: got.sha }, profiles)
+        log(`${email} set an avatar`)
+        return send(res, 200, { name: p.name ?? null, avatar: p.avatar ?? null }), true
+      }
+      if (route === '/profile/avatar/remove' && method === 'POST') {
+        const p = updateProfile(email, { avatar: null }, profiles)
+        return send(res, 200, { name: p.name ?? null, avatar: p.avatar ?? null }), true
+      }
+      if (route === '/people' && method === 'GET') {
+        const all = readProfiles(profiles)
+        const mine = bareProjects(opts.repos).filter((p) => boardRole(p.config, email, admins))
+        const people = visiblePeople(all, email, mine.map((p) => p.config), admins).map((e) => ({ email: e, name: all[e].name ?? null, avatar: all[e].avatar ?? null }))
+        // Assignees are names; the projects' contacts say whose email a name is.
+        const contacts: Record<string, string> = {}
+        for (const p of mine) for (const c of p.config.client?.contacts ?? []) contacts[c.name] = c.email.toLowerCase()
+        return send(res, 200, { people, contacts }), true
+      }
+      const avatarRoute = /^\/avatars\/([a-f0-9]{64})$/.exec(route)
+      if (avatarRoute && method === 'GET') {
+        const sha = avatarRoute[1]
+        const all = readProfiles(profiles)
+        const owner = Object.entries(all).find(([, p]) => p.avatar === sha)?.[0]
+        const mine = bareProjects(opts.repos).filter((p) => boardRole(p.config, email, admins)).map((p) => p.config)
+        const path = owner && visiblePeople(all, email, mine, admins).includes(owner) ? await store.path(sha) : undefined
+        if (!path) return send(res, 404, { error: 'no such avatar' }), true
+        serveFile(req, res, path, { name: 'avatar', type: 'image/png', ticket: '', source: 'board', by: owner!, at: '' } as AttachmentRecord, true)
+        return true
+      }
 
       // ---- MCP OAuth: consent, and the person's connected apps ----
       const oauthReq = /^\/oauth\/request\/([\w-]+)$/.exec(route)
@@ -157,7 +211,10 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         const r = opts.oauth.request(oauthReq[1])
         if (!r) return send(res, 404, { error: 'this sign-in request has expired — start again from your MCP client' }), true
         const context = opts.oauth.contextOf(r.resource)
-        const role = context ? (() => { const p = bareProject(opts.repos, context); return p ? boardRole(p.config, email, admins) : undefined })() : undefined
+        const project = context ? bareProject(opts.repos, context) : undefined
+        const role = project ? boardRole(project.config, email, admins) : undefined
+        // A mistyped MCP URL names a project that isn't here — say so, not "no access".
+        if (context && !project) return send(res, 404, { error: `There's no project called "${context}" on this host — check the URL in your MCP config (the board's Connect Claude Code page has the exact command).` }), true
         if (method === 'GET') {
           const reachable = bareProjects(opts.repos)
             .map((p) => ({ context: p.context, name: p.config.client?.name ?? p.config.project, role: boardRole(p.config, email, admins) }))
@@ -471,15 +528,34 @@ function decodeHeader(v: string | undefined): string {
   }
 }
 
+const AVATAR_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const MAX_AVATAR = 2 * 1024 * 1024
+
+/** An avatar's real type, from its first bytes (it was uploaded as one of AVATAR_TYPES). */
+function imageType(path: string): string {
+  const b = Buffer.alloc(12)
+  const fd = openSync(path, 'r')
+  try {
+    readSync(fd, b, 0, 12, 0)
+  } finally {
+    closeSync(fd)
+  }
+  if (b[0] === 0x89 && b[1] === 0x50) return 'image/png'
+  if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg'
+  if (b.toString('ascii', 0, 3) === 'GIF') return 'image/gif'
+  if (b.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
+  return 'application/octet-stream'
+}
+
 /** Shown in the page: pictures, video, audio, PDF. Everything else downloads. SVG downloads too — it can carry script. */
 function inlineType(type: string): boolean {
   return (/^(image|video|audio)\//.test(type) && type !== 'image/svg+xml') || type === 'application/pdf'
 }
 
-function serveFile(req: IncomingMessage, res: ServerResponse, path: string, record: AttachmentRecord): void {
+function serveFile(req: IncomingMessage, res: ServerResponse, path: string, record: AttachmentRecord, sniffImage = false): void {
   const size = statSync(path).size
   const headers: Record<string, string> = {
-    'content-type': record.type || 'application/octet-stream',
+    'content-type': sniffImage ? imageType(path) : record.type || 'application/octet-stream',
     'content-disposition': `${inlineType(record.type) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(record.name)}`,
     // Content-addressed: the bytes behind a hash never change; private, since access is per person.
     'cache-control': 'private, max-age=31536000, immutable',

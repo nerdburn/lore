@@ -267,6 +267,7 @@ export function createOAuth(opts: OAuthOptions): OAuthServer {
       const resource = q.get('resource') ?? undefined
       if (resource && !/^\/mcp(\/[\w.-]+)?\/?$/.test(safePath(resource))) return back('invalid_target', 'resource must be this host\'s /mcp/<context>')
       const id = randomBytes(18).toString('base64url')
+      log(`authorize "${client.client_name}"${resource ? ` for ${resource}` : ''}`)
       requests.set(id, { id, client, redirect_uri: redirect, ...(q.get('state') ? { state: q.get('state')! } : {}), code_challenge: challenge, ...(resource ? { resource: resource.replace(/\/+$/, '') } : {}), created: now() })
       res.writeHead(302, { location: `/board/authorize?request=${id}` })
       res.end()
