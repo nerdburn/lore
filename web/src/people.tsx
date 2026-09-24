@@ -1,7 +1,7 @@
-import { Avatar } from '@heroui/react'
+import { Blobatar } from '@blobatar/react'
+import { Tooltip } from '@heroui/react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, type Person } from './api'
-import { initials } from './bits'
 
 /**
  * Who's who on the board: profiles (display name, avatar) of everyone who
@@ -47,15 +47,52 @@ export function PeopleProvider({ children }: { children: ReactNode }) {
 
 export const usePeople = () => useContext(Ctx)
 
-/** A person's avatar: their photo if they set one, else initials. */
-export function PersonAvatar({ email, name, className = 'size-7 text-[10px]', size = 'sm' }: { email?: string; name?: string; className?: string; size?: 'sm' | 'md' | 'lg' }) {
+/**
+ * A person's face: their photo if they set one, else a blobatar — a
+ * deterministic shape seeded from their email (or name), so the same
+ * person looks the same everywhere. Hover shows who it is.
+ */
+export function PersonAvatar({ email, name, px = 28, className = '', tooltip = true }: { email?: string; name?: string; px?: number; className?: string; tooltip?: boolean }) {
   const person = usePeople().find({ email, name })
-  const label = person?.name ?? name ?? email ?? ''
+  const label = person?.name ?? name ?? email ?? 'Someone'
+  const seed = (person?.email ?? email ?? name ?? '?').trim().toLowerCase()
+  const face = (
+    <span className={`inline-flex shrink-0 overflow-hidden rounded-full bg-default ring-2 ring-surface ${className}`} style={{ width: px, height: px }} aria-label={label} role="img">
+      {person?.avatar ? <img src={api.avatarUrl(person.avatar)} alt="" className="size-full object-cover" /> : <Blobatar name={seed} size={px} title={label} />}
+    </span>
+  )
+  if (!tooltip) return face
   return (
-    <Avatar size={size} className={className} aria-label={label}>
-      {person?.avatar ? <Avatar.Image src={api.avatarUrl(person.avatar)} alt={label} /> : null}
-      <Avatar.Fallback>{initials(person?.name ?? name ?? email ?? '?')}</Avatar.Fallback>
-    </Avatar>
+    <Tooltip delay={150} closeDelay={0}>
+      <Tooltip.Trigger aria-label={label}>{face}</Tooltip.Trigger>
+      <Tooltip.Content>
+        <p className="text-xs">
+          {label}
+          {person?.name && (person.email ?? email) && person.name !== (person.email ?? email) ? <span className="text-muted"> · {person.email ?? email}</span> : null}
+        </p>
+      </Tooltip.Content>
+    </Tooltip>
+  )
+}
+
+/** Who is on a board: overlapping faces, the rest as "+n". */
+export function AvatarStack({ people, max = 6, px = 26 }: { people: { email: string; name: string | null }[]; max?: number; px?: number }) {
+  if (people.length === 0) return null
+  const shown = people.slice(0, max)
+  const rest = people.length - shown.length
+  return (
+    <span className="inline-flex items-center">
+      {shown.map((p, i) => (
+        <span key={p.email} className={i ? '-ml-2' : ''}>
+          <PersonAvatar email={p.email} px={px} />
+        </span>
+      ))}
+      {rest > 0 && (
+        <span className="-ml-2 inline-flex items-center justify-center rounded-full bg-default text-[10px] font-medium text-muted ring-2 ring-surface" style={{ width: px, height: px }} title={people.slice(max).map((p) => p.name ?? p.email).join(', ')}>
+          +{rest}
+        </span>
+      )}
+    </span>
   )
 }
 

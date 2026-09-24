@@ -1,6 +1,7 @@
 import { Card, Chip, Spinner } from '@heroui/react'
 import { useEffect, useState } from 'react'
 import { api, ApiError, STATUS_LABEL, type ProjectSummary } from './api'
+import { AvatarStack } from './people'
 import { boardRoute, href, navigate } from './router'
 
 export function Projects({ onUnauthorized }: { onUnauthorized: () => void }) {
@@ -58,7 +59,9 @@ export function Projects({ onUnauthorized }: { onUnauthorized: () => void }) {
                       {open} open · {p.counts.done} done
                     </Card.Description>
                   </Card.Header>
-                  <Card.Footer className="flex flex-wrap gap-1.5 pt-3">
+                  <Card.Footer className="flex flex-wrap items-center gap-1.5 pt-3">
+                    <AvatarStack people={p.people} />
+                    <span className="flex-1" />
                     {p.counts.blocked > 0 && (
                       <Chip size="sm" color="danger" variant="soft">
                         {p.counts.blocked} {STATUS_LABEL.blocked.toLowerCase()}

@@ -6,6 +6,7 @@ import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { NewItemModal } from './NewItemModal'
+import { AvatarStack } from './people'
 import { navigate, type Filters, type Route } from './router'
 
 type BoardRoute = Extract<Route, { name: 'board' }>
@@ -105,7 +106,10 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
     <div className="mx-auto flex max-w-[1400px] flex-col gap-4 px-4 py-6">
       <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
         <div className="mr-auto">
-          <h1 className="text-2xl font-semibold tracking-tight">{board.client ?? board.project}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">{board.client ?? board.project}</h1>
+            <AvatarStack people={board.people} max={8} />
+          </div>
           <p className="text-sm text-muted">
             {board.items.filter((i) => i.state === 'open').length} open · <span className="mono">{board.prefix}</span>
             {board.role === 'viewer' && ' · view only'}

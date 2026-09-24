@@ -61,6 +61,14 @@ export interface ProjectSummary {
   role: Role
   archived: boolean
   counts: Record<Status, number>
+  people: BoardPerson[]
+}
+
+export interface BoardPerson {
+  email: string
+  name: string | null
+  avatar: string | null
+  role: Role
 }
 
 export interface Board {
@@ -73,6 +81,7 @@ export interface Board {
   labels: string[]
   assignees: string[]
   items: Item[]
+  people: BoardPerson[]
 }
 
 export interface SourceState {

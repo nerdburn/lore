@@ -317,7 +317,7 @@ function Viewer({ context, a, onClose }: { context: string; a?: Attachment; onCl
 function CommentRow({ c }: { c: Comment }) {
   return (
     <div className="flex gap-3">
-      <PersonAvatar {...(c.author.includes('@') ? { email: c.author } : { name: c.author })} className="mt-0.5 size-7 shrink-0 text-[10px]" />
+      <PersonAvatar {...(c.author.includes('@') ? { email: c.author } : { name: c.author })} px={28} className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 text-sm">
           <span className="font-medium">

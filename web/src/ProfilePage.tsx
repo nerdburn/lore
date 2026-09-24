@@ -29,7 +29,7 @@ export function ProfilePage({ me, onChanged }: { me: Me; onChanged: (me: Me) => 
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Profile</h1>
       <Card className="flex flex-col gap-6 p-6">
         <div className="flex items-center gap-5">
-          <PersonAvatar email={me.email} className="size-20 text-xl" size="lg" />
+          <PersonAvatar email={me.email} px={80} tooltip={false} />
           <div className="flex flex-col gap-2">
             <div className="flex gap-2">
               <Button size="sm" isPending={busy === 'photo'} onPress={() => input.current?.click()}>

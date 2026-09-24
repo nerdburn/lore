@@ -9,12 +9,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@blobatar/react": "^2.7.0",
     "@dnd-kit/abstract": "^0.5.0",
     "@dnd-kit/collision": "^0.5.0",
     "@dnd-kit/react": "^0.5.0",
     "@gravity-ui/icons": "^2.22.0",
     "@heroui/react": "^3.2.6",
     "@heroui/styles": "^3.2.6",
+    "blobatar": "^2.7.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

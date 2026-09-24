@@ -90,7 +90,7 @@ export function ListView({ items, onOpen, showClosed, onShowClosed }: { items: I
                   <Table.Cell className="text-sm">
                     {i.assignee ? (
                       <span className="inline-flex items-center gap-2">
-                        <PersonAvatar name={i.assignee} className="size-5 text-[9px]" />
+                        <PersonAvatar name={i.assignee} px={20} />
                         {i.assignee}
                       </span>
                     ) : (

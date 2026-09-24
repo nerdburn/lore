@@ -51,6 +51,34 @@ export function updateProfile(email: string, change: { name?: string | null; ava
   return p
 }
 
+export interface BoardPerson {
+  email: string
+  name: string | null
+  avatar: string | null
+  role: 'member' | 'viewer'
+}
+
+/**
+ * Who is on a project's board: every email listed as a member or viewer,
+ * plus anyone who has signed in (has a profile) under an @domain entry.
+ */
+export function boardPeople(config: LoreConfig, profiles: Profiles): BoardPerson[] {
+  const b = config.board
+  if (!b?.enabled) return []
+  const out = new Map<string, BoardPerson>()
+  const add = (email: string, role: BoardPerson['role']) => {
+    if (out.get(email)?.role === 'member') return
+    out.set(email, { email, name: profiles[email]?.name ?? null, avatar: profiles[email]?.avatar ?? null, role })
+  }
+  for (const [list, role] of [[b.members, 'member'], [b.viewers, 'viewer']] as const) {
+    for (const entry of list) {
+      if (!entry.startsWith('@')) add(entry, role)
+      else for (const email of Object.keys(profiles)) if (principalMatches(entry, email)) add(email, role)
+    }
+  }
+  return [...out.values()].sort((a, b) => (a.name ?? a.email).localeCompare(b.name ?? b.email))
+}
+
 /**
  * Whose profiles `viewer` may see: anyone who shares a board with them
  * (a member or viewer of a project `viewer` can open, by email or @domain),

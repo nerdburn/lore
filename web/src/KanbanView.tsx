@@ -134,7 +134,7 @@ function CardBody({ item, className = '' }: { item: Item; className?: string }) 
         <PriorityChip priority={item.priority} />
         <ExternalBadge item={item} />
         <span className="flex-1" />
-        {item.assignee && <PersonAvatar name={item.assignee} className="size-6 text-[10px]" />}
+        {item.assignee && <PersonAvatar name={item.assignee} px={24} />}
       </div>
       {item.labels.length > 0 && (
         <div className="mt-2">

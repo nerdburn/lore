@@ -13,7 +13,7 @@ import { assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, t
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
 import type { OAuthServer } from '../oauth.js'
-import { profilesFile, readProfiles, updateProfile, visiblePeople } from './profiles.js'
+import { boardPeople, profilesFile, readProfiles, updateProfile, visiblePeople } from './profiles.js'
 
 /**
  * The board: a list + kanban web view over the lore work tracker, served by
@@ -249,13 +249,14 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       }
 
       if (route === '/projects' && method === 'GET') {
+        const allProfiles = readProfiles(profiles)
         const projects = bareProjects(opts.repos)
           .map((p) => ({ p, role: boardRole(p.config, email, admins) }))
           .filter((x): x is { p: typeof x.p; role: BoardRole } => Boolean(x.role))
           .map(({ p, role }) => {
             const { prefix, items } = bareWorkItems(opts.repos, p)
             const counts = Object.fromEntries(WORK_STATUSES.map((st) => [st, items.filter((i) => i.status === st).length]))
-            return { context: p.context, project: p.config.project, client: p.config.client?.name, prefix, role, archived: p.config.lifecycle === 'archived', counts }
+            return { context: p.context, project: p.config.project, client: p.config.client?.name, prefix, role, archived: p.config.lifecycle === 'archived', counts, people: boardPeople(p.config, allProfiles) }
           })
         return send(res, 200, { projects }), true
       }
@@ -306,6 +307,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
             labels: Object.keys(labelCounts(items)).sort((a, b) => a.localeCompare(b)),
             assignees: assigneeOptions(project.config, items),
             items: items.map((i) => summarizeForRecall(i)),
+            people: boardPeople(project.config, readProfiles(profiles)),
           }),
           true
         )
