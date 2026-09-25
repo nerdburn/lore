@@ -1,4 +1,5 @@
-import { Autocomplete, EmptyState, Label, ListBox, SearchField, Select, Tag, TagGroup, useFilter } from '@heroui/react'
+import { PersonPlus } from '@gravity-ui/icons'
+import { Autocomplete, Button, EmptyState, Label, ListBox, SearchField, Select, Tag, TagGroup, Tooltip, useFilter } from '@heroui/react'
 import { useState, type Key } from 'react'
 
 /** A labelled single-choice Select over fixed options. */
@@ -120,5 +121,20 @@ export function LabelPicker({ value, options, onChange, isDisabled, label = 'Lab
         </Autocomplete.Filter>
       </Autocomplete.Popover>
     </Autocomplete>
+  )
+}
+
+/** The round "Assign to me" button beside an Assignee select; filled while the ticket is yours. */
+export function AssignToMe({ me, current, onAssign, isDisabled }: { me: string; current?: string; onAssign: (who: string) => void; isDisabled?: boolean }) {
+  const mine = current === me
+  return (
+    <Tooltip delay={150} closeDelay={0}>
+      <Button isIconOnly aria-label="Assign to me" variant={mine ? 'primary' : 'secondary'} className="shrink-0 rounded-full" isDisabled={isDisabled} onPress={() => !mine && onAssign(me)}>
+        <PersonPlus />
+      </Button>
+      <Tooltip.Content>
+        <p className="text-xs">{mine ? 'Assigned to you' : 'Assign to me'}</p>
+      </Tooltip.Content>
+    </Tooltip>
   )
 }

@@ -3,7 +3,7 @@ import { Button, Drawer, Input, Label, Spinner, TextArea, TextField } from '@her
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, PRIORITIES, STATUS_LABEL, UNASSIGNED, WORK_ORDER, type Board, type HistoryEntry, type Item, type Priority, type Status } from './api'
 import { ago, StatusChip } from './bits'
-import { ChoiceSelect, LabelPicker } from './fields'
+import { AssignToMe, ChoiceSelect, LabelPicker } from './fields'
 import { renderMarkdown } from './md'
 import { TicketThread } from './TicketThread'
 
@@ -94,14 +94,17 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                       <>
                         <ChoiceSelect label="Status" value={item.status} options={WORK_ORDER} render={(s) => STATUS_LABEL[s]} onChange={(s) => void moveTo(s)} isDisabled={saving} />
                         <ChoiceSelect label="Priority" value={item.priority} options={PRIORITIES} render={(p) => p} onChange={(p: Priority) => void update({ priority: p })} isDisabled={saving} />
-                        <ChoiceSelect
-                          label="Assignee"
-                          value={item.assignee ?? UNASSIGNED}
-                          options={[UNASSIGNED, ...board.assignees.filter((a) => a !== item.assignee), ...(item.assignee ? [item.assignee] : [])].filter((v, i, all) => all.indexOf(v) === i)}
-                          render={(a) => (a === UNASSIGNED ? 'Unassigned' : a)}
-                          onChange={(a) => void update({ assignee: a === UNASSIGNED ? '' : a })}
-                          isDisabled={saving}
-                        />
+                        <div className="flex items-end gap-2">
+                          <ChoiceSelect
+                            label="Assignee"
+                            value={item.assignee ?? UNASSIGNED}
+                            options={[UNASSIGNED, ...new Set([...board.assignees, board.me_assignee, ...(item.assignee ? [item.assignee] : [])])]}
+                            render={(a) => (a === UNASSIGNED ? 'Unassigned' : a)}
+                            onChange={(a) => void update({ assignee: a === UNASSIGNED ? '' : a })}
+                            isDisabled={saving}
+                          />
+                          <AssignToMe me={board.me_assignee} current={item.assignee} onAssign={(who) => void update({ assignee: who })} isDisabled={saving} />
+                        </div>
                         <LabelPicker value={item.labels} options={board.labels} onChange={(labels) => void update({ labels })} isDisabled={saving} />
                       </>
                     ) : (
