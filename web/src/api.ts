@@ -80,6 +80,8 @@ export interface Board {
   archived: boolean
   labels: string[]
   assignees: string[]
+  /** The signed-in person as an assignee here ("Assign to me"). */
+  me_assignee: string
   items: Item[]
   people: BoardPerson[]
 }

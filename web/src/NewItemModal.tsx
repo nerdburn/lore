@@ -1,4 +1,5 @@
-import { Button, Input, Label, Modal, TextArea, TextField } from '@heroui/react'
+import { PersonPlus } from '@gravity-ui/icons'
+import { Button, Input, Label, Modal, TextArea, TextField, Tooltip } from '@heroui/react'
 import { useState, type FormEvent } from 'react'
 import { BOARD_COLUMNS, PRIORITIES, STATUS_LABEL, UNASSIGNED, type Board, type Item, type Priority, type Status } from './api'
 import { ChoiceSelect, LabelPicker } from './fields'
@@ -64,7 +65,23 @@ export function NewItemModal({ isOpen, onOpenChange, board, onCreate }: { isOpen
                 <div className="grid grid-cols-2 gap-3">
                   <ChoiceSelect label="Status" value={status} options={BOARD_COLUMNS} render={(s) => STATUS_LABEL[s]} onChange={setStatus} />
                   <ChoiceSelect label="Priority" value={priority} options={PRIORITIES} render={(p) => p} onChange={setPriority} />
-                  <ChoiceSelect label="Assignee" value={assignee || UNASSIGNED} options={[UNASSIGNED, ...board.assignees]} render={(a) => (a === UNASSIGNED ? 'Unassigned' : a)} onChange={(a) => setAssignee(a === UNASSIGNED ? '' : a)} />
+                  <div className="flex items-end gap-2">
+                    <ChoiceSelect
+                      label="Assignee"
+                      value={assignee || UNASSIGNED}
+                      options={[UNASSIGNED, ...new Set([...board.assignees, board.me_assignee])]}
+                      render={(a) => (a === UNASSIGNED ? 'Unassigned' : a)}
+                      onChange={(a) => setAssignee(a === UNASSIGNED ? '' : a)}
+                    />
+                    <Tooltip delay={150} closeDelay={0}>
+                      <Button isIconOnly aria-label="Assign to me" variant={assignee === board.me_assignee ? 'primary' : 'secondary'} className="shrink-0 rounded-full" onPress={() => setAssignee(board.me_assignee)}>
+                        <PersonPlus />
+                      </Button>
+                      <Tooltip.Content>
+                        <p className="text-xs">Assign to me</p>
+                      </Tooltip.Content>
+                    </Tooltip>
+                  </div>
                   <LabelPicker value={labels} options={board.labels} onChange={setLabels} />
                 </div>
               </Modal.Body>

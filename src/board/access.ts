@@ -64,11 +64,22 @@ export function bareProject(reposDir: string, context: string): BareProject | un
  * people in lore.json `client.contacts`. The board offers only these — no
  * free text — so a typo can't create a phantom assignee.
  */
-export function assigneeOptions(config: LoreConfig, items: Pick<LoreWorkItem, 'assignee'>[]): string[] {
+export function assigneeOptions(config: LoreConfig, items: Pick<LoreWorkItem, 'assignee'>[], people: string[] = []): string[] {
   const names = new Set<string>()
   for (const i of items) if (i.assignee?.trim()) names.add(i.assignee.trim())
   for (const c of config.client?.contacts ?? []) if (c.name.trim()) names.add(c.name.trim())
+  for (const p of people) if (p.trim()) names.add(p.trim())
   return [...names].sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * How a board member appears as an assignee: their name in the project's
+ * contacts when they're listed there (so it matches what Jira/Linear
+ * mirrored in), else their profile name, else their email.
+ */
+export function assigneeName(config: LoreConfig, email: string, profileName?: string | null): string {
+  const contact = config.client?.contacts.find((c) => c.email.toLowerCase() === email || c.aliases?.includes(email))
+  return contact?.name ?? profileName ?? email
 }
 
 /** The tracker table at HEAD of the bare repo — always current, no clone involved. */

@@ -488,3 +488,13 @@ test('board profiles: a name and a photo, seen only by people who share a board'
   await api('/profile/avatar/remove', { cookie: jane, body: {} })
   assert.equal((await fetch(`${base}/api/board/avatars/${avatar}`, { headers: { cookie: vic } })).status, 404, 'a removed photo is not served')
 })
+
+test('board assignees: "assign to me" — the signed-in member is offered and accepted as an assignee', async () => {
+  const jane = await session('jane@acme.com')
+  const board = await api('/p/lore-acme', { cookie: jane })
+  assert.ok(board.body.me_assignee, 'the board says who "me" is')
+  assert.ok(board.body.assignees.includes(board.body.me_assignee), 'members are assignable')
+  const made = await api('/p/lore-acme/items', { cookie: jane, body: { title: 'Mine', assignee: board.body.me_assignee } })
+  assert.equal(made.status, 201, JSON.stringify(made.body))
+  assert.equal(made.body.item.assignee, board.body.me_assignee)
+})
