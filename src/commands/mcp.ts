@@ -110,7 +110,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const label = archived
     ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
     : ''
-  const server = new McpServer({ name: 'lore', version: '0.5.0' })
+  const server = new McpServer({ name: 'lore', version: '0.5.1' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })
@@ -162,7 +162,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        `The status of ${ctx.config.project}, ready to relay: a short summary written after the last fold, anything the tracker recorded since, and the live outstanding list (open tickets by status, requests not yet ticketed, roadmap not done), with source freshness. Call this FIRST for "what's outstanding", "where are we", "status update", "what's left" — and reply with it as returned (trim or filter only if asked, e.g. "just the blocked ones"); do not also call lore_recall to rebuild it. Use lore_recall or lore_grep only for detail the page doesn't carry.`,
+        `The status of ${ctx.config.project}, ready to relay: a short summary written after the last fold, anything the tracker recorded since, and the live outstanding list (open tickets by status, requests not yet ticketed, roadmap not done), with source freshness. Call this FIRST for "what's outstanding", "where are we", "status update", "what's left" — and relay the status in plain English: lead with a short description of the work, followed by its ticket number in square brackets ("Fix payment retries [COI-14]"). Never answer with ticket numbers or ranges alone. If an older saved summary names only keys, use the work descriptions in the returned page to explain them. Preserve the meaning and freshness; trim or filter only if asked (e.g. "just the blocked ones"). Do not also call lore_recall to rebuild it. Use lore_recall or lore_grep only for detail the page doesn't carry.`,
       inputSchema: {},
     },
     async () => {

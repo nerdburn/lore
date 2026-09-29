@@ -78,7 +78,7 @@ function ticketLine(i: LoreWorkItem): string {
     i.external ? `${i.external.system} ${i.external.key}` : undefined,
   ].filter(Boolean)
   const why = i.status === 'blocked' && last?.reason ? ` — ${one(last.reason, 100)}` : ''
-  return `- **${i.key}** ${one(i.title)}${bits.length ? ` · ${bits.join(' · ')}` : ''}${why}`
+  return `- ${one(i.title)} [${i.key}]${bits.length ? ` · ${bits.join(' · ')}` : ''}${why}`
 }
 
 function section(title: string, lines: string[], cap: number, more: string): string[] {
@@ -111,11 +111,11 @@ export function renderOutstanding(root: string, config: Pick<LoreConfig, 'projec
     ...section('To do', byStatus('todo'), CAP.todo, 'lore_recall category work'),
     ...section(
       'Requests not yet ticketed',
-      requests.map((r) => `- ${r.id} ${one(r.request)}${r.requested_by ? ` — ${one(r.requested_by, 40)}` : ''}${r.date ? `, ${r.date}` : ''}${r.status === 'in_progress' ? ' (in progress)' : ''}`),
+      requests.map((r) => `- ${one(r.request)}${r.id ? ` [${r.id}]` : ''}${r.requested_by ? ` — ${one(r.requested_by, 40)}` : ''}${r.date ? `, ${r.date}` : ''}${r.status === 'in_progress' ? ' (in progress)' : ''}`),
       CAP.requests,
       'lore_recall category requests',
     ),
-    ...section('Roadmap not done', roadmap.map((r) => `- ${r.id} ${one(r.item)}${r.priority ? ` (${r.priority}${r.status ? `, ${r.status}` : ''})` : ''}`), CAP.roadmap, 'lore_recall category roadmap'),
+    ...section('Roadmap not done', roadmap.map((r) => `- ${one(r.item)}${r.id ? ` [${r.id}]` : ''}${r.priority ? ` (${r.priority}${r.status ? `, ${r.status.replaceAll('_', ' ')}` : ''})` : ''}`), CAP.roadmap, 'lore_recall category roadmap'),
     ...(stale ? [`_${stale} stale request${stale === 1 ? '' : 's'} (no activity in ~30 days) not listed._`, ''] : []),
   ]
     .join('\n')
@@ -143,7 +143,7 @@ export function writeStatus(root: string, config: Pick<LoreConfig, 'project' | '
   return STATUS_FILE
 }
 
-export const STATUS_SUMMARY_SYSTEM = `You write the top of a client project's status page: 3 to 5 short lines of plain markdown, at most 80 words in all (no heading, no preamble, no bullet per ticket) — a person reads it in ten seconds. Say what moved since the previous summary, what is blocked and on whom, and what is waiting on the client — naming tickets by key and people by name. Use only what the input states; never invent dates, owners or causes. If little changed, say so in one line and carry forward what still matters from the previous summary. No permalinks, no list of every ticket — the outstanding list follows below the summary.`
+export const STATUS_SUMMARY_SYSTEM = `You write the top of a client project's status page: 3 to 5 short lines of plain markdown, at most 80 words in all (no heading, no preamble, no bullet per ticket) — a person reads it in ten seconds. Say what moved since the previous summary, what is blocked and on whom, and what is waiting on the client in plain English, naming people by name. Lead with a short description of the work and put its ticket key afterward in square brackets, e.g. "Production API access is blocked on Cloudflare access [COI-19]." Never use ticket keys or key ranges as a substitute for explaining the work. Group related work by its purpose; avoid inventories of ticket or PR numbers. A reader should understand the update without knowing any ticket numbers. Use only what the input states; never invent dates, owners or causes. If little changed, say so in one line and carry forward what still matters from the previous summary. No permalinks, no list of every ticket — the outstanding list follows below the summary.`
 
 /** The summary prompt: the list as it stands, what moved since the last summary, and the last summary. */
 export function statusSummaryInput(root: string, config: Pick<LoreConfig, 'project' | 'client' | 'work'>, today: string, foldChanges: string[]): string {
@@ -155,6 +155,7 @@ export function statusSummaryInput(root: string, config: Pick<LoreConfig, 'proje
     `\n# Previous summary (${prev.summaryAt ?? 'none'})\n${prev.summary ?? '(none)'}`,
     `\n# Tracker moves since ${since}\n${describeWorkHistory(items, since) || '(none)'}`,
     `\n# What this fold changed\n${foldChanges.join('\n') || '(nothing)'}`,
+    `\n# Work descriptions (including completed tickets referenced above)\n${items.map(i => `- ${one(i.title)} [${i.key}]`).join('\n') || '(none)'}`,
     `\n# Outstanding now\n${renderOutstanding(root, config)}`,
   ].join('\n')
 }
@@ -172,9 +173,9 @@ export function statusView(root: string, config: Pick<LoreConfig, 'project' | 'c
         .sort((a, b) => a.h.at.localeCompare(b.h.at))
         .map(({ i, h }) => {
           const what = Object.entries(h.change)
-            .map(([f, v]) => (f === 'created' ? 'created' : `${f} ${Array.isArray(v) ? `${fmt(v[0])} → ${fmt(v[1])}` : fmt(v)}`))
+            .map(([f, v]) => describeChange(f, v))
             .join(', ')
-          return `- ${h.at.slice(0, 16).replace('T', ' ')} **${i.key}** ${what} — ${one(h.reason, 100)} (${h.via}${h.by ? `, ${h.by}` : ''})`
+          return `- ${one(i.title)} [${i.key}]: ${what} — ${one(h.reason, 100)} (${h.at.slice(0, 16).replace('T', ' ')} UTC; ${h.via}${h.by ? `, ${h.by}` : ''})`
         })
     : []
   const state = loadState(root)
@@ -192,8 +193,16 @@ export function statusView(root: string, config: Pick<LoreConfig, 'project' | 'c
   ].join('\n')
 }
 
+function describeChange(field: string, value: unknown): string {
+  if (field === 'created') return 'created'
+  if (field === 'status' && Array.isArray(value)) return `moved from ${fmt(value[0]).replaceAll('_', ' ')} to ${fmt(value[1]).replaceAll('_', ' ')}`
+  if (field === 'project_link') return Array.isArray(value) && value[1] === null ? 'unlinked from GitHub project' : 'linked to GitHub project'
+  if (field === 'project_write') return 'synced to GitHub project'
+  return `${field.replaceAll('_', ' ')} ${Array.isArray(value) ? `${fmt(value[0])} → ${fmt(value[1])}` : fmt(value)}`
+}
+
 function fmt(v: unknown): string {
-  return v === null || v === undefined ? '—' : Array.isArray(v) ? v.join(', ') || '(none)' : String(v)
+  return v === null || v === undefined ? '—' : Array.isArray(v) ? v.join(', ') || '(none)' : typeof v === 'object' ? JSON.stringify(v) : String(v)
 }
 
 function ago(iso: string, now: Date): string {

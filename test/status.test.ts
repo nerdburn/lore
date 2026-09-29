@@ -74,20 +74,20 @@ test('status: the outstanding list — tickets by status in rank order, untracke
       '3 open tickets (1 blocked, 1 in progress, 1 to do) · 1 untracked request · 2 roadmap items not done',
       '',
       '## Blocked (1)',
-      '- **ACM-3** Apple Pay — waiting on Priya for the Apple merchant ID',
+      '- Apple Pay [ACM-3] — waiting on Priya for the Apple merchant ID',
       '',
       '## In progress (1)',
-      '- **ACM-1** Stripe webhooks · P1 · @cory · #stripe integration',
+      '- Stripe webhooks [ACM-1] · P1 · @cory · #stripe integration',
       '',
       '## To do (1)',
-      '- **ACM-2** Welcome email',
+      '- Welcome email [ACM-2]',
       '',
       '## Requests not yet ticketed (1)',
-      '- req-0002 CAD pricing — Priya Patel (client), 2026-09-10 (in progress)',
+      '- CAD pricing [req-0002] — Priya Patel (client), 2026-09-10 (in progress)',
       '',
       '## Roadmap not done (2)',
-      '- rm-0002 Checkout revamp (P1, in_progress)',
-      '- rm-0001 Launch campaign (P2, planned)',
+      '- Checkout revamp [rm-0002] (P1, in progress)',
+      '- Launch campaign [rm-0001] (P2, planned)',
       '',
       '_1 stale request (no activity in ~30 days) not listed._',
     ].join('\n'),
@@ -102,7 +102,7 @@ test('status: long sections are capped with a pointer to the full table; long te
   const list = renderOutstanding(root, ACME)
   assert.match(list, /^## To do \(30\)$/m)
   assert.match(list, /^- …and 5 more \(lore_recall category work\)$/m)
-  assert.match(list, /^- \*\*ACM-1\*\* A very long title x+…$/m)
+  assert.match(list, /^- A very long title x+… \[ACM-1\]$/m)
   assert.ok(list.split('\n').every((l) => l.length < 200))
 })
 
@@ -128,7 +128,7 @@ test('status: the view flags what moved after the summary, renders the list live
   await captureConsole(() => workMove(root, 'ACM-3', 'in_progress', { reason: 'Priya sent the merchant ID' }, { context: root, at: '2026-09-22T08:00:00.000Z' }))
   const view = statusView(root, ACME, new Date('2026-09-22T09:00:00.000Z'))
   assert.match(view, /^Apple Pay blocked on Priya\.\n\n_Summary written 24 h ago \(2026-09-21 09:30 UTC\)\._$/m)
-  assert.match(view, /^## Since the summary \(1\)\n- 2026-09-22 08:00 \*\*ACM-3\*\* status blocked → in_progress — Priya sent the merchant ID \(cli, /m)
+  assert.match(view, /^## Since the summary \(1\)\n- Apple Pay \[ACM-3\]: moved from blocked to in progress — Priya sent the merchant ID \(2026-09-22 08:00 UTC; cli, /m)
   assert.match(view, /^## In progress \(2\)$/m, 'live, not the file')
   assert.doesNotMatch(view, /^## Blocked/m)
   assert.match(view, /_Synced never\._$/)
@@ -144,6 +144,7 @@ test('status: the summary prompt carries the previous summary, tracker moves sin
   assert.match(input, /# Previous summary \(2026-09-21T00:00:00.000Z\)\nEarlier summary\./)
   assert.match(input, /# Tracker moves since 2026-09-21\n[\s\S]*ACM-3 \(Apple Pay\): status todo → blocked/)
   assert.match(input, /# What this fold changed\nrequests: \{"id":"req-0005"\}/)
+  assert.match(input, /# Work descriptions[\s\S]*Old launch \[ACM-4\]/)
   assert.match(input, /# Outstanding now\n3 open tickets/)
 })
 
@@ -161,7 +162,7 @@ test('status: sync rewrites the list after mirroring, so a tracker move lands wi
 `
   const root = makeContextRepo({ 'context/work/github/acme__web.yaml': table }, { project: 'acme', sources: {}, backfill: { months: 1 } })
   await captureConsole(() => sync(root, {}))
-  assert.match(readFileSync(join(root, STATUS_FILE), 'utf8'), /^- \*\*ACM-1\*\* Checkout shows USD · github #40$/m)
+  assert.match(readFileSync(join(root, STATUS_FILE), 'utf8'), /^- Checkout shows USD \[ACM-1\] · github #40$/m)
 })
 
 test('status: lore_status returns the view over MCP', async () => {
@@ -175,5 +176,7 @@ test('status: lore_status returns the view over MCP', async () => {
   const text = (res.content as { text: string }[])[0].text
   assert.match(text, /^# acme — status/)
   assert.match(text, /^## Blocked \(1\)$/m)
+  assert.match(text, /^- Apple Pay \[ACM-3\]/m)
+  assert.doesNotMatch(text, /^- \*\*ACM-\d/m)
   await Promise.all([client.close(), server.close()])
 })

@@ -135,8 +135,12 @@ look for that in Slack or a pin before stating it as settled.
   the answer already written — a short summary from the last fold, anything
   the tracker recorded after it, and the live outstanding list (open tickets
   by status, requests nobody has ticketed, roadmap not done) with
-  freshness. Relay it as returned; trim or filter only when asked ("just
-  the blocked ones"). Do not call `lore_recall` to rebuild it — that is
+  freshness. Lead with plain-English descriptions of the work, with ticket
+  numbers in square brackets afterward: "Fix payment retries [COI-14]".
+  Never substitute ticket numbers or ranges for explaining what the work is.
+  If an older summary names only keys, use the descriptions in the returned
+  page to explain them. Preserve its meaning and freshness; trim or filter
+  only when asked ("just the blocked ones"). Do not call `lore_recall` to rebuild it — that is
   hundreds of kilobytes on a busy client and is what makes a status answer
   slow. If the page shows a "Since the summary" section, those moves are
   newer than the prose; say so.
