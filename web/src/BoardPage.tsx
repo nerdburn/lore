@@ -7,7 +7,8 @@ import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { NewItemModal } from './NewItemModal'
 import { AvatarStack } from './people'
-import { navigate, type Filters, type Route } from './router'
+import { boardRoute, href, navigate, type Filters, type Route } from './router'
+import { menuPosition, TicketMenu, type OpenTicketMenu, type TicketAction, type TicketMenuPosition } from './TicketMenu'
 
 type BoardRoute = Extract<Route, { name: 'board' }>
 
@@ -21,6 +22,8 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   const filters = route.filters
   const setFilters = (fn: (f: Filters) => Filters) => navigate({ ...route, filters: fn(route.filters) }, true)
   const [creating, setCreating] = useState(false)
+  const [menu, setMenu] = useState<TicketMenuPosition>()
+  const [actionBusy, setActionBusy] = useState(false)
   // While a write is in flight, a poll must not snap the card back.
   const pending = useRef(0)
 
@@ -84,6 +87,38 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   const visible = useMemo(() => (board ? applyFilters(board.items, filters) : []), [board, filters])
   const canEdit = board?.role === 'member' && !board.archived
   const open = (key?: string) => navigate({ ...route, item: key })
+  const openMenu: OpenTicketMenu = (item, e) => setMenu(menuPosition(item, e))
+  const closeMenu = (restoreFocus = true) => {
+    if (restoreFocus && menu?.trigger.isConnected) menu.trigger.focus({ preventScroll: true })
+    setMenu(undefined)
+  }
+  useEffect(() => { setMenu(undefined) }, [route.view, route.item])
+
+  const cardAction = async (action: TicketAction, item: Item) => {
+    if (action === 'copy') {
+      try {
+        const url = new URL(href({ ...boardRoute(route.context) as BoardRoute, item: item.key }), window.location.origin)
+        await navigator.clipboard.writeText(url.toString())
+        toast.success('Ticket URL copied')
+      } catch (err) { fail(err) }
+      return
+    }
+    if (!canEdit || !board || actionBusy) return
+    setActionBusy(true)
+    try {
+      const saved = await write(undefined, () => action === 'assign'
+        ? api.update(route.context, item.key, { assignee: board.me_assignee, note: 'assigned to myself from the card menu' })
+        : api.move(route.context, item.key, { status: action === 'done' ? 'done' : 'archived', note: action === 'done' ? 'marked as done from the card menu' : 'deleted from the board (archived; history retained)' }))
+      if (!saved) return
+      if (action === 'delete') {
+        toast.success(`Deleted ${item.key}`, {
+          description: 'Archived with history preserved.',
+          timeout: 8000,
+          actionProps: { children: 'Undo', onPress: () => { void write(undefined, () => api.move(route.context, item.key, { status: item.status, note: 'undid deletion from the card menu' })) } },
+        })
+      } else toast.success(action === 'assign' ? `Assigned ${item.key} to you` : `Marked ${item.key} as done`)
+    } finally { setActionBusy(false) }
+  }
 
   if (error)
     return (
@@ -155,10 +190,16 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
       </div>
 
       {route.view === 'kanban' ? (
-        <KanbanView items={visible} canEdit={canEdit} onOpen={open} onMove={moveItem} />
+        <KanbanView items={visible} canEdit={canEdit} onOpen={open} onMove={moveItem} onMenu={openMenu} />
       ) : (
-        <ListView items={visible} onOpen={open} showClosed={filters.closed} onShowClosed={(closed) => setFilters((f) => ({ ...f, closed }))} />
+        <ListView items={visible} onOpen={open} showClosed={filters.closed} onShowClosed={(closed) => setFilters((f) => ({ ...f, closed }))} onMenu={openMenu} />
       )}
+
+      {menu && board.items.some(i => i.key === menu.key) && <TicketMenu
+        position={menu} item={board.items.find(i => i.key === menu.key)!} canEdit={canEdit}
+        me={board.me_assignee} busy={actionBusy} onClose={closeMenu}
+        onAction={(action, item) => { void cardAction(action, item) }}
+      />}
 
       <ItemDrawer
         context={route.context}

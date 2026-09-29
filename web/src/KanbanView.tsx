@@ -5,12 +5,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BOARD_COLUMNS, STATUS_LABEL, type Item, type Status } from './api'
 import { ExternalBadge, Labels, PriorityChip } from './bits'
 import { PersonAvatar } from './people'
+import { isMenuKey, type OpenTicketMenu } from './TicketMenu'
 
 type Columns = Record<Status, string[]>
 
 interface Props {
   items: Item[]
   canEdit: boolean
+  onMenu: OpenTicketMenu
   onOpen: (key: string) => void
   /** `order` = the target column's keys after the drop; the neighbour anchors the rank. */
   onMove: (key: string, status: Status, order: string[], neighbour: { above?: string; below?: string }) => void
@@ -29,7 +31,7 @@ function columnsOf(items: Item[]): Columns {
  * columns while the pointer moved made the dragged shape drift a column to
  * the right, so a drop on Blocked landed in Done.)
  */
-export function KanbanView({ items, canEdit, onOpen, onMove }: Props) {
+export function KanbanView({ items, canEdit, onOpen, onMove, onMenu }: Props) {
   const byKey = useMemo(() => new Map(items.map((i) => [i.key, i])), [items])
   const [columns, setColumns] = useState<Columns>(() => columnsOf(items))
   const dragging = useRef(false)
@@ -70,7 +72,7 @@ export function KanbanView({ items, canEdit, onOpen, onMove }: Props) {
     >
       <div className="grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
         {BOARD_COLUMNS.map((status) => (
-          <Column key={status} status={status} keys={columns[status]} byKey={byKey} canEdit={canEdit} active={active} onOpen={onOpen} />
+          <Column key={status} status={status} keys={columns[status]} byKey={byKey} canEdit={canEdit} active={active} onOpen={onOpen} onMenu={onMenu} />
         ))}
       </div>
       <DragOverlay>{active && byKey.get(active) ? <CardBody item={byKey.get(active)!} className="rotate-1 shadow-xl" /> : null}</DragOverlay>
@@ -78,7 +80,7 @@ export function KanbanView({ items, canEdit, onOpen, onMove }: Props) {
   )
 }
 
-function Column({ status, keys, byKey, canEdit, active, onOpen }: { status: Status; keys: string[]; byKey: Map<string, Item>; canEdit: boolean; active?: string; onOpen: (key: string) => void }) {
+function Column({ status, keys, byKey, canEdit, active, onOpen, onMenu }: { onMenu: OpenTicketMenu; status: Status; keys: string[]; byKey: Map<string, Item>; canEdit: boolean; active?: string; onOpen: (key: string) => void }) {
   const { ref, isDropTarget } = useDroppable({ id: `column:${status}`, data: { column: status }, collisionPriority: CollisionPriority.Low, collisionDetector: pointerIntersection })
   return (
     <section
@@ -93,14 +95,14 @@ function Column({ status, keys, byKey, canEdit, active, onOpen }: { status: Stat
       <div className="flex flex-col gap-2">
         {keys.map((key) => {
           const item = byKey.get(key)
-          return item ? <Card key={key} item={item} status={status} canEdit={canEdit} isActive={active === key} onOpen={onOpen} /> : null
+          return item ? <Card key={key} item={item} status={status} canEdit={canEdit} isActive={active === key} onOpen={onOpen} onMenu={onMenu} /> : null
         })}
       </div>
     </section>
   )
 }
 
-function Card({ item, status, canEdit, isActive, onOpen }: { item: Item; status: Status; canEdit: boolean; isActive: boolean; onOpen: (key: string) => void }) {
+function Card({ item, status, canEdit, isActive, onOpen, onMenu }: { onMenu: OpenTicketMenu; item: Item; status: Status; canEdit: boolean; isActive: boolean; onOpen: (key: string) => void }) {
   const drag = useDraggable({ id: item.key, disabled: !canEdit })
   // The drop target is the wrapper, not the dragged element, and only what
   // is under the pointer counts: by overlap, the dragged shape (still at
@@ -113,9 +115,12 @@ function Card({ item, status, canEdit, isActive, onOpen }: { item: Item; status:
         ref={drag.ref}
         role="button"
         tabIndex={0}
+        aria-haspopup="menu"
+        onContextMenu={(e) => onMenu(item, e)}
         onClick={() => onOpen(item.key)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') onOpen(item.key)
+          if (isMenuKey(e)) onMenu(item, e)
+          else if (e.key === 'Enter') onOpen(item.key)
         }}
         className={`rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus ${canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
       >

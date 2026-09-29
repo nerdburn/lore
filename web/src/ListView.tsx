@@ -3,12 +3,13 @@ import { useMemo, useState } from 'react'
 import { WORK_ORDER, type Item } from './api'
 import { ago, ExternalBadge, Labels, PriorityChip, StatusChip } from './bits'
 import { PersonAvatar } from './people'
+import { isMenuKey, type OpenTicketMenu } from './TicketMenu'
 
 type Col = 'rank' | 'key' | 'title' | 'status' | 'priority' | 'assignee' | 'updated'
 
 const keyNum = (k: string) => Number(/-(\d+)$/.exec(k)?.[1] ?? 0)
 
-export function ListView({ items, onOpen, showClosed, onShowClosed }: { items: Item[]; onOpen: (key: string) => void; showClosed: boolean; onShowClosed: (v: boolean) => void }) {
+export function ListView({ items, onOpen, showClosed, onShowClosed, onMenu }: { onMenu: OpenTicketMenu; items: Item[]; onOpen: (key: string) => void; showClosed: boolean; onShowClosed: (v: boolean) => void }) {
   const [sort, setSort] = useState<SortDescriptor>({ column: 'rank', direction: 'ascending' })
 
   const rows = useMemo(() => {
@@ -44,7 +45,12 @@ export function ListView({ items, onOpen, showClosed, onShowClosed }: { items: I
   )
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3" onKeyDownCapture={(e) => {
+      if (!isMenuKey(e)) return
+      const key = (e.target as HTMLElement).closest<HTMLElement>('[data-ticket-key]')?.dataset.ticketKey
+      const item = items.find(i => i.key === key)
+      if (item) onMenu(item, e)
+    }}>
       <div className="flex justify-end">
         <Switch isSelected={showClosed} onChange={onShowClosed} size="sm">
           <Switch.Content className="flex items-center gap-2 text-sm">
@@ -69,7 +75,7 @@ export function ListView({ items, onOpen, showClosed, onShowClosed }: { items: I
             </Table.Header>
             <Table.Body renderEmptyState={() => <div className="p-8 text-center text-muted">No tickets match.</div>}>
               {rows.map((i) => (
-                <Table.Row key={i.key} id={i.key} className="cursor-pointer">
+                <Table.Row key={i.key} id={i.key} className="cursor-pointer" data-ticket-key={i.key} onContextMenu={(e) => onMenu(i, e)}>
                   <Table.Cell className="text-muted">{items.indexOf(i) + 1}</Table.Cell>
                   <Table.Cell>
                     <span className="mono text-xs">{i.key}</span>

@@ -1,4 +1,3 @@
-import { Blobatar } from '@blobatar/react'
 import { Tooltip } from '@heroui/react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, type Person } from './api'
@@ -48,17 +47,17 @@ export function PeopleProvider({ children }: { children: ReactNode }) {
 export const usePeople = () => useContext(Ctx)
 
 /**
- * A person's face: their photo if they set one, else a blobatar — a
- * deterministic shape seeded from their email (or name), so the same
- * person looks the same everywhere. Hover shows who it is.
+ * A person's photo, with initials when absent or unavailable.
  */
 export function PersonAvatar({ email, name, px = 28, className = '', tooltip = true }: { email?: string; name?: string; px?: number; className?: string; tooltip?: boolean }) {
   const person = usePeople().find({ email, name })
-  const label = person?.name ?? name ?? email ?? 'Someone'
-  const seed = (person?.email ?? email ?? name ?? '?').trim().toLowerCase()
+  const label = person?.name?.trim() || name?.trim() || person?.email || email || 'Someone'
+  const [failedAvatar, setFailedAvatar] = useState<string>()
+  const words = label.split('@')[0].split(/[\s._-]+/u).filter(Boolean)
+  const initials = label === 'Someone' ? '?' : [words[0], ...(words.length > 1 ? [words.at(-1)] : [])].map(w => Array.from(w || '')[0] || '').join('').toLocaleUpperCase()
   const face = (
-    <span className={`inline-flex shrink-0 overflow-hidden rounded-full bg-default ring-2 ring-surface ${className}`} style={{ width: px, height: px }} aria-label={label} role="img">
-      {person?.avatar ? <img src={api.avatarUrl(person.avatar)} alt="" className="size-full object-cover" /> : <Blobatar name={seed} size={px} title={label} />}
+    <span className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-default font-medium text-foreground ring-2 ring-surface ${className}`} style={{ width: px, height: px, fontSize: Math.round(px * 0.4), lineHeight: 1 }} aria-label={label} role="img">
+      {person?.avatar && failedAvatar !== person.avatar ? <img src={api.avatarUrl(person.avatar)} alt="" className="size-full object-cover" onError={() => setFailedAvatar(person.avatar!)} /> : initials}
     </span>
   )
   if (!tooltip) return face
@@ -84,7 +83,7 @@ export function AvatarStack({ people, max = 6, px = 26 }: { people: { email: str
     <span className="inline-flex items-center">
       {shown.map((p, i) => (
         <span key={p.email} className={i ? '-ml-2' : ''}>
-          <PersonAvatar email={p.email} px={px} />
+          <PersonAvatar email={p.email} name={p.name ?? undefined} px={px} />
         </span>
       ))}
       {rest > 0 && (
