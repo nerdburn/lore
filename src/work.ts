@@ -322,6 +322,8 @@ interface ExternalIssue {
   labels: string[]
   assignee?: string
   priority?: WorkPriority
+  /** Planning containers remain evidence, never automatically mirrored tasks. */
+  grouping?: boolean
 }
 
 /** Every issue the external tables currently hold (GitHub issues, not PRs; every Jira issue). */
@@ -351,6 +353,7 @@ export function readExternalIssues(root: string): ExternalIssue[] {
       for (const i of readJiraTable(readFileSync(join(jiraDir, entry), 'utf8')) as JiraWorkItem[]) {
         out.push({
           ref: { system: 'jira', id: `jira:${i.key}`, key: i.key, url: i.url, status: i.status, category: i.category },
+          grouping: (i.hierarchy_level ?? 0) > 0 || i.type?.trim().toLowerCase() === 'epic',
           title: i.title,
           labels: i.labels ?? [],
           assignee: i.assignee,
@@ -402,6 +405,9 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
   let created = 0
   let updated = 0
   for (const issue of issues) {
+    // Keep epics in the source table, including legacy rows, but never create
+    // or reopen a task for them. Their children are mirrored independently.
+    if (issue.grouping) continue
     const label = `${SYSTEM_NAME[issue.ref.system]} ${issue.ref.key}`
     const known = byExternal.get(issue.ref.id)
     if (!known) {
@@ -617,7 +623,7 @@ const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into
  * a ticket is never born done or archived — finished work is a request
  * marked done, not a ticket.
  */
-export function applyFoldCreations(items: LoreWorkItem[], prefix: string, proposals: WorkCreateProposal[] | undefined, at = new Date().toISOString()): FoldCreateResult {
+export function applyFoldCreations(items: LoreWorkItem[], prefix: string, proposals: WorkCreateProposal[] | undefined, at = new Date().toISOString(), groups: Pick<ExternalIssue, 'title' | 'ref'>[] = []): FoldCreateResult {
   const created: string[] = []
   const skipped: string[] = []
   for (const p of proposals ?? []) {
@@ -645,7 +651,12 @@ export function applyFoldCreations(items: LoreWorkItem[], prefix: string, propos
       skipped.push(`"${title}": ${request} is already ${byRequest.key}`)
       continue
     }
-    const similar = items.find((i) => i.status !== 'archived' && titleSimilarity(i.title, title) >= 0.7)
+    const group = groups.find((i) => titleSimilarity(i.title, title) >= 0.7)
+    if (group) {
+      skipped.push(`"${title}": reads like planning container ${group.ref.key} "${group.title}"`)
+      continue
+    }
+    const similar = items.find((i) => titleSimilarity(i.title, title) >= 0.7)
     if (similar) {
       skipped.push(`"${title}": reads like ${similar.key} "${similar.title}"`)
       continue

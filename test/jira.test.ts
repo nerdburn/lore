@@ -128,7 +128,7 @@ test('jira: first sync seeds the work table, emits issue and comment docs with p
   j.issues = [
     issue('ACM-1', { labels: ['launch'], assignee: { accountId: 'acc-shawn', displayName: 'Shawn Adrian' }, fixVersions: [{ name: 'v1.2' }] }),
     issue('ACM-2', { status: { name: 'Done', statusCategory: { name: 'Done' } }, resolutiondate: '2026-06-01T00:00:00.000+0000', created: '2026-05-01T00:00:00.000+0000', updated: '2026-06-01T00:00:00.000+0000' }),
-    issue('ACM-3', { status: { name: 'In Review', statusCategory: { name: 'In Progress' } }, updated: '2026-08-05T09:00:00.000+0000', created: '2026-05-02T00:00:00.000+0000', parent: { key: 'ACM-1' } }),
+    issue('ACM-3', { issuetype: { name: 'Epic', hierarchyLevel: 1 }, status: { name: 'In Review', statusCategory: { name: 'In Progress' } }, updated: '2026-08-05T09:00:00.000+0000', created: '2026-05-02T00:00:00.000+0000', parent: { key: 'ACM-1' } }),
   ]
   j.comments['ACM-1'] = [
     { id: '901', author: { accountId: 'acc-kaity', displayName: 'Kaity' }, body: adf(p('On it')), created: '2026-08-02T10:00:00.000+0000' },
@@ -156,6 +156,7 @@ test('jira: first sync seeds the work table, emits issue and comment docs with p
     ['ACM-1', 'To Do', 'To Do', 'open'],
   ])
   assert.equal(table[0].parent, 'ACM-1')
+  assert.equal(table[0].hierarchy_level, 1, 'planning hierarchy is retained as source metadata')
   assert.ok(!table.some((i) => i.key === 'ACM-2'), 'done issues outside the window are not seeded')
   const c = nextCursor.ACM as { since: string; fingerprints: Record<string, string> }
   assert.deepEqual(Object.keys(c.fingerprints).sort(), ['ACM-1', 'ACM-3'])

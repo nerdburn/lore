@@ -7,7 +7,7 @@ import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
 import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
-import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
+import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readExternalIssues, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
 import { alwaysFolds, gateConfig, newPart, runGate } from '../gate.js'
 import { STATUS_SUMMARY_SYSTEM, statusSummaryInput, writeStatus } from '../status.js'
@@ -177,6 +177,7 @@ Rules:
 - Every new or changed item cites the most relevant source permalink from the material.
 - Never delete a request, decision, or roadmap item; items are only ever added or updated. When new evidence shows a request was completed, return it with status done. A request older than ~30 days with no activity is returned once with status "stale", never left "open".
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
+- Jira epics and higher-level planning containers are context for their child work, not actionable tickets. Never create a work item for a container or recreate archived work. A concrete child task can still be tracked separately.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.
 - Figma frames (source figma) are the design: what a screen contains, what a label says. They are evidence for confirming or contradicting a request, decision or ticket, not requests or roadmap in themselves — do not turn screen names into roadmap items or requests. Figma *comments* are like Slack messages: a request or decision when someone with authority makes one.
 - Tracked work: when a "Tracked work" list is given, those items are the project's tracker of record — lore's own tickets, some mirrored from Jira or GitHub. Review them against the material and return work_changes for items the material moves: status (a merged PR, "shipped", "done", "blocked on X", someone starting on it), priority (a decision-maker calling it urgent or deferring it), or rank_above (an explicit reprioritisation). Only with high confidence and a citable source; medium or low confidence proposals are recorded as skipped, so return them only when they are worth a human's glance. Never propose archived, never invent keys, and never repeat a tracked item as a new roadmap item — a request that has a ticket takes its status from the ticket. An empty work_changes list is the normal case.
@@ -247,9 +248,11 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     const commitments = sowNote ? `\n\n# Commitments (statements of work — authoritative, human-attached)\n${sowNote}\nWhere an SOW names scope items, note in a request's text whether it falls inside or outside them; never invent budget figures.` : ''
     const prefix = workPrefix(config)
     const workItems = readWorkItems(root, prefix)
+    const groups = readExternalIssues(root).filter(i => i.grouping)
+    const groupNote = groups.length ? `\n\n# Planning containers (context only; never create or reopen tasks for these)\n${groups.map(i => `${i.ref.key} | ${i.title}`).join('\n')}` : ''
     for (let i = 0; i < batches.length; i++) {
       const workNote = `\n\n# Tracked work (lore tracker ${prefix}: key | rank | status | priority | assignee | title | external tracker state)\n${workItems.length ? describeWorkForPrompt(workItems, today) : '(no tickets yet)'}`
-      const user = `Today is ${today}.${clientNote}${commitments}${workNote}\n\n# Current artifacts\n${Object.entries(artifacts)
+      const user = `Today is ${today}.${clientNote}${commitments}${workNote}${groupNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = await withRetry(() => (llm === 'sdk' ? sdkFold(model, user) : Promise.resolve(cliFold(model, user))), 2, (attempt, err) =>
@@ -269,7 +272,13 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       if (config.sources.github_projects) workItems.splice(0, workItems.length, ...readWorkItems(root, prefix))
       if (workItems.length > 0 || (result.work_changes?.length ?? 0) > 0) {
         const at = new Date().toISOString()
-        const w = applyFoldChanges(workItems, result.work_changes, at)
+        const groupKeys = new Set(workItems.filter(i => groups.some(g => g.ref.id === i.external?.id)).map(i => i.key))
+        const proposals = (result.work_changes ?? []).filter(p => {
+          if (!groupKeys.has(p.key?.trim().toUpperCase())) return true
+          console.log(`  work skipped: ${p.key}: planning container`)
+          return false
+        })
+        const w = applyFoldChanges(workItems, proposals, at)
         if (w.applied.length > 0) {
           writeWorkItems(root, prefix, workItems)
           for (const line of w.applied) {
@@ -287,7 +296,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       }
       {
         const at = new Date().toISOString()
-        const c = applyFoldCreations(workItems, prefix, result.work_new, at)
+        const c = applyFoldCreations(workItems, prefix, result.work_new, at, groups)
         if (c.created.length > 0) {
           writeWorkItems(root, prefix, workItems)
           for (const line of c.created) {

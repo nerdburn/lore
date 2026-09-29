@@ -17,6 +17,7 @@ import {
   deriveWorkPrefix,
   mergeTrackerLabels,
   mirrorExternal,
+  readExternalIssues,
   readWorkItems,
   summarizeForRecall,
   titleSimilarity,
@@ -238,6 +239,36 @@ test('work mirror: open Jira/GitHub issues become lore items; PRs and never-trac
   const again = mirrorExternal(root, ACME, '2026-09-15T11:00:00.000Z')
   assert.deepEqual([again.created, again.updated], [0, 0])
   assert.equal(readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8'), before)
+})
+
+test('work mirror: Jira epics and higher planning containers stay source-only; child tasks still mirror', async () => {
+  for (const type of ['Epic', ' epic ', 'Initiative']) {
+    const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('In Progress', 'In Progress') })
+    mirrorExternal(root, ACME, AT)
+    await captureConsole(() => workMove(root, 'ACM-1', 'done', { reason: 'removed planning container' }, opts(root)))
+    const before = readWorkItems(root, 'ACM')[0]
+    const group = jiraTable('To Do', 'To Do').replace('type: Story', `type: "${type}"${type === 'Initiative' ? '\n  hierarchy_level: 2' : ''}`)
+    const child = jiraTable('To Do', 'To Do').replaceAll('ACM-7', 'ACM-8').replace('type: Story', 'type: Sub-task\n  hierarchy_level: -1\n  parent: ACM-7')
+    writeFileSync(join(root, 'context/work/jira/ACM.yaml'), group + child)
+    const result = mirrorExternal(root, ACME, AT)
+    assert.equal(result.created, 1)
+    assert.equal(result.updated, 0)
+    assert.deepEqual(readWorkItems(root, 'ACM')[0], before, 'existing completed epic is never reopened')
+    const fresh = makeContextRepo({ 'context/work/jira/ACM.yaml': group + child })
+    assert.equal(mirrorExternal(fresh, ACME, AT).created, 1)
+    assert.equal(readWorkItems(fresh, 'ACM')[0].external?.key, 'ACM-8')
+    assert.match(readFileSync(join(fresh, 'context/work/jira/ACM.yaml'), 'utf8'), /ACM-7/, 'epic evidence remains available')
+  }
+})
+
+test('work fold: cannot recreate archived work or turn a planning container into a task', () => {
+  const items: LoreWorkItem[] = [{ key: 'ACM-1', title: 'Transactional Emails', status: 'archived', state: 'closed', labels: [], sources: [], created: '2026-09-01', updated: '2026-09-01', history: [] }]
+  const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('To Do', 'To Do').replace('type: Story', 'type: Epic') })
+  const ok = { reason: 'committed', sources: ['https://slack.com/x'], confidence: 'high', evidence_date: '2026-09-15' }
+  const result = applyFoldCreations(items, 'ACM', [{ title: 'Transactional Emails', ...ok }, { title: 'Agreement builder v2', ...ok }, { title: 'Fix the welcome email subject', ...ok }], AT, readExternalIssues(root).filter(i => i.grouping))
+  assert.equal(result.skipped.length, 2)
+  assert.match(result.skipped[1], /planning container ACM-7/)
+  assert.equal(result.created.length, 1, 'concrete child work is still allowed')
 })
 
 test('work mirror: a tracker move is one history event that moves lore once; fold and human decisions stand until the tracker itself moves', async () => {

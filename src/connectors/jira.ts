@@ -39,6 +39,8 @@ const FIELDS = ['summary', 'status', 'issuetype', 'priority', 'assignee', 'repor
 export interface JiraWorkItem {
   key: string
   type: string
+  /** Jira hierarchy: subtasks -1, tasks/stories 0, epics 1 and above. */
+  hierarchy_level?: number
   title: string
   /** Jira's status name, e.g. "In Review". */
   status: string
@@ -267,6 +269,7 @@ function toWorkItem(issue: JiraIssue, browseBase: string, sprintField?: string):
     url: `${browseBase}/browse/${issue.key}`,
   }
   if (f.priority?.name) item.priority = f.priority.name
+  if (typeof f.issuetype?.hierarchyLevel === 'number') item.hierarchy_level = f.issuetype.hierarchyLevel
   const a = person(f.assignee)
   if (a) item.assignee = a
   const r = person(f.reporter)
@@ -675,7 +678,7 @@ export interface JiraIssue {
     summary?: string
     description?: AdfNode | null
     status?: { name: string; statusCategory?: { name: string } }
-    issuetype?: { name: string }
+    issuetype?: { name: string; hierarchyLevel?: number }
     priority?: { name: string } | null
     assignee?: JiraUser | null
     reporter?: JiraUser | null
