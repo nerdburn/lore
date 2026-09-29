@@ -10,7 +10,7 @@ import { workAdd, workMove, workSet } from '../commands/project.js'
 import { workRank, type WorkWriteOptions } from '../commands/work.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
-import { assigneeName, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
+import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
 import type { LoreConfig } from '../config.js'
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
@@ -93,11 +93,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
 
   const session = (req: IncomingMessage) => signer.verify(readCookie(req), now())
   /** Board members as assignees (viewers can't take tickets). */
-  const memberAssignees = (config: LoreConfig) => {
+  const memberAssignees = (config: LoreConfig, resolve: (who: string) => string) => {
     const all = readProfiles(profiles)
     return boardPeople(config, all)
       .filter((p) => p.role === 'member')
-      .map((p) => assigneeName(config, p.email, p.name))
+      .map((p) => resolve(p.email))
   }
 
   function eligible(email: string): boolean {
@@ -297,8 +297,15 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         return send(res, 200, { comments: ticketThread(bare, item), attachments }), true
       }
 
+      const resolveAssignee = assigneeResolver(project.config, readProfiles(profiles),
+        bareProjects(opts.repos).filter(p => boardRole(p.config, email, admins)).map(p => p.config))
+      const canonicalItem = (item: LoreWorkItem): LoreWorkItem => item.assignee ? { ...item, assignee: resolveAssignee(item.assignee) } : item
+      const optionsFor = (items: LoreWorkItem[]) => [...new Set(assigneeOptions(project.config, items,
+        [...memberAssignees(project.config, resolveAssignee), ...(role === 'member' ? [resolveAssignee(email)] : [])]).map(resolveAssignee))].sort((a, b) => a.localeCompare(b))
+
       if (method === 'GET') {
-        const { prefix, items } = bareWorkItems(opts.repos, project)
+        const { prefix, items: storedItems } = bareWorkItems(opts.repos, project)
+        const items = storedItems.map(canonicalItem)
         if (key) {
           const item = findItem(items, key)
           return item ? send(res, 200, { item }) : send(res, 404, { error: `no item ${key}` }), true
@@ -314,9 +321,9 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
             statuses: WORK_STATUSES,
             priorities: WORK_PRIORITIES,
             labels: Object.keys(labelCounts(items)).sort((a, b) => a.localeCompare(b)),
-            assignees: assigneeOptions(project.config, items, memberAssignees(project.config)),
+            assignees: optionsFor(items),
             // "Assign to me": who the signed-in person is, as an assignee on this board.
-            me_assignee: assigneeName(project.config, email, readProfiles(profiles)[email]?.name),
+            me_assignee: resolveAssignee(email),
             items: items.map((i) => summarizeForRecall(i)),
             people: boardPeople(project.config, readProfiles(profiles)),
           }),
@@ -347,8 +354,10 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       const body = await readBody(req)
       // Assignees come from a fixed list on the board (see assigneeOptions); "" clears.
       if (typeof body.assignee === 'string' && body.assignee.trim()) {
-        const options = assigneeOptions(project.config, bareWorkItems(opts.repos, project).items, [...memberAssignees(project.config), assigneeName(project.config, email, readProfiles(profiles)[email]?.name)])
-        if (!options.includes(body.assignee.trim())) return send(res, 400, { error: `"${body.assignee}" is not someone on this project — pick from the list` }), true
+        const assignee = resolveAssignee(body.assignee)
+        body.assignee = assignee
+        const options = optionsFor(bareWorkItems(opts.repos, project).items)
+        if (!options.includes(assignee)) return send(res, 400, { error: `"${body.assignee}" is not someone on this project — pick from the list` }), true
       }
       const reason = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined
       const w: WorkWriteOptions = { context, via: 'web', actor: email }

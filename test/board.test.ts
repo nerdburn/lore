@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { parse } from 'yaml'
-import { boardRole, principalMatches } from '../src/board/access.js'
+import { assigneeResolver, boardRole, principalMatches } from '../src/board/access.js'
 import { CodeStore, SessionSigner } from '../src/board/auth.js'
 import type { MailMessage } from '../src/board/email.js'
 import { boardAdd, boardEnable, boardRemove } from '../src/commands/board.js'
@@ -497,4 +497,48 @@ test('board assignees: "assign to me" — the signed-in member is offered and ac
   const made = await api('/p/lore-acme/items', { cookie: jane, body: { title: 'Mine', assignee: board.body.me_assignee } })
   assert.equal(made.status, 201, JSON.stringify(made.body))
   assert.equal(made.body.item.assignee, board.body.me_assignee)
+})
+
+
+test('board identities: explicit email links, aliases and profile names share one assignee', () => {
+  const config = configSchema.parse({ project: 'empty', sources: {} })
+  const shared = configSchema.parse({ project: 'known', sources: {}, client: { name: 'Known', contacts: [
+    { name: 'Cory Schadt', email: 'cory@inputlogic.ca', aliases: ['CORY@EXAMPLE.COM'], side: 'team' },
+  ] } })
+  const resolve = assigneeResolver(config, { 'cory@inputlogic.ca': {} }, [shared])
+  assert.equal(resolve('cory@inputlogic.ca'), 'Cory Schadt')
+  assert.equal(resolve(' Cory@Example.com '), 'Cory Schadt')
+  assert.equal(resolve('Cory Schadt'), 'Cory Schadt')
+  assert.equal(resolve('cory@unrelated.com'), 'cory@unrelated.com', 'never infer identity from first name')
+  const renamed = assigneeResolver(shared, { 'cory@inputlogic.ca': { name: 'Cory' } })
+  assert.equal(renamed('Cory'), 'Cory Schadt', 'project contact is the canonical name')
+  const profileFallback = assigneeResolver(config, { 'cory@inputlogic.ca': { name: 'Cory' } }, [shared])
+  assert.equal(profileFallback('cory@example.com'), profileFallback('cory@inputlogic.ca'))
+  const ambiguous = assigneeResolver(config, { 'a@x.com': { name: 'Alex' }, 'b@x.com': { name: 'Alex' } })
+  assert.equal(ambiguous('Alex'), 'Alex', 'ambiguous names are left alone')
+})
+
+test('board assignees: a photo-only profile reuses a known contact and canonicalizes stale email assignments', async () => {
+  const member = 'cory@inputlogic.ca'
+  pushContext('lore-identity-directory', { project: 'directory', sources: {}, board: { enabled: true, members: [member], viewers: [] },
+    client: { name: 'Known', contacts: [{ name: 'Cory Schadt', email: member, side: 'team' }] } })
+  const bare = pushContext('lore-identity-board', { project: 'identity', work: { prefix: 'ID' }, sources: {}, board: { enabled: true, members: [member], viewers: [] } },
+    { 'context/work/lore/ID.yaml': TRACKER.replaceAll('ACM-', 'ID-').replace('  title: Black Friday', '  assignee: Cory Schadt\n  title: Black Friday').replace('  title: Checkout', '  assignee: cory@inputlogic.ca\n  title: Checkout') })
+  pushContext('lore-identity-private', { project: 'private', sources: {}, board: { enabled: true, members: ['other@x.com'], viewers: [] },
+    client: { name: 'Private', contacts: [{ name: 'Private Alias', email: member, side: 'team' }] } })
+  const cookie = await session(member)
+  const upload = await fetch(`${base}/api/board/profile/avatar`, { method: 'POST', headers: { cookie, 'content-type': 'image/png' }, body: Buffer.from('fake png') })
+  assert.equal(upload.status, 200)
+  assert.equal((await api('/me', { cookie })).body.name, null)
+  const before = await api('/p/lore-identity-board', { cookie })
+  assert.equal(before.body.me_assignee, 'Cory Schadt')
+  assert.deepEqual(before.body.assignees, ['Cory Schadt'])
+  assert.equal(before.body.items.find((i: any) => i.key === 'ID-2').assignee, 'Cory Schadt')
+  const patched = await api('/p/lore-identity-board/items/ID-2', { method: 'PATCH', cookie, body: { assignee: member } })
+  assert.equal(patched.status, 200, JSON.stringify(patched.body))
+  assert.equal(patched.body.item.assignee, 'Cory Schadt')
+  const stored = parse(git(bare, 'show', 'HEAD:context/work/lore/ID.yaml').replace(/^(#.*\n)+/, ''))
+  assert.equal(stored.find((i: any) => i.key === 'ID-2').assignee, 'Cory Schadt')
+  const after = await api('/p/lore-identity-board', { cookie })
+  assert.deepEqual(after.body.assignees, ['Cory Schadt'])
 })

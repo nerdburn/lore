@@ -110,7 +110,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const label = archived
     ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
     : ''
-  const server = new McpServer({ name: 'lore', version: '0.5.4' })
+  const server = new McpServer({ name: 'lore', version: '0.5.5' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })

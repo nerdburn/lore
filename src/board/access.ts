@@ -78,8 +78,41 @@ export function assigneeOptions(config: LoreConfig, items: Pick<LoreWorkItem, 'a
  * mirrored in), else their profile name, else their email.
  */
 export function assigneeName(config: LoreConfig, email: string, profileName?: string | null): string {
-  const contact = config.client?.contacts.find((c) => c.email.toLowerCase() === email || c.aliases?.includes(email))
-  return contact?.name ?? profileName ?? email
+  const id = email.trim().toLowerCase()
+  const contact = config.client?.contacts.find((c) => [c.email, ...(c.aliases ?? [])].some(e => e.trim().toLowerCase() === id))
+  return contact?.name.trim() || profileName?.trim() || id
+}
+
+/** Resolve explicit identity links only; never guess a person from an email's local part. */
+export function assigneeResolver(config: LoreConfig, profiles: Record<string, { name?: string }>, shared: LoreConfig[] = []): (who: string) => string {
+  const contacts = [config, ...shared].flatMap(c => c.client?.contacts ?? [])
+  const emails = new Set([...Object.keys(profiles), ...contacts.flatMap(c => [c.email, ...(c.aliases ?? [])])].map(e => e.trim().toLowerCase()))
+  const byEmail = new Map<string, string>()
+  for (const email of emails) {
+    const matches = contacts.filter(c => [c.email, ...(c.aliases ?? [])].some(e => e.trim().toLowerCase() === email))
+    const names = [...new Set(matches.map(c => c.name.trim()).filter(Boolean))]
+    const primaryEmails = [...new Set(matches.map(c => c.email.trim().toLowerCase()))]
+    const primary = primaryEmails.length === 1 ? primaryEmails[0] : email
+    byEmail.set(email, assigneeName(config, primary, profiles[primary]?.name || (names.length === 1 ? names[0] : undefined)))
+  }
+  // Names are aliases only when they identify one email, so two people with
+  // the same display name aren't silently merged.
+  const aliases = new Map<string, Set<string>>()
+  const add = (name: string | undefined, email: string) => {
+    if (!name?.trim()) return
+    const key = name.trim().toLowerCase()
+    const ids = aliases.get(key) ?? new Set<string>()
+    ids.add(email.trim().toLowerCase())
+    aliases.set(key, ids)
+  }
+  for (const c of contacts) add(c.name, c.email)
+  for (const [email, p] of Object.entries(profiles)) add(p.name, email)
+  return who => {
+    const key = who.trim().toLowerCase()
+    if (byEmail.has(key)) return byEmail.get(key)!
+    const ids = aliases.get(key)
+    return ids?.size === 1 ? byEmail.get([...ids][0])! : who.trim()
+  }
 }
 
 /** The tracker table at HEAD of the bare repo — always current, no clone involved. */

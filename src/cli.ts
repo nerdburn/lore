@@ -54,7 +54,7 @@ if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'))
 program
   .name('lore')
   .description('Git-native project memory for agents. Everything derived, except what you explicitly remember.')
-  .version('0.5.4')
+  .version('0.5.5')
 
 program
   .command('init')
