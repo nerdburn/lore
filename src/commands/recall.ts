@@ -1,5 +1,5 @@
 import { resolveContext, type ResolveOptions } from '../context.js'
-import { isEmpty, recallData } from '../recall.js'
+import { isEmpty, recallData, roadmapAnswer } from '../recall.js'
 
 /**
  * Read back the structured layers: pinned facts plus whatever derived
@@ -16,6 +16,11 @@ export function recall(cwd: string, category: string | undefined, opts: ResolveO
     return
   }
 
+  if (category === 'roadmap') {
+    console.log(roadmapAnswer(recalled))
+    return
+  }
+
   if (recalled.lifecycle === 'archived') {
     console.error(`ARCHIVED — ${recalled.project} was archived ${recalled.archived_at?.slice(0, 10) ?? ''}; this is history, not current state.`)
   }
@@ -27,9 +32,11 @@ export function recall(cwd: string, category: string | undefined, opts: ResolveO
     console.log(`[${pin.category}] ${pin.fact}  (${pin.id}, ${pin.authorized_by}, ${pin.date})`)
   }
   for (const [name, items] of Object.entries(recalled.derived)) {
+    if (name === 'roadmap') continue
     console.log(`\n## ${name}`)
     console.log(typeof items === 'string' ? items : JSON.stringify(items, null, 2))
   }
+  if (recalled.roadmap) console.log(`\n${recalled.roadmap.text}`)
   for (const [name, table] of Object.entries(recalled.work)) {
     const c = table.counts
     console.log(`\n## work: ${name} (${name.startsWith('lore/') ? 'lore tracker — the tracker of record' : 'external tracker snapshot'}) — ${c.open} open, ${c.merged} merged, ${c.closed} closed; full table: ${table.file}`)

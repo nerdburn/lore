@@ -394,6 +394,21 @@ is disposable; delete `~/.lore/cache/` any time.
 update too. Both are rate-limited to once per 5 minutes (`--force`), and a
 run already in flight is waited out rather than restarted.
 
+### Roadmap — goals and direction
+
+The roadmap describes overarching short- and long-term outcomes, why they
+matter, what success means, and how they influence work priorities. It can
+span several epics or tickets. `lore recall roadmap` and the MCP roadmap
+category return plain English, with descriptions of supporting work followed
+by ticket keys in brackets. `--json` retains structured access.
+
+Goals live in `context/derived/roadmap.yaml`; concrete delivery work lives in
+the tracker. The fold can propose evidence-backed priority changes in support
+of a goal, with a reason explaining the tradeoff. It never automatically copies
+a goal's priority to every ticket. Older task-shaped roadmap entries are kept
+for history and classified separately as the fold reviews them. See
+[Roadmap goals](docs/ROADMAP_GOALS.md) for the fields and migration behavior.
+
 ### Work — the tracker of record
 
 Every project has a lore tracker, `context/work/lore/<PREFIX>.yaml`
@@ -401,16 +416,17 @@ Every project has a lore tracker, `context/work/lore/<PREFIX>.yaml`
 `CAR-1`). It is the answer to "what is open, in progress, blocked, done" —
 for clients with Jira or GitHub Issues and for clients with nothing.
 
-- **Mirrored on sync.** Each open Jira/GitHub issue becomes a ticket with
+- **Mirrored on sync.** Each open actionable Jira/GitHub issue becomes a ticket with
   `external` pointing at it; when the tracker moves an issue, sync records
   the move in the ticket's history and lore's status follows. Closed issues
-  lore never tracked are not imported. PRs stay delivery evidence.
+  lore never tracked are not imported. Jira epics stay planning evidence;
+  their child tasks import normally. PRs stay delivery evidence.
 - **Reviewed by the fold.** `lore extract` sees the tracker next to the new
   material and may move, reprioritise, or re-rank a ticket when the
   evidence is unambiguous — a merged PR, "shipped", "blocked on X" — and
   may **open a ticket** for work that is committed but not yet tracked: the
   team agreed to it, someone is doing it, it is scheduled, or it is
-  signed-off roadmap. New tickets keep the request they came from
+  a signed-off concrete action supporting a goal. New tickets keep the request they came from
   (`request: req-0007`). Only with high confidence and a cited source; never
   to `archived` and never born `done`; never over a person's more recent
   call on the same field; never a second ticket for a request already

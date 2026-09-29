@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
-import { recallData } from '../recall.js'
+import { recallData, roadmapAnswer } from '../recall.js'
 import { statusView } from '../status.js'
 import { grepContext } from '../search.js'
 import { refresh } from './refresh.js'
@@ -110,7 +110,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const label = archived
     ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
     : ''
-  const server = new McpServer({ name: 'lore', version: '0.5.1' })
+  const server = new McpServer({ name: 'lore', version: '0.5.3' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })
@@ -162,7 +162,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        `The status of ${ctx.config.project}, ready to relay: a short summary written after the last fold, anything the tracker recorded since, and the live outstanding list (open tickets by status, requests not yet ticketed, roadmap not done), with source freshness. Call this FIRST for "what's outstanding", "where are we", "status update", "what's left" — and relay the status in plain English: lead with a short description of the work, followed by its ticket number in square brackets ("Fix payment retries [COI-14]"). Never answer with ticket numbers or ranges alone. If an older saved summary names only keys, use the work descriptions in the returned page to explain them. Preserve the meaning and freshness; trim or filter only if asked (e.g. "just the blocked ones"). Do not also call lore_recall to rebuild it. Use lore_recall or lore_grep only for detail the page doesn't carry.`,
+        `The status of ${ctx.config.project}, ready to relay: a short summary written after the last fold, anything the tracker recorded since, and the live outstanding list (open tickets by status, requests not yet ticketed, active roadmap goals), with source freshness. Call this FIRST for "what's outstanding", "where are we", "status update", "what's left" — and relay the status in plain English: lead with a short description of the work, followed by its ticket number in square brackets ("Fix payment retries [COI-14]"). Never answer with ticket numbers or ranges alone. If an older saved summary names only keys, use the work descriptions in the returned page to explain them. Preserve the meaning and freshness; trim or filter only if asked (e.g. "just the blocked ones"). Do not also call lore_recall to rebuild it. Use lore_recall or lore_grep only for detail the page doesn't carry.`,
       inputSchema: {},
     },
     async () => {
@@ -176,7 +176,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), the lore work tracker (work["lore/<PREFIX>"] — the tracker of record for delivery state, each item with who last moved it and why; drift: true where lore and Jira/GitHub disagree), external tracker snapshots (work["github/…"], work["jira/…"] — what the tracker itself says; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow. The lore tracker lists its project labels (themes like "onboarding", "stripe integration") with open/closed counts; pass label to get just that theme\'s tickets, open and closed.',
+        'Pinned facts, every derived artifact (requests, decisions, roadmap, contradictions), the lore work tracker (work["lore/<PREFIX>"] — the tracker of record for delivery state, each item with who last moved it and why; drift: true where lore and Jira/GitHub disagree), external tracker snapshots (work["github/…"], work["jira/…"] — what the tracker itself says; open items in full, closed/merged as counts, full table via lore_read of the given file), recent weekly reports, and statements of work (sow: human-weeks sold and effective date — authoritative for what was committed; weeks allocated against them are not tracked yet, and calendar time is never a proxy), with source-freshness timestamps — "what do we know" without a search term. Pins win over derived data on conflict; work tables win over derived for delivery state. Filter with category: a pin category or one of requests|decisions|roadmap|contradictions|work|reports|sow. For roadmap, goals, strategy, short/long-term direction, or why work matters, use category roadmap and relay the English roadmap response (roadmap.text in unfiltered recall): outcomes, rationale, time horizons and implications for work priorities. Do not return raw JSON, roadmap IDs, a ticket inventory, or equate Jira epics with goals. Supporting work is described first with ticket keys in brackets. Legacy roadmap entries awaiting review are not established goals. The lore tracker lists its project labels (themes like "onboarding", "stripe integration") with open/closed counts; pass label to get just that theme\'s tickets, open and closed.',
       inputSchema: {
         category: z.string().optional(),
         label: z.string().optional().describe('only work items carrying this label (case-insensitive); implies category "work"'),
@@ -184,7 +184,8 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
     async ({ category, label }) => {
       freshen()
-      return text(recallData(ctx.root, ctx.config, category ?? (label ? 'work' : undefined), { label }))
+      const recalled = recallData(ctx.root, ctx.config, category ?? (label ? 'work' : undefined), { label })
+      return text(category === 'roadmap' ? roadmapAnswer(recalled) : recalled)
     },
   )
 

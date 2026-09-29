@@ -7,6 +7,7 @@ import { degraded, sourceStatuses, type SourceStatus } from './health.js'
 import { loadState } from './state.js'
 import type { Client, Lifecycle, LoreConfig } from './config.js'
 import type { Pin } from './types.js'
+import { roadmapRecall } from './roadmap.js'
 
 /** Everything `recall` knows, in trust order: pins first, then derived. */
 export interface Recalled {
@@ -27,6 +28,8 @@ export interface Recalled {
   pins: Pin[]
   /** Derived YAML artifacts keyed by file stem: requests, decisions, roadmap, contradictions… */
   derived: Record<string, unknown>
+  /** Plain-English goals and their consequences for work priorities. */
+  roadmap?: ReturnType<typeof roadmapRecall>
   /**
    * Work tables (context/work/<source>/<scope>.yaml), keyed "source/scope".
    * "lore/<PREFIX>" is the lore tracker — the tracker of record, listed
@@ -150,6 +153,7 @@ export function recallData(
     synced,
     pins,
     derived,
+    ...(!category || category === 'roadmap' ? { roadmap: roadmapRecall(root, derived.roadmap) } : {}),
     work,
     sow: !category || category === SOW_CATEGORY ? readSows(root).map((s) => summarizeSow(s)) : [],
     reports,
@@ -160,4 +164,16 @@ export function isEmpty(r: Recalled): boolean {
   return (
     r.pins.length === 0 && Object.keys(r.derived).length === 0 && Object.keys(r.work).length === 0 && r.reports.length === 0 && r.sow.length === 0
   )
+}
+
+/** Roadmap questions are answered in English, while --json keeps the data API. */
+export function roadmapAnswer(r: Recalled): string {
+  return [
+    ...(r.lifecycle === 'archived' ? ['This project is archived; these goals are historical.', ''] : []),
+    ...(r.pins.length ? ['Authoritative pinned direction:', ...r.pins.map(p => `- ${p.fact}`), ''] : []),
+    r.roadmap?.text || 'No overarching goals have been established in the roadmap yet.',
+    '',
+    `Sources last synced: ${r.synced.lastSync || 'never'}. Goals last reviewed by the fold: ${r.synced.lastExtract || 'never'}.`,
+    ...(r.synced.degraded.length ? [`Source updates are degraded: ${r.synced.degraded.join(', ')}.`] : []),
+  ].join('\n')
 }

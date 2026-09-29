@@ -150,6 +150,16 @@ look for that in Slack or a pin before stating it as settled.
   lore tracker first, external snapshots as evidence — then
   `category: "requests"` for asks that have no ticket yet. For a ticket the
   fold or sync moved recently, say so with the reason.
+- **Roadmap, goals, direction or why work matters:** `lore_recall` with
+  `category: "roadmap"`. It returns English prose (`roadmap.text` is also
+  available in unfiltered recall). Explain
+  short-term and long-term outcomes, why they matter, what success means,
+  and how they influence work priorities. Roadmap goals sit above tickets
+  and can span several Jira epics; they are not another backlog. Mention
+  supporting work by description, with its key in brackets. Never answer
+  with raw JSON or an inventory of roadmap/ticket IDs. Do not infer timing,
+  strategy or completion from ticket counts. Legacy entries awaiting review
+  are not established goals. Pins win over derived goal interpretations.
 - **"What do we know / what was decided"**: `lore_recall` (no category, or
   `decisions`). Check `pins` first, then `derived`.
 - **What is synced** ("which repos does lore follow", "is #acme-dev in

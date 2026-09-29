@@ -5,6 +5,7 @@ import type { LoreConfig } from './config.js'
 import { degraded, sourceStatuses } from './health.js'
 import { loadState } from './state.js'
 import { describeWorkHistory, readWorkItems, workPrefix, type LoreWorkItem } from './work.js'
+import { readRoadmap } from './roadmap.js'
 
 /**
  * The status page — `context/derived/status.md`: the answer to "what's
@@ -97,11 +98,12 @@ export function renderOutstanding(root: string, config: Pick<LoreConfig, 'projec
     .filter((r) => (r.status === 'open' || r.status === 'in_progress') && !ticketed.has(r.id))
     .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')))
   const stale = readList(root, 'requests').filter((r) => r.status === 'stale').length
-  const roadmap = readList(root, 'roadmap')
-    .filter((r) => r.status !== 'done')
+  const allRoadmap = readRoadmap(root)
+  const roadmap = allRoadmap
+    .filter((r) => r.kind === 'goal' && r.status !== 'done')
     .sort((a, b) => String(a.priority ?? 'P9').localeCompare(String(b.priority ?? 'P9')))
   const byStatus = (s: string) => open.filter((i) => i.status === s).map(ticketLine)
-  const counts = `${open.length} open ticket${open.length === 1 ? '' : 's'} (${byStatus('blocked').length} blocked, ${byStatus('in_progress').length} in progress${byStatus('review').length ? `, ${byStatus('review').length} in review` : ''}, ${byStatus('todo').length} to do) · ${requests.length} untracked request${requests.length === 1 ? '' : 's'} · ${roadmap.length} roadmap item${roadmap.length === 1 ? '' : 's'} not done`
+  const counts = `${open.length} open ticket${open.length === 1 ? '' : 's'} (${byStatus('blocked').length} blocked, ${byStatus('in_progress').length} in progress${byStatus('review').length ? `, ${byStatus('review').length} in review` : ''}, ${byStatus('todo').length} to do) · ${requests.length} untracked request${requests.length === 1 ? '' : 's'} · ${roadmap.length} active roadmap goal${roadmap.length === 1 ? '' : 's'}`
   return [
     counts,
     '',
@@ -115,7 +117,8 @@ export function renderOutstanding(root: string, config: Pick<LoreConfig, 'projec
       CAP.requests,
       'lore_recall category requests',
     ),
-    ...section('Roadmap not done', roadmap.map((r) => `- ${one(r.item)}${r.id ? ` [${r.id}]` : ''}${r.priority ? ` (${r.priority}${r.status ? `, ${r.status.replaceAll('_', ' ')}` : ''})` : ''}`), CAP.roadmap, 'lore_recall category roadmap'),
+    ...section('Roadmap goals', roadmap.map((r) => `- ${one(r.item)} (${r.horizon === 'short_term' ? 'short term' : r.horizon === 'long_term' ? 'long term' : 'timing not established'})${r.priority_reason ? ` — ${one(r.priority_reason)}` : ''}`), CAP.roadmap, 'lore_recall category roadmap'),
+    ...(allRoadmap.some(r => !r.kind && r.status !== 'done') ? ['_Earlier roadmap entries await review as goals or delivery tasks._', ''] : []),
     ...(stale ? [`_${stale} stale request${stale === 1 ? '' : 's'} (no activity in ~30 days) not listed._`, ''] : []),
   ]
     .join('\n')

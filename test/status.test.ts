@@ -34,10 +34,14 @@ const REQUESTS = `# Derived
 const ROADMAP = `# Derived
 - id: rm-0001
   item: Launch campaign
+  kind: goal
+  horizon: long_term
   priority: P2
   status: planned
 - id: rm-0002
   item: Checkout revamp
+  kind: goal
+  horizon: short_term
   priority: P1
   status: in_progress
 - id: rm-0003
@@ -71,7 +75,7 @@ test('status: the outstanding list — tickets by status in rank order, untracke
   assert.equal(
     list,
     [
-      '3 open tickets (1 blocked, 1 in progress, 1 to do) · 1 untracked request · 2 roadmap items not done',
+      '3 open tickets (1 blocked, 1 in progress, 1 to do) · 1 untracked request · 2 active roadmap goals',
       '',
       '## Blocked (1)',
       '- Apple Pay [ACM-3] — waiting on Priya for the Apple merchant ID',
@@ -85,9 +89,9 @@ test('status: the outstanding list — tickets by status in rank order, untracke
       '## Requests not yet ticketed (1)',
       '- CAD pricing [req-0002] — Priya Patel (client), 2026-09-10 (in progress)',
       '',
-      '## Roadmap not done (2)',
-      '- Checkout revamp [rm-0002] (P1, in progress)',
-      '- Launch campaign [rm-0001] (P2, planned)',
+      '## Roadmap goals (2)',
+      '- Checkout revamp (short term)',
+      '- Launch campaign (long term)',
       '',
       '_1 stale request (no activity in ~30 days) not listed._',
     ].join('\n'),
