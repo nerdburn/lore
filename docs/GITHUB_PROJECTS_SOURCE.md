@@ -1,6 +1,6 @@
 # GitHub Projects source — design brief
 
-**Status:** implemented locally; release and live validation pending
+**Status:** deployed to lore-host; Coincards Project #8 enabled and sync verified
 **Target release:** 0.5.0
 **Author of the design:** captured with Shawn 2026-09-29 (Claude Code session on `enso-agent-bootstrap`)
 **Reason for the feature:** on 2026-09-28 midas (Coincards agent) failed to add a new issue to org Project #8 because the exe.dev `github.int.exe.xyz` aggregate proxy rejects org-level GraphQL (`document does not identify a repository`). The workaround was a per-VM PAT. This design promotes GitHub Projects to a first-class lore source so agents call lore instead of `gh project`, keep one credential on `lore-host`, and get bidirectional sync into the work tracker. `LORE_GITHUB_TOKEN` is already deployed on `lore-host` with the right permissions (Contents/Issues/PRs Read, Issues Write, org Projects Read+write); every context's `github` source is already using it (see the 2026-09-29 fleet-wide swap).
@@ -9,8 +9,22 @@
 
 ## Implementation notes (0.5.0)
 
-Implemented in this checkout; publishing, host rollout, and live Project #8
-validation are separate release steps below.
+Deployed to lore-host on 2026-09-29 as `0.5.0`, using the built npm tarball
+from implementation commit `0eea534` (not published to the npm registry).
+`lore-www` was restarted and its health check passed. Coincards configuration
+commit `ba98442` enables `inputlogic/8` with this mapping:
+
+```json
+{"Backlog":"todo","Doing":"in_progress","Review":"review","Released":"done"}
+```
+
+The first sync (`378e591` in lore-coincards) ingested 69 project items and linked
+COI-1 through COI-9. Live API verification found no status/title/body or ledger
+mismatches. Initial write-back moved COI-4 to Doing and COI-7 to Released;
+no conflicts were logged. The Projects source is healthy. Coincards' existing
+Slack `#coincards` source still reports `not_in_channel`, independently of Projects.
+Draft creation and deliberate conflict scenarios remain covered by fixture tests;
+no synthetic tickets were added to the production board during rollout.
 
 The following corrections reflect the actual repository and current GitHub schema:
 
