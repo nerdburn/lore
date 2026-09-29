@@ -15,7 +15,19 @@ export interface SourceHealth {
   lastError?: { at: string; message: string }
 }
 
+export interface ProjectConflict {
+  at: string
+  kind: 'field-drift'
+  project: string
+  item_node_id: string
+  field: string
+  lore_value: string
+  project_value: string
+  resolved: 'lore'
+}
+
 export interface LoreState {
+  conflicts?: ProjectConflict[]
   cursors: Record<string, Cursor>
   sources?: Record<string, SourceHealth>
   lastSync?: string

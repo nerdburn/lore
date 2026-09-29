@@ -1,6 +1,6 @@
 // The board API (src/board/http.ts on the host). Same origin, cookie session.
 
-export type Status = 'todo' | 'in_progress' | 'blocked' | 'done' | 'archived'
+export type Status = 'todo' | 'in_progress' | 'blocked' | 'review' | 'done' | 'archived'
 export type Priority = 'P1' | 'P2' | 'P3'
 export type Role = 'member' | 'viewer'
 
@@ -8,13 +8,14 @@ export const STATUS_LABEL: Record<Status, string> = {
   todo: 'To do',
   in_progress: 'In progress',
   blocked: 'Blocked',
+  review: 'In review',
   done: 'Done',
   archived: 'Archived',
 }
 
-export const BOARD_COLUMNS: Status[] = ['todo', 'in_progress', 'blocked', 'done']
+export const BOARD_COLUMNS: Status[] = ['todo', 'in_progress', 'blocked', 'review', 'done']
 /** Every status, in workflow order. */
-export const WORK_ORDER: Status[] = ['todo', 'in_progress', 'blocked', 'done', 'archived']
+export const WORK_ORDER: Status[] = ['todo', 'in_progress', 'blocked', 'review', 'done', 'archived']
 export const PRIORITIES: Priority[] = ['P1', 'P2', 'P3']
 
 export interface HistoryEntry {

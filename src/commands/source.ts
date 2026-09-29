@@ -180,6 +180,7 @@ interface Plan {
  * the scope entries to add. Exported for tests; `sourceAdd` does the I/O.
  */
 export function applyScope(kind: SourceName, existing: Record<string, unknown> | undefined, scope: string[], site: string | undefined, global: GlobalConfig): Plan {
+  if (kind === 'github_projects') throw new Error('source: configure sources.github_projects in lore.json with owner, number, and an explicit status_map; see docs/GITHUB_PROJECTS_SOURCE.md')
   const entries = scope.map((s) => s.trim()).filter(Boolean)
   const proxy = global.proxy ?? {}
   const block: Record<string, unknown> = { ...(existing ?? {}) }
@@ -373,6 +374,8 @@ export function scopeOf(name: string, c: Record<string, unknown>): string[] {
       return list(c.channels)
     case 'github':
       return list(c.repos)
+    case 'github_projects':
+      return Array.isArray(c.projects) ? c.projects.map(p => `${p.owner}/${p.number}${p.disabled ? ' (disabled)' : ''}`) : []
     case 'granola':
       return [...list(c.folders), ...list(c.attendee_domains).map((d) => `@${d}`)]
     case 'notion':

@@ -6,6 +6,7 @@ import { loadState, updateState, type SourceHealth } from '../state.js'
 import { writeDocs } from '../streams.js'
 import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
+import { reconcileProjects } from '../projects.js'
 import { mirrorExternal } from '../work.js'
 import { writeStatus } from '../status.js'
 import { importAttachments } from '../attachments.js'
@@ -54,6 +55,7 @@ export async function sync(root: string, registry: Record<string, Connector> = c
   }
   const state = loadState(root)
   state.sources ??= {}
+  const previousProjectSuccess = state.sources.github_projects?.lastSuccess
 
   for (const [name, rawSourceConfig] of Object.entries(config.sources)) {
     if (rawSourceConfig.disabled) {
@@ -119,12 +121,32 @@ export async function sync(root: string, registry: Record<string, Connector> = c
     state.sources[name] = health
   }
 
+  updateState(root, { cursors: state.cursors })
+
   // Mirror Jira/GitHub issues into the lore tracker (context/work/lore/):
   // new open issues become items, tracker moves become history. Runs after
   // every connector so it sees this run's tables.
   try {
     const m = mirrorExternal(root, config)
     if (m.created || m.updated) console.log(`work: ${m.created} mirrored, ${m.updated} updated → ${m.file}`)
+    if (config.sources.github_projects && !config.sources.github_projects.disabled) {
+      try {
+        await reconcileProjects(root, config)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const at = new Date().toISOString()
+        const health = state.sources.github_projects ?? { lastAttempt: at }
+        health.lastError = { at, message }
+        health.lastSuccess = previousProjectSuccess
+        state.sources.github_projects = health
+        const source = summary.sources.github_projects ?? { status: 'failed' as const, written: 0, errors: [] }
+        source.status = 'failed'
+        source.errors.push(message)
+        summary.sources.github_projects = source
+        summary.ok = false
+        console.error(`✗ ${message}`)
+      }
+    }
     // A tracker move from Jira/GitHub shows on the status page with this sync's commit.
     if (m.file && existsSync(join(root, 'context/derived'))) writeStatus(root, config)
   } catch (err) {
@@ -155,7 +177,7 @@ export async function sync(root: string, registry: Record<string, Connector> = c
 
   // Only sync's half of state.json — a fold may be checkpointing its own
   // half (`extracted`) on this clone at the same time.
-  updateState(root, { cursors: state.cursors, sources: state.sources, lastSync: new Date().toISOString() })
+  updateState(root, { sources: state.sources, lastSync: new Date().toISOString() })
 
   if (!summary.ok) {
     const failed = Object.entries(summary.sources)

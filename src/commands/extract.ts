@@ -1,3 +1,4 @@
+import { reconcileProjects } from '../projects.js'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -128,7 +129,7 @@ const FOLD_SCHEMA: Record<string, unknown> = {
         type: 'object',
         properties: {
           key: { type: 'string', description: 'the item key exactly as listed, e.g. CAR-3' },
-          status: { type: 'string', enum: ['todo', 'in_progress', 'blocked', 'done'] },
+          status: { type: 'string', enum: ['todo', 'in_progress', 'review', 'blocked', 'done'] },
           priority: { type: 'string', enum: ['P1', 'P2', 'P3'] },
           rank_above: { type: 'string', description: 'key of the item this should now sit directly above' },
           reason: { type: 'string', description: 'one sentence: who said or did what, when' },
@@ -263,6 +264,9 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
+      // The fold awaited an LLM; a project sync may have advanced link ledgers
+      // meanwhile. Apply proposals to the current tracker, never that old copy.
+      if (config.sources.github_projects) workItems.splice(0, workItems.length, ...readWorkItems(root, prefix))
       if (workItems.length > 0 || (result.work_changes?.length ?? 0) > 0) {
         const at = new Date().toISOString()
         const w = applyFoldChanges(workItems, result.work_changes, at)
@@ -275,6 +279,8 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
             appendAudit(root, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: key, ...(proposal?.sources?.[0] ? { source: proposal.sources[0] } : {}) })
             console.log(`  work: ${line}`)
           }
+          await reconcileProjects(root, config)
+          workItems.splice(0, workItems.length, ...readWorkItems(root, prefix))
           changes.push(`work ~${w.applied.length}`)
         }
         for (const line of w.skipped) if (!/: no change$/.test(line)) console.log(`  work skipped: ${line}`)

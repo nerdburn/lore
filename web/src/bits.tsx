@@ -5,6 +5,7 @@ const STATUS_COLOR: Record<Status, 'default' | 'accent' | 'success' | 'warning' 
   todo: 'default',
   in_progress: 'accent',
   blocked: 'danger',
+  review: 'accent',
   done: 'success',
   archived: 'default',
 }

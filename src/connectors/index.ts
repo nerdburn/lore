@@ -1,5 +1,6 @@
 import type { Connector } from '../types.js'
 import { figma } from './figma.js'
+import { githubProjects } from './github-projects.js'
 import { github } from './github.js'
 import { gmail } from './gmail.js'
 import { granola } from './granola.js'
@@ -17,6 +18,7 @@ import { slack } from './slack.js'
 export const connectors: Record<string, Connector> = {
   slack,
   github,
+  github_projects: githubProjects,
   granola,
   notion,
   jira,

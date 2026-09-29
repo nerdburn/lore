@@ -599,6 +599,65 @@ deleted: it is the only copy of the synced history and the pins.
 `--restore` reopens it. What stays manual: unlinking any project repos, and
 removing @lore from the Slack channels.
 
+### GitHub Projects
+
+GitHub Projects v2 can project Lore tickets onto a board, with two-way status,
+title, and description sync. Add an explicit mapping to the context's `lore.json`:
+
+```json
+{
+  "sources": {
+    "github_projects": [{
+      "owner": "inputlogic",
+      "number": 8,
+      "status_field": "Status",
+      "status_map": {
+        "Todo": "todo",
+        "In Progress": "in_progress",
+        "In Review": "review",
+        "Done": "done"
+      }
+    }]
+  }
+}
+```
+
+The host uses `LORE_GITHUB_TOKEN` directly. It needs Projects read/write and
+permission to edit linked repository issues (or PRs). Each project may override
+`token` with an `env:VARIABLE` reference. Organization and personal projects are
+supported; the repository-scoped aggregate GitHub proxy cannot serve this source.
+Run `lore check`, then `lore sync`, or `lore project sync inputlogic/8`.
+
+Items linked to an already-tracked GitHub issue auto-link to that Lore ticket.
+Existing issue references and ticket IDs stay intact; an additive `project_items`
+list holds each board link and its last successful sync values. On first link,
+Lore supplies the title and status, and a missing description is filled from
+GitHub. Later project-only edits flow into Lore. Lore-only edits flow back
+immediately from MCP, CLI, board, or fold changes. If both sides change a field,
+Lore wins and `state.json.conflicts` records the drift.
+
+```sh
+lore project item add inputlogic/8 "Investigate retry" --body "Steps to reproduce" --status todo
+lore project item add inputlogic/8 "Existing ticket" --link-work COI-14
+lore project item move COI-14 review --reason "Ready for review"
+```
+
+Agents use `lore_project_item_add` and `lore_project_item_move`. `lore_work_add`
+also accepts `project: {owner, number, column?}`. An add creates a draft unless
+the linked Lore row already references a GitHub issue. Assignees stay read-only
+metadata. Removing an item from a board unlinks it and keeps the Lore ticket.
+Unknown columns remain `status_raw` metadata; a Lore status without a configured
+column fails visibly on write-back.
+
+GitHub and git cannot commit atomically. On a partial failure, Lore keeps the
+pending change and successful ledger fields for the next sync to retry. An
+interrupted add reports its work key: retry with `link_work` to reuse the item.
+Changes are stored per day in `context/streams/github-projects/`; current
+snapshots live in `context/projects/github/`. See
+[the implementation notes](docs/GITHUB_PROJECTS_SOURCE.md) for schema details and
+release validation. Configure mappings in `lore.json`; `lore source add` does not
+infer a mapping.
+
 ### For agents (MCP)
 
 **From your own machine (Claude Code, no SSH).** With the board on, the
@@ -781,7 +840,7 @@ Code plugin with skills and evals, client lifecycle (`archive`), statements of w
 commitments layer, fail-safe sync with per-source health, secret scrubbing,
 and an audit log. Next (see
 [docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): contact
-identity resolution, GitHub write-back (Jira has `lore work push`),
+identity resolution, GitHub issue creation outside Projects,
 client-scoped MCP tools, remote MCP.
 
 ## Principles

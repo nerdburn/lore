@@ -117,7 +117,7 @@ export async function workPush(cwd: string, input: WorkPushInput, opts: WorkWrit
      * sprint are left where the client planned them.
      */
     const sprintStep = async (item: LoreWorkItem, jiraKey: string | undefined, created: boolean): Promise<boolean> => {
-      const inFlight = item.status === 'in_progress' || item.status === 'blocked'
+      const inFlight = item.status === 'in_progress' || item.status === 'review' || item.status === 'blocked'
       if (!sprintAsk && !inFlight) return false
       const p = await planFor()
       const label = jiraKey ?? 'the new issue'
@@ -268,6 +268,7 @@ export function inSync(item: LoreWorkItem): boolean {
   switch (item.status) {
     case 'todo':
       return cat === 'new'
+    case 'review':
     case 'in_progress':
       return cat === 'indeterminate' && !blocked
     case 'blocked':
@@ -288,6 +289,8 @@ export function pickTransition(status: WorkStatus, transitions: JiraTransition[]
   switch (status) {
     case 'todo':
       return by((t) => t.to.statusCategory.key === 'new', /^(to do|backlog|open)$/i)
+    case 'review':
+      return by((t) => t.to.statusCategory.key === 'indeterminate' && /review|qa|test/i.test(t.to.name), /^in review$/i)
     case 'in_progress':
       return by((t) => t.to.statusCategory.key === 'indeterminate' && !/block|review|qa|test/i.test(t.to.name), /^in progress$/i)
     case 'blocked':

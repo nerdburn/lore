@@ -22,8 +22,9 @@ import { setup } from './commands/setup.js'
 import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
+import { workAdd, workMove, workSet, projectItemAdd, projectItemMove, projectSync } from './commands/project.js'
 import { docAdd, docList } from './commands/doc.js'
-import { workAdd, workLabel, workList, workMove, workPromote, workRank, workSet, workShow } from './commands/work.js'
+import { workLabel, workList, workPromote, workRank, workShow } from './commands/work.js'
 import { gateReplay } from './commands/gate.js'
 import { resolveContext } from './context.js'
 import { statusView } from './status.js'
@@ -53,7 +54,7 @@ if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'))
 program
   .name('lore')
   .description('Git-native project memory for agents. Everything derived, except what you explicitly remember.')
-  .version('0.4.0')
+  .version('0.5.0')
 
 program
   .command('init')
@@ -271,6 +272,17 @@ contextual(
 contextual(doc.command('list').description('list documents in the `docs` stream').option('--json', 'machine-readable output')).action((o) => void docList(root, o))
 
 
+const project = program.command('project').description('GitHub Projects linked to Lore work')
+const projectItem = project.command('item')
+contextual(projectItem.command('add').argument('<project>', 'owner/number').argument('<title>')
+  .option('--body <markdown>').option('--status <status>').option('--link-work <key>').option('--reason <why>').option('--by <who>'))
+  .action(async (project, title, o) => console.log(JSON.stringify(await projectItemAdd(root, { project, title, body: o.body, status: o.status, link_work: o.linkWork, reason: o.reason }, o))))
+contextual(projectItem.command('move').argument('<item>', 'work key or project item node id').argument('<status>')
+  .option('--reason <why>').option('--by <who>'))
+  .action(async (item, status, o) => console.log(JSON.stringify(await projectItemMove(root, { item, status, reason: o.reason }, o))))
+contextual(project.command('sync').argument('<project>', 'owner/number').option('--by <who>'))
+  .action(async (project, o) => { await projectSync(root, project, o); console.log(`synced ${project}`) })
+
 const work = program.command('work').description('the work tracker of record: tickets mirrored from Jira/GitHub, moved by people, agents, and the fold — every move recorded with who and why')
 contextual(
   work
@@ -278,7 +290,7 @@ contextual(
     .description('add a work item; commits and pushes')
     .argument('<title>', 'what the work is')
     .option('--description <md>', 'markdown body — what the ticket is')
-    .option('--status <s>', `${['todo', 'in_progress', 'blocked', 'done', 'archived'].join(' | ')} (default todo)`)
+    .option('--status <s>', `${['todo', 'in_progress', 'review', 'blocked', 'done', 'archived'].join(' | ')} (default todo)`)
     .option('--priority <p>', 'P1 | P2 | P3')
     .option('--assignee <who>', 'who is on it')
     .option('--labels <list>', 'comma-separated labels')
@@ -286,8 +298,8 @@ contextual(
     .option('--external <ref>', 'link an existing tracker issue: "jira:INPT-9", "github:owner/repo#42" or "linear:PRP-12"')
     .option('--reason <why>', 'why this is being tracked (recorded in history)')
     .option('--by <who>', 'who is adding this (defaults to OS username)'),
-).action((title: string, o) => {
-  workAdd(root, { title, description: o.description, status: o.status, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external, reason: o.reason }, o)
+).action(async (title: string, o) => {
+  await workAdd(root, { title, description: o.description, status: o.status, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external, reason: o.reason }, o)
 })
 contextual(
   work
@@ -306,12 +318,12 @@ contextual(
     .command('move')
     .description('change an item\'s status')
     .argument('<key>', 'e.g. CAR-3')
-    .argument('<status>', 'todo | in_progress | blocked | done | archived')
+    .argument('<status>', 'todo | in_progress | review | blocked | done | archived')
     .requiredOption('--reason <why>', 'why it moved — recorded in history')
     .option('--source <urls>', 'comma-separated evidence links')
     .option('--by <who>', 'who is moving it'),
-).action((key: string, status: string, o) => {
-  workMove(root, key, status, { reason: o.reason, sources: splitList(o.source) }, o)
+).action(async (key: string, status: string, o) => {
+  await workMove(root, key, status, { reason: o.reason, sources: splitList(o.source) }, o)
 })
 contextual(
   work
@@ -327,8 +339,8 @@ contextual(
     .option('--external <ref>', '"jira:INPT-9", "github:owner/repo#42" or "linear:PRP-12"')
     .requiredOption('--reason <why>', 'why — recorded in history')
     .option('--by <who>', 'who is changing it'),
-).action((key: string, o) => {
-  workSet(root, key, { title: o.title, description: o.description, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external }, { reason: o.reason }, o)
+).action(async (key: string, o) => {
+  await workSet(root, key, { title: o.title, description: o.description, priority: o.priority, assignee: o.assignee, labels: splitList(o.labels), sources: splitList(o.source), external: o.external }, { reason: o.reason }, o)
 })
 contextual(
   work

@@ -38,7 +38,7 @@ export function Projects({ onUnauthorized }: { onUnauthorized: () => void }) {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((p) => {
-            const open = p.counts.todo + p.counts.in_progress + p.counts.blocked
+            const open = p.counts.todo + p.counts.in_progress + p.counts.blocked + (p.counts.review ?? 0)
             return (
               <a
                 key={p.context}

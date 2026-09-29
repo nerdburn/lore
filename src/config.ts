@@ -19,6 +19,19 @@ const envRef = z.string().regex(/^env:[A-Z_][A-Z0-9_]*$/, 'must be an "env:VAR_N
 
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/
 
+export const ghProjectSchema = baseSource.extend({
+  owner: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]*$/),
+  number: z.number().int().positive(),
+  status_field: z.string().min(1).default('Status'),
+  status_map: z.record(z.string().min(1), z.enum(['todo', 'in_progress', 'review', 'blocked', 'done', 'archived']))
+    .refine(m => Object.keys(m).length > 0 && new Set(Object.values(m)).size === Object.values(m).length,
+      'status_map must be nonempty and map each column to a unique lore status'),
+  // Per-project overrides also allow separate organizations to use separate PATs.
+  token: envRef.optional(),
+  api_base: z.string().url().optional(),
+})
+export type GhProjectConfig = z.infer<typeof ghProjectSchema>
+
 /**
  * Typed per-source schemas (backlog §8). Invalid scope config is rejected
  * before a sync starts. Sources not listed here are accepted structurally
@@ -54,6 +67,9 @@ export const sourceSchemas = {
       include: z.array(z.enum(['issues', 'comments', 'reviews', 'commits', 'releases'])).optional(),
     })
     .refine((g) => g.token || g.api_base, { message: 'github needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
+  github_projects: baseSource.extend({
+    projects: z.array(ghProjectSchema).min(1).refine(ps => new Set(ps.map(p => `${p.owner.toLowerCase()}/${p.number}`)).size === ps.length, 'duplicate project'),
+  }),
   granola: baseSource
     .extend({
       /** Bearer token for Granola's MCP endpoint. Usually omitted: `lore auth granola`
@@ -206,7 +222,7 @@ export const KNOWN_SOURCES = Object.keys(sourceSchemas) as SourceName[]
 export const sourceSchema = baseSource.catchall(z.unknown())
 export type SourceConfig = z.infer<typeof sourceSchema>
 
-const sourcesSchema = z.record(z.string(), sourceSchema).superRefine((sources, ctx) => {
+const sourceBlocksSchema = z.record(z.string(), sourceSchema).superRefine((sources, ctx) => {
   for (const [name, cfg] of Object.entries(sources)) {
     const schema = (sourceSchemas as Record<string, z.ZodTypeAny>)[name]
     if (!schema) continue
@@ -218,6 +234,15 @@ const sourcesSchema = z.record(z.string(), sourceSchema).superRefine((sources, c
     }
   }
 })
+
+// The public brief uses an array; normalize to a source block for the existing
+// connector/health interfaces. The object form supports disabling the source.
+const sourcesSchema = z.preprocess(value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const sources = { ...(value as Record<string, unknown>) }
+  if (Array.isArray(sources.github_projects)) sources.github_projects = { projects: sources.github_projects }
+  return sources
+}, sourceBlocksSchema)
 
 export const LIFECYCLES = ['active', 'archived'] as const
 export type Lifecycle = (typeof LIFECYCLES)[number]

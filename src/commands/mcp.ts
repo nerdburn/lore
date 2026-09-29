@@ -11,7 +11,8 @@ import { refresh } from './refresh.js'
 import { remember } from './remember.js'
 import { docAdd } from './doc.js'
 import { sowAdd } from './sow.js'
-import { workAdd, workLabel, workMove, workPromote, workRank, workSet } from './work.js'
+import { workLabel, workPromote, workRank } from './work.js'
+import { workAdd, workMove, workSet, projectItemAdd, projectItemMove } from './project.js'
 import { addComment } from '../comments.js'
 import { workPush } from './work-push.js'
 import { sourceAdd, sourceList } from './source.js'
@@ -39,6 +40,8 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_sow_add', writes: true, summary: 'attach a statement of work' },
   { name: 'lore_doc_add', writes: true, summary: 'attach a document or link the client sent' },
   { name: 'lore_source_add', writes: true, summary: 'add a source or widen its scope: a repo, channel, folder, page, design file, board, mailbox (explicit only)' },
+  { name: 'lore_project_item_add', writes: true, summary: 'add a GitHub Project item linked to a Lore ticket' },
+  { name: 'lore_project_item_move', writes: true, summary: 'move a linked GitHub Project item and its Lore ticket' },
   { name: 'lore_work_add', writes: true, summary: 'open a tracker ticket' },
   { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
@@ -107,7 +110,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const label = archived
     ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
     : ''
-  const server = new McpServer({ name: 'lore', version: '0.4.0' })
+  const server = new McpServer({ name: 'lore', version: '0.5.0' })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })
@@ -313,6 +316,15 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const reasonField = z.string().min(1).describe('why — recorded in the item\'s history with you as the actor; cite what the person said or the evidence')
   const sourcesField = z.array(z.string()).optional().describe('permalinks to the evidence (Slack message, email, PR)')
 
+  tool('lore_project_item_add', {
+    description: archived ? unavailable : 'Add a draft to a configured GitHub Project, or add the GitHub issue already linked to link_work. Creates a Lore ticket when link_work is omitted. status is a Lore status; writes are recorded in history.',
+    inputSchema: { project: z.string().min(1), title: z.string().min(1), body: z.string().optional(), status: z.enum(WORK_STATUSES as [string, ...string[]]).optional(), link_work: z.string().optional(), reason: z.string().optional() },
+  }, async input => text(await projectItemAdd(rememberOpts.cwd, input, workVia)))
+  tool('lore_project_item_move', {
+    description: archived ? unavailable : 'Move a linked project item and its Lore ticket. item is a Lore work key or a GitHub project item node id; status is a Lore status.',
+    inputSchema: { item: z.string().min(1), status: z.enum(WORK_STATUSES as [string, ...string[]]), reason: z.string().optional() },
+  }, async input => text(await projectItemMove(rememberOpts.cwd, input, workVia)))
+
   tool(
     'lore_work_add',
     {
@@ -329,10 +341,11 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         sources: sourcesField,
         external: z.string().optional().describe('"jira:<KEY>", "github:<owner>/<repo>#<n>" or "linear:<KEY>"'),
         reason: reasonField,
+        project: z.object({ owner: z.string(), number: z.number().int().positive(), column: z.string().optional() }).optional(),
       },
     },
-    async ({ title, description, status, priority, assignee, labels, sources, external, reason }) => {
-      const item = workAdd(rememberOpts.cwd, { title, description, status: status as never, priority: priority as never, assignee, labels, sources, external, reason }, workVia)
+    async ({ title, description, status, priority, assignee, labels, sources, external, reason, project }) => {
+      const item = await workAdd(rememberOpts.cwd, { title, description, project, status: status as never, priority: priority as never, assignee, labels, sources, external, reason }, workVia)
       return text(`added ${item.key}: ${item.title} [${item.status}]`)
     },
   )
@@ -361,7 +374,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? unavailable
-        : 'Change a work item\'s status (todo | in_progress | blocked | done | archived). Move it when a person asks, or when the evidence in front of you is unambiguous (a merged PR, "shipped", "this is blocked on X") — always with the reason and sources. Never archive on your own initiative.',
+        : 'Change a work item\'s status (todo | in_progress | review | blocked | done | archived). Move it when a person asks, or when the evidence in front of you is unambiguous (a merged PR, "shipped", "this is blocked on X") — always with the reason and sources. Never archive on your own initiative.',
       inputSchema: {
         key: z.string().min(1).describe('e.g. CAR-3'),
         status: z.enum(WORK_STATUSES as [string, ...string[]]),
@@ -370,7 +383,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       },
     },
     async ({ key, status, reason, sources }) => {
-      const item = workMove(rememberOpts.cwd, key, status, { reason, sources }, workVia)
+      const item = await workMove(rememberOpts.cwd, key, status, { reason, sources }, workVia)
       return text(`moved ${item.key} → ${item.status}: ${item.title}`)
     },
   )
@@ -397,7 +410,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ key, title, description, priority, assignee, labels, sources, external, rank_above, reason }) => {
       const notes: string[] = []
       if (title !== undefined || description !== undefined || priority !== undefined || assignee !== undefined || labels !== undefined || sources !== undefined || external !== undefined) {
-        const item = workSet(rememberOpts.cwd, key, { title, description, priority: priority as never, assignee, labels, sources, external }, { reason }, workVia)
+        const item = await workSet(rememberOpts.cwd, key, { title, description, priority: priority as never, assignee, labels, sources, external }, { reason }, workVia)
         notes.push(`updated ${item.key}`)
       }
       if (rank_above !== undefined) {

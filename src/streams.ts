@@ -43,7 +43,22 @@ export function writeDocs(root: string, docs: Doc[]): WriteResult {
     }
 
     if (existsSync(path)) {
-      if (hasDoc(readFileSync(path, 'utf8'), doc.id)) {
+      const existing = readFileSync(path, 'utf8')
+      if (hasDoc(existing, doc.id)) {
+        // Project items are current entries within a day, rather than immutable
+        // messages. Keep the stable item id and replace this day's earlier view.
+        if (doc.source === 'github-projects') {
+          const marker = existing.indexOf(`<!-- id: ${doc.id} `)
+          const exactMarker = marker >= 0 ? marker : existing.indexOf(`<!-- id: ${doc.id} -->`)
+          const start = existing.lastIndexOf('\n### ', exactMarker)
+          const next = existing.indexOf('\n### ', exactMarker)
+          if (start < 0 || exactMarker < 0) throw new Error(`malformed project stream entry ${doc.id}`)
+          const clean = scrub(doc.text)
+          for (const [kind, n] of Object.entries(clean.redacted)) redacted[kind] = (redacted[kind] ?? 0) + n
+          writeFileSync(path, existing.slice(0, start) + formatDoc({ ...doc, text: clean.text }) + (next < 0 ? '' : existing.slice(next)))
+          written++
+          continue
+        }
         skipped++
         continue
       }

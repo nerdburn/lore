@@ -28,8 +28,8 @@ import { readWorkTable as readLinearTable, type LinearWorkItem } from './connect
 
 export const WORK_DIR = 'context/work/lore'
 
-export type WorkStatus = 'todo' | 'in_progress' | 'blocked' | 'done' | 'archived'
-export const WORK_STATUSES: WorkStatus[] = ['todo', 'in_progress', 'blocked', 'done', 'archived']
+export type WorkStatus = 'todo' | 'in_progress' | 'blocked' | 'review' | 'done' | 'archived'
+export const WORK_STATUSES: WorkStatus[] = ['todo', 'in_progress', 'blocked', 'review', 'done', 'archived']
 export type WorkPriority = 'P1' | 'P2' | 'P3'
 export const WORK_PRIORITIES: WorkPriority[] = ['P1', 'P2', 'P3']
 /** The surface a change came through. `web` = the board (`lore www`); `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
@@ -66,6 +66,14 @@ export interface WorkHistoryEntry {
   evidence_date?: string
 }
 
+export interface ProjectItemRef {
+  kind: 'github-project-item'
+  ref: string
+  project: string
+  url: string
+  last_sync: { status?: WorkStatus; title?: string; body_hash?: string }
+}
+
 export interface LoreWorkItem {
   key: string
   title: string
@@ -79,6 +87,8 @@ export interface LoreWorkItem {
   /** The derived request this was promoted from. */
   request?: string
   external?: ExternalRef
+  /** Project links are additive: legacy external issue links keep their shape. */
+  project_items?: ProjectItemRef[]
   sources: string[]
   /** ISO dates. */
   created: string
@@ -431,6 +441,9 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
       fields.status = mapped
     }
     if (issue.title !== known.title && !lastHumanChange(known, 'title')) fields.title = issue.title
+    // Project-linked rows reconcile title/status through the three-way ledger.
+    // A stale issue mirror must never undo a project edit or a local conflict.
+    if (known.project_items?.length) { delete fields.status; delete fields.title }
     if ((issue.assignee ?? undefined) !== (known.assignee ?? undefined) && !lastHumanChange(known, 'assignee')) fields.assignee = issue.assignee
     const labels = mergeTrackerLabels(known, issue.labels)
     if (JSON.stringify(labels) !== JSON.stringify(known.labels)) fields.labels = labels

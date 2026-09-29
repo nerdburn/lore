@@ -6,7 +6,8 @@ import { attachUpload, ATTACHMENTS_FILE, cleanName, guessType, liveAttachments, 
 import { gitShow } from '../bare.js'
 import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
 import { addComment, ticketThread } from '../comments.js'
-import { workAdd, workMove, workRank, workSet, type WorkWriteOptions } from '../commands/work.js'
+import { workAdd, workMove, workSet } from '../commands/project.js'
+import { workRank, type WorkWriteOptions } from '../commands/work.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
 import { assigneeName, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
@@ -351,7 +352,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       }
       const reason = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined
       const w: WorkWriteOptions = { context, via: 'web', actor: email }
-      const write = (fn: () => LoreWorkItem) => serializeFor(context)(async () => fn())
+      const write = (fn: () => LoreWorkItem | Promise<LoreWorkItem>) => serializeFor(context)(async () => fn())
 
       if (!key && method === 'POST') {
         const item = await write(() =>
@@ -386,11 +387,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       if (key && action === 'move' && method === 'POST') {
         const status = str(body.status)
         const target = rankTarget(body, bareWorkItems(opts.repos, project).items, key)
-        const item = await write(() => {
+        const item = await write(async () => {
           let item: LoreWorkItem | undefined
           if (status) {
             try {
-              item = workMove(cwd, key, status, { reason: reason ?? `moved to ${status} on the board` }, w)
+              item = await workMove(cwd, key, status, { reason: reason ?? `moved to ${status} on the board` }, w)
             } catch (err) {
               if (!target || !/is already/.test(String(err))) throw err
             }

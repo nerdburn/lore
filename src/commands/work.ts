@@ -310,7 +310,7 @@ export function workSet(cwd: string, key: string, fields: WorkSetInput, input: C
       item,
       {
         ...(fields.title?.trim() ? { title: fields.title.trim() } : {}),
-        ...(fields.description !== undefined ? { description: fields.description.trim() || undefined } : {}),
+        ...(fields.description !== undefined ? { description: fields.description.trim() } : {}),
         ...(priority ? { priority } : {}),
         ...(fields.assignee !== undefined ? { assignee: fields.assignee.trim() || undefined } : {}),
         ...(fields.labels ? { labels: cleanList(fields.labels) } : {}),

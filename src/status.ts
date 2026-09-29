@@ -101,12 +101,13 @@ export function renderOutstanding(root: string, config: Pick<LoreConfig, 'projec
     .filter((r) => r.status !== 'done')
     .sort((a, b) => String(a.priority ?? 'P9').localeCompare(String(b.priority ?? 'P9')))
   const byStatus = (s: string) => open.filter((i) => i.status === s).map(ticketLine)
-  const counts = `${open.length} open ticket${open.length === 1 ? '' : 's'} (${byStatus('blocked').length} blocked, ${byStatus('in_progress').length} in progress, ${byStatus('todo').length} to do) · ${requests.length} untracked request${requests.length === 1 ? '' : 's'} · ${roadmap.length} roadmap item${roadmap.length === 1 ? '' : 's'} not done`
+  const counts = `${open.length} open ticket${open.length === 1 ? '' : 's'} (${byStatus('blocked').length} blocked, ${byStatus('in_progress').length} in progress${byStatus('review').length ? `, ${byStatus('review').length} in review` : ''}, ${byStatus('todo').length} to do) · ${requests.length} untracked request${requests.length === 1 ? '' : 's'} · ${roadmap.length} roadmap item${roadmap.length === 1 ? '' : 's'} not done`
   return [
     counts,
     '',
     ...section('Blocked', byStatus('blocked'), Infinity, ''),
     ...section('In progress', byStatus('in_progress'), Infinity, ''),
+    ...section('In review', byStatus('review'), Infinity, ''),
     ...section('To do', byStatus('todo'), CAP.todo, 'lore_recall category work'),
     ...section(
       'Requests not yet ticketed',

@@ -1,4 +1,5 @@
 import { loadConfig, resolveEnvRefs } from '../config.js'
+import { GithubProjectsClient, projectConfigs } from '../connectors/github-projects.js'
 import { connectors } from '../connectors/index.js'
 import { formatStale, sourceStatuses } from '../health.js'
 import { loadState } from '../state.js'
@@ -36,6 +37,10 @@ export function check(root: string, registry: Record<string, Connector> = connec
       )
       ok = false
       continue
+    }
+    if (name === 'github_projects') {
+      try { for (const project of projectConfigs(sourceConfig)) new GithubProjectsClient(project) }
+      catch (err) { console.error(`✗ source "${name}": ${err instanceof Error ? err.message : String(err)}`); ok = false; continue }
     }
     const { missing } = resolveEnvRefs(sourceConfig)
     if (missing.length > 0) {
