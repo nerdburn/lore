@@ -1,4 +1,6 @@
 import { parse as parseYamlList, stringify } from 'yaml'
+import { scrub } from '../scrub.js'
+import { createHash } from 'node:crypto'
 import type { Connector, ConnectorContext, Cursor, Doc } from '../types.js'
 
 /**
@@ -31,6 +33,7 @@ import type { Connector, ConnectorContext, Cursor, Doc } from '../types.js'
 interface RepoCursor {
   since: string
   fingerprints: Record<string, string>
+  delivery_version?: number
 }
 type GithubCursor = Record<string, RepoCursor>
 
@@ -44,6 +47,7 @@ export interface WorkItem {
   number: number
   type: 'issue' | 'pr'
   title: string
+  body?: string
   state: 'open' | 'closed'
   /** PRs only. */
   merged?: boolean
@@ -55,6 +59,7 @@ export interface WorkItem {
   created_at: string
   updated_at: string
   closed_at?: string
+  merged_at?: string
   url: string
 }
 
@@ -137,7 +142,13 @@ export const github: Connector = {
 
     for (const repo of repos) {
       const prev = cursor[repo]
-      const sinceMs = prev ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
+      // Upgrade old snapshots once: recover recent PR descriptions even when
+      // their original stream events have already been consumed by the fold.
+      const recent = Date.now() - 90 * DAY_MS
+      const upgradeDelivery = kinds.has('issues') && prev?.delivery_version !== 1
+      const sinceMs = prev ? (!upgradeDelivery
+        ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since)
+        : Math.min(new Date(prev.since).getTime() - overlapMs, recent)) : ctx.since
       const since = new Date(sinceMs).toISOString()
       const startedAt = new Date().toISOString()
       const fingerprints = { ...(prev?.fingerprints ?? {}) }
@@ -152,7 +163,7 @@ export const github: Connector = {
           const updated = await api.paginate<GhIssue>(`/repos/${repo}/issues`, {
             state: 'all', sort: 'updated', direction: 'asc', since, per_page: '100',
           })
-          const seed = prev ? [] : await api.paginate<GhIssue>(`/repos/${repo}/issues`, { state: 'open', per_page: '100' })
+          const seed = prev?.delivery_version === 1 ? [] : await api.paginate<GhIssue>(`/repos/${repo}/issues`, { state: 'open', per_page: '100' })
           const seen = new Set<number>()
           for (const issue of [...seed, ...updated]) {
             table.set(issue.number, toWorkItem(issue))
@@ -199,7 +210,7 @@ export const github: Connector = {
         }
 
         files[workPath] = renderWorkTable(repo, [...table.values()])
-        cursor[repo] = { since: startedAt, fingerprints }
+        cursor[repo] = { since: startedAt, fingerprints, ...(kinds.has('issues') || prev?.delivery_version === 1 ? { delivery_version: 1 } : {}) }
         ctx.log(`github: ${repo} → ${docs.length} docs so far, ${table.size} work items`)
       } catch (err) {
         if (err instanceof GithubError && err.status === 404) {
@@ -267,7 +278,7 @@ function stateChangeDoc(repo: string, issue: GhIssue): Doc {
     permalink: issue.html_url,
     thread: `${kind}-${issue.number}`,
     meta: baseMeta(repo, { number: issue.number, node: issue.node_id, type: kind, state: issue.state }),
-    text: `${kind === 'pr' ? 'PR' : 'Issue'} #${issue.number} "${issue.title}" is now: ${statusLine(issue)}`,
+    text: `${kind === 'pr' ? 'PR' : 'Issue'} #${issue.number} "${issue.title}" is now: ${statusLine(issue)}${kind === 'pr' ? `\n\n${issue.body?.trim() || '(no description)'}` : ''}`,
   }
 }
 
@@ -334,6 +345,7 @@ function toWorkItem(issue: GhIssue): WorkItem {
     number: issue.number,
     type: kindOf(issue),
     title: issue.title,
+    body: scrub(issue.body?.trim() ?? '').text,
     state: issue.state,
     labels: issue.labels.map((l) => l.name).sort(),
     assignees: issue.assignees.map((a) => a.login).sort(),
@@ -344,6 +356,7 @@ function toWorkItem(issue: GhIssue): WorkItem {
   }
   if (issue.pull_request) {
     item.merged = Boolean(issue.pull_request.merged_at)
+    if (issue.pull_request.merged_at) item.merged_at = issue.pull_request.merged_at
     if (issue.draft) item.draft = true
   }
   if (issue.milestone) item.milestone = issue.milestone.title
@@ -356,6 +369,7 @@ function fingerprint(issue: GhIssue): string {
   return JSON.stringify([
     issue.state,
     issue.title,
+    issue.pull_request ? createHash('sha256').update(issue.body ?? '').digest('hex') : null,
     issue.draft ?? false,
     issue.pull_request?.merged_at ?? null,
     issue.labels.map((l) => l.name).sort(),

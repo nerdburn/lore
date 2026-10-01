@@ -89,11 +89,30 @@ export interface LoreWorkItem {
   external?: ExternalRef
   /** Project links are additive: legacy external issue links keep their shape. */
   project_items?: ProjectItemRef[]
+  /** Delivery evidence, separate from the human/tracker-owned description. */
+  related_prs?: RelatedPullRequest[]
   sources: string[]
   /** ISO dates. */
   created: string
   updated: string
   history: WorkHistoryEntry[]
+}
+
+export interface RelatedPullRequest {
+  url: string
+  repo: string
+  number: number
+  title: string
+  status: 'draft' | 'open' | 'closed' | 'merged'
+  updated_at: string
+  merged_at?: string
+  matched_by: 'reference' | 'jev'
+  reason: string
+  /** Relevance and whole-task coverage are separate judgments. */
+  relevance?: number
+  coverage?: number
+  /** Fingerprint of the ticket requirements and PR evidence last considered. */
+  evidence_hash?: string
 }
 
 /** Recall's compact view: no history, just who last touched it and why. */
@@ -319,6 +338,7 @@ export function mapPriority(raw: string | undefined, labels: string[] = []): Wor
 interface ExternalIssue {
   ref: ExternalRef
   title: string
+  description?: string
   labels: string[]
   assignee?: string
   priority?: WorkPriority
@@ -339,6 +359,7 @@ export function readExternalIssues(root: string): ExternalIssue[] {
         out.push({
           ref: { system: 'github', id: `github:${repo}#${i.number}`, key: `#${i.number}`, url: i.url, status: i.state, category: i.state },
           title: i.title,
+          description: i.body,
           labels: i.labels ?? [],
           assignee: i.assignees?.[0],
           priority: mapPriority(undefined, i.labels ?? []),
@@ -416,6 +437,7 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
       const item: LoreWorkItem = {
         key: nextKey(items, prefix),
         title: issue.title,
+        ...(issue.description ? { description: issue.description } : {}),
         status,
         state: stateFor(status),
         ...(issue.priority ? { priority: issue.priority } : {}),
@@ -447,6 +469,7 @@ export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' 
       fields.status = mapped
     }
     if (issue.title !== known.title && !lastHumanChange(known, 'title')) fields.title = issue.title
+    if (issue.description !== undefined && issue.description !== known.description && !lastHumanChange(known, 'description') && !known.project_items?.length) fields.description = issue.description
     // Project-linked rows reconcile title/status through the three-way ledger.
     // A stale issue mirror must never undo a project edit or a local conflict.
     if (known.project_items?.length) { delete fields.status; delete fields.title }
@@ -694,9 +717,15 @@ export function describeWorkForPrompt(items: LoreWorkItem[], today: string): str
       ({ i, idx }) =>
         `${i.key} | rank ${idx + 1} | ${i.status}${i.priority ? ` | ${i.priority}` : ''}${i.assignee ? ` | ${i.assignee}` : ''} | ${i.title}${
           i.external ? ` | ${i.external.system} ${i.external.key}: ${i.external.status}` : ''
-        }${i.request ? ` | from ${i.request}` : ''}`,
+        }${i.request ? ` | from ${i.request}` : ''}${i.description ? `\n  Description: ${i.description.slice(0, 6000)}` : ''}${describeDelivery(i) ? `\n${describeDelivery(i)}` : ''}`,
     )
     .join('\n')
+}
+
+export function describeDelivery(item: Pick<LoreWorkItem, 'related_prs'>): string {
+  return (item.related_prs ?? []).map(p =>
+    `  Related PR ${p.repo}#${p.number}: ${p.title} | ${p.status} | updated ${p.updated_at}${p.merged_at ? ` | merged ${p.merged_at}` : ''} | ${p.url}\n    ${p.reason}${p.relevance !== undefined ? ` Relevance probability: ${p.relevance.toFixed(2)}.` : ''}${p.coverage !== undefined ? ` Whole-task coverage probability: ${p.coverage.toFixed(2)} (an inference, not proof of completion).` : ' Whole-task coverage has not been established.'}`,
+  ).join('\n')
 }
 
 /** History entries since `since` (ISO date) — what moved this week, for the report. */
@@ -706,7 +735,7 @@ export function describeWorkHistory(items: LoreWorkItem[], since: string): strin
     for (const h of i.history) {
       if (h.at.slice(0, 10) < since) continue
       const what = Object.entries(h.change)
-        .map(([f, v]) => (f === 'created' ? 'created' : `${f} ${Array.isArray(v) ? `${v[0] ?? '—'} → ${v[1]}` : String(v)}`))
+        .map(([f, v]) => (f === 'created' ? 'created' : f === 'related_prs' ? 'related PR evidence updated' : `${f} ${Array.isArray(v) ? `${v[0] ?? '—'} → ${v[1]}` : String(v)}`))
         .join(', ')
       lines.push(`${h.at.slice(0, 10)} ${i.key} (${i.title}): ${what} — ${h.reason} [${h.via}${h.by ? `: ${h.by}` : ''}]`)
     }

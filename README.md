@@ -442,6 +442,35 @@ for clients with Jira or GitHub Issues and for clients with nothing.
   for your team and the client's people. Email one-time-code sign-in, per
   project, members edit and viewers look (below).
 
+**Related PRs and delivery reconciliation.** Sync attaches PRs that explicitly
+reference a Lore key, a linked tracker issue, or a PR URL on the ticket, and
+refreshes their draft/open/merged/closed state. Related PRs live separately
+from the editable description in `related_prs`; they appear on the board,
+in `lore work show`, MCP recall, and the status page. An issue number such as
+`#42` is matched only within its repository; cross-repository references
+must include the repository or URL.
+
+With `TYPESAFE_API_KEY` set, each extract also uses Jev to match open tickets
+against open PRs and PRs updated within the past 90 days in the configured
+repositories. Relevance and whole-task coverage are evaluated separately;
+relationships scoring at least 0.85 relevance are retained. Explicit and
+already-linked PRs remain eligible regardless of age. Results, including
+negative matches, are cached by the ticket requirements, PR evidence and
+model in `context/delivery/matches.json`. Each extract evaluates at most 240
+uncached pairs; later runs automatically continue the catch-up. API failures
+keep known links and retry on a later extract. `LORE_PR_MATCHING=off` disables
+new Jev evaluations independently of `LORE_GATE=off`.
+
+Changed relationships create delivery stream events that always bypass the
+fold gate. The fold reads ticket descriptions, related PR states, coverage
+judgments and PR descriptions, then applies its existing cited,
+high-confidence status-change rules. A related or merged PR alone never
+automatically completes a ticket; partial implementation and outstanding
+acceptance requirements remain for the fold to assess. This runs even when
+there are no other new streams, so previously missed PRs can be recovered
+without a manual review queue. On upgrade, GitHub sync refreshes the past
+90 days and all open issues/PRs once to populate descriptions in old tables.
+
 ```sh
 lore work add "Caregiver onboarding email sequence" --priority P1 --source https://slack.com/archives/…
 lore work promote req-0007                      # a derived request becomes a ticket, keeping its evidence

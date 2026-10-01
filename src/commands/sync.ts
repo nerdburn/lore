@@ -8,6 +8,7 @@ import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
 import { reconcileProjects } from '../projects.js'
 import { mirrorExternal } from '../work.js'
+import { reconcileDelivery } from '../delivery.js'
 import { writeStatus } from '../status.js'
 import { importAttachments } from '../attachments.js'
 import { blobStoreFromEnv, type BlobStore } from '../blobs.js'
@@ -129,6 +130,7 @@ export async function sync(root: string, registry: Record<string, Connector> = c
   try {
     const m = mirrorExternal(root, config)
     if (m.created || m.updated) console.log(`work: ${m.created} mirrored, ${m.updated} updated → ${m.file}`)
+    if (summary.sources.github?.status === 'ok') await reconcileDelivery(root, config, { log: console.log, freshSync: true })
     if (config.sources.github_projects && !config.sources.github_projects.disabled) {
       try {
         await reconcileProjects(root, config)

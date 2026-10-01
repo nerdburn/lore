@@ -201,7 +201,7 @@ test('github: a state change emits an event doc and updates the table; unchanged
   assert.deepEqual(second.docs.map((d) => d.id), ['github-acme/web-issue-1@2026-09-01T10:00:00Z', 'github-acme/web-pr-2@2026-09-02T10:00:00Z'])
   assert.equal(second.docs[0].thread, 'issue-1')
   assert.match(second.docs[0].text, /^Issue #1 "Issue 1" is now: closed · labels: done$/)
-  assert.match(second.docs[1].text, /^PR #2 "PR 2" is now: merged$/)
+  assert.match(second.docs[1].text, /^PR #2 "PR 2" is now: merged\n\nBody of 2$/)
   const table = parse(second.files!['context/work/github/acme__web.yaml'].replace(/^(#.*\n)+/, '')) as WorkItem[]
   assert.deepEqual(table.map((i) => [i.number, i.state, i.merged]), [[2, 'closed', true], [1, 'closed', undefined]])
 
@@ -229,11 +229,46 @@ test('github: reopened issue is reflected', async () => {
 test('github: incremental sync asks for updates since cursor minus overlap', async () => {
   const g = fakeGithub()
   g.repos['acme/web'] = { issues: [] }
-  const cursor = { 'acme/web': { since: '2026-09-05T00:00:00.000Z', fingerprints: {} } }
+  const cursor = { 'acme/web': { since: '2026-09-05T00:00:00.000Z', fingerprints: {}, delivery_version: 1 } }
   await github.fetch(ctx({ cursor, config: { token: 'ghp_test', repos: ['acme/web'], overlap_days: 2 } }))
   const issuesCall = g.calls.find((c) => c.startsWith('/repos/acme/web/issues?'))!
   assert.match(issuesCall, /since=2026-09-03T00%3A00%3A00\.000Z/)
   assert.ok(!g.calls.some((c) => c.includes('state=open')), 'no seed pass after the first sync')
+})
+
+test('github: legacy cursors refresh recent history and old open items once for delivery evidence', async () => {
+  const g = fakeGithub()
+  g.repos['acme/web'] = { issues: [pr(42, { created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' })] }
+  const now = new Date().toISOString()
+  const result = await github.fetch(ctx({ since: Date.now(), cursor: { 'acme/web': { since: now, fingerprints: {} } } }))
+  assert.ok(g.calls.some(call => call.includes('state=open')))
+  const call = new URL(`https://api.github.com${g.calls.find(c => c.includes('state=all'))}`)
+  assert.ok(Date.parse(call.searchParams.get('since')!) <= Date.now() - 89 * 86_400_000)
+  assert.equal((result.nextCursor['acme/web'] as { delivery_version: number }).delivery_version, 1)
+  assert.equal(readWorkTable(result.files!['context/work/github/acme__web.yaml'])[0].body, 'Body of 42')
+})
+
+test('github: delivery migration does not repeatedly backfill a comments-only source', async () => {
+  const g = fakeGithub()
+  g.repos['acme/web'] = { issues: [] }
+  await github.fetch(ctx({ config: { token: 'ghp_test', repos: ['acme/web'], include: ['comments'] },
+    cursor: { 'acme/web': { since: '2026-09-05T00:00:00Z', fingerprints: {} } } }))
+  assert.equal(g.calls.length, 1)
+  assert.match(g.calls[0], /since=2026-09-04T00%3A00%3A00\.000Z/)
+})
+
+test('github: PR body edits emit fresh evidence and snapshots redact secrets', async () => {
+  const g = fakeGithub()
+  g.repos['acme/web'] = { issues: [pr(42)] }
+  const first = await github.fetch(ctx())
+  const secret = 'ghp_' + 'a'.repeat(36)
+  g.repos['acme/web'].issues = [pr(42, { body: `Implements ACM-1. token ${secret}`, updated_at: '2026-09-01T00:00:00Z' })]
+  const cursor = { 'acme/web': { ...(first.nextCursor['acme/web'] as object), since: '2026-08-15T00:00:00Z' } }
+  const result = await github.fetch(ctx({ cursor }, first.files!))
+  assert.equal(result.docs.length, 1)
+  assert.match(result.docs[0].text, /Implements ACM-1/)
+  assert.ok(!result.files!['context/work/github/acme__web.yaml'].includes(secret))
+  assert.ok(!JSON.stringify(result.nextCursor).includes(secret))
 })
 
 test('github: include narrows what is fetched', async () => {

@@ -55,7 +55,7 @@ export async function jevNouls(
   const answers: Record<string, number> = {}
   for (const id of Object.keys(questions)) {
     const p = body.answers?.[id]?.noul
-    if (typeof p !== 'number') throw new Error(`jev: no answer for ${id}`)
+    if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) throw new Error(`jev: invalid answer for ${id}`)
     answers[id] = p
   }
   return { answers, inputTokens: body.usage?.input_tokens ?? 0 }
@@ -143,5 +143,5 @@ export function gateConfig(env: NodeJS.ProcessEnv = process.env): { apiKey: stri
 
 /** Documents (the docs stream) are sent on purpose and always fold. */
 export function alwaysFolds(path: string): boolean {
-  return /^context\/streams\/docs\//.test(path)
+  return /^context\/streams\/(docs|delivery)\//.test(path)
 }

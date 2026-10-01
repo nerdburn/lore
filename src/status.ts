@@ -4,7 +4,7 @@ import { parse } from 'yaml'
 import type { LoreConfig } from './config.js'
 import { degraded, sourceStatuses } from './health.js'
 import { loadState } from './state.js'
-import { describeWorkHistory, readWorkItems, workPrefix, type LoreWorkItem } from './work.js'
+import { describeDelivery, describeWorkHistory, readWorkItems, workPrefix, type LoreWorkItem } from './work.js'
 import { readRoadmap } from './roadmap.js'
 
 /**
@@ -77,6 +77,10 @@ function ticketLine(i: LoreWorkItem): string {
     i.assignee ? `@${i.assignee}` : undefined,
     i.labels.length ? i.labels.map((l) => `#${l}`).join(' ') : undefined,
     i.external ? `${i.external.system} ${i.external.key}` : undefined,
+    i.related_prs?.length ? `PRs: ${(['draft', 'open', 'merged', 'closed'] as const).map(status => {
+      const count = i.related_prs!.filter(p => p.status === status).length
+      return count ? `${count} ${status === 'closed' ? 'closed unmerged' : status}` : ''
+    }).filter(Boolean).join(', ')}` : undefined,
   ].filter(Boolean)
   const why = i.status === 'blocked' && last?.reason ? ` — ${one(last.reason, 100)}` : ''
   return `- ${one(i.title)} [${i.key}]${bits.length ? ` · ${bits.join(' · ')}` : ''}${why}`
@@ -158,7 +162,7 @@ export function statusSummaryInput(root: string, config: Pick<LoreConfig, 'proje
     `\n# Previous summary (${prev.summaryAt ?? 'none'})\n${prev.summary ?? '(none)'}`,
     `\n# Tracker moves since ${since}\n${describeWorkHistory(items, since) || '(none)'}`,
     `\n# What this fold changed\n${foldChanges.join('\n') || '(nothing)'}`,
-    `\n# Work descriptions (including completed tickets referenced above)\n${items.map(i => `- ${one(i.title)} [${i.key}]`).join('\n') || '(none)'}`,
+    `\n# Work descriptions (including completed tickets referenced above)\n${items.map(i => `- ${one(i.title)} [${i.key}]${describeDelivery(i) ? `\n${describeDelivery(i)}` : ''}`).join('\n') || '(none)'}`,
     `\n# Outstanding now\n${renderOutstanding(root, config)}`,
   ].join('\n')
 }

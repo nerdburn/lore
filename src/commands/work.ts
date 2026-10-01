@@ -410,6 +410,7 @@ export function workShow(cwd: string, key: string, opts: ResolveOptions & { json
     console.log(`${item.key}  ${item.title}`)
     console.log(`status: ${item.status}${item.priority ? `  priority: ${item.priority}` : ''}${item.assignee ? `  assignee: ${item.assignee}` : ''}${item.labels.length ? `  labels: ${item.labels.join(', ')}` : ''}`)
     if (item.external) console.log(`external: ${item.external.system} ${item.external.key} (${item.external.status}) ${item.external.url}`)
+    for (const pr of item.related_prs ?? []) console.log(`related PR: ${pr.repo}#${pr.number} (${pr.status}) ${pr.title}\n  ${pr.reason} ${pr.url}`)
     if (item.request) console.log(`from request: ${item.request}`)
     for (const s of item.sources) console.log(`source: ${s}`)
     console.log('history:')

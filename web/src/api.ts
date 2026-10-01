@@ -46,6 +46,19 @@ export interface Item {
   labels: string[]
   request?: string
   external?: ExternalRef
+  related_prs?: {
+    url: string
+    repo: string
+    number: number
+    title: string
+    status: 'draft' | 'open' | 'closed' | 'merged'
+    updated_at: string
+    merged_at?: string
+    matched_by: 'reference' | 'jev'
+    reason: string
+    relevance?: number
+    coverage?: number
+  }[]
   sources: string[]
   created: string
   updated: string

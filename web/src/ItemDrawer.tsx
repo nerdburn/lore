@@ -121,6 +121,27 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
 
                   <Description key={item.description ?? ''} value={item.description ?? ''} canEdit={canEdit} saving={saving} onSave={(description) => update({ description })} />
 
+                  {!!item.related_prs?.length && (
+                    <section aria-label="Related pull requests">
+                      <h3 className="mb-2 text-sm font-semibold">Related PRs</h3>
+                      <ul className="flex flex-col gap-3 text-sm">
+                        {item.related_prs.map(pr => (
+                          <li key={pr.url}>
+                            <a href={pr.url} target="_blank" rel="noreferrer" className="text-link hover:underline break-words">
+                              {pr.repo}#{pr.number} · {pr.title}
+                            </a>
+                            <p className="mt-1 font-medium">{{ draft: 'Draft', open: 'Open', closed: 'Closed without merging', merged: 'Merged' }[pr.status]}</p>
+                            <p className="mt-1 text-muted">{pr.reason}{pr.matched_by === 'jev' ? ' Inferred relationship.' : ''}</p>
+                            <p className="mt-1 text-xs text-muted">
+                              {pr.coverage !== undefined && pr.coverage >= 0.95 && (pr.relevance ?? 0) >= 0.85 ? 'Appears to cover the full task; completion assessed by Lore.' : 'Full task completion has not been established.'}
+                              {' '}PR updated {new Date(pr.updated_at).toLocaleDateString()}.
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
                   <TicketThread context={context} itemKey={item.key} canEdit={canEdit} onError={onError} onChanged={() => void refresh()} />
 
                   {item.sources.length > 0 && (
@@ -246,6 +267,7 @@ function describeChange(change: Record<string, unknown>): string {
     const [from, to] = v as [unknown, unknown]
     const show = (x: unknown) => (x === null || x === undefined || x === '' ? '—' : Array.isArray(x) ? x.join(', ') || '—' : field === 'status' ? (STATUS_LABEL[x as Status] ?? String(x)) : String(x))
     if (field === 'description') return 'edited the description'
+    if (field === 'related_prs') return 'updated related PR evidence'
     if (field === 'attached') return `attached ${show(to)}`
     if (field === 'detached') return `removed ${show(from)}`
     if (field === 'jira_sprint') return `put it in Jira sprint ${show(to)}`
