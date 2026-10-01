@@ -512,7 +512,7 @@ decision. Setup on the host: docs/DEPLOY_EXE.md §8.
 **Attachments and comments.** A ticket's drawer on the board shows its
 files — screenshots, recordings, PDFs, dropped, pasted or picked on the
 board, or imported by `lore sync` from the linked Jira, GitHub or Linear
-issue — and one comment thread: comments made on the board (or with
+issue or a Slack message cited in the ticket's sources — and one comment thread: comments made on the board (or with
 `lore work comment CAR-3 "…"`, or an agent's `lore_work_comment`) together
 with the linked issue's own comments. Board comments are stream docs
 (`context/streams/board/<KEY>/`), so they are searchable and the fold reads
@@ -522,6 +522,22 @@ it came from); the bytes live in the asset store — Cloudflare R2 behind a
 small Worker, with a cache on the host (docs/DEPLOY_EXE.md §9). Sync imports
 files on **open** linked tickets only, up to 100 MB each; a larger one is
 recorded as a link to where it lives.
+
+Slack sync retains file names and types in the message stream, including
+file-only messages and replies, and keeps download metadata in
+`context/source-files/slack.yaml`. Files from each **exact cited message**
+are imported onto open tickets; unrelated messages in its thread are not
+automatically attached. Newly extracted tickets import those files in the
+same extraction run. This attaches the images for people to view on the
+board; it does not add image understanding to the extraction model.
+The Slack app needs `files:read` (reinstall existing apps after adding the
+scope). Proxy-only setups also need `sources.slack.files_base` targeting
+`https://files.slack.com` with the workspace token injected; see
+docs/DEPLOY_EXE.md §9. Older messages need to be re-read by sync to collect
+their file metadata: increase `overlap_days` within the configured backfill
+window, or reset the channel cursor for a backfill, including old replies.
+Existing cited tickets then pick up their attachments on sync without
+recreating the tickets.
 
 **Pushing to Jira.** Lore's state flows back out only when someone asks:
 

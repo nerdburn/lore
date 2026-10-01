@@ -3,17 +3,18 @@ import { extname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { parse, stringify } from 'yaml'
 import { appendAudit } from './audit.js'
-import { MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from './blobs.js'
+import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from './blobs.js'
 import { commitWork, type WorkWriteOptions } from './commands/work.js'
-import type { LoreConfig } from './config.js'
+import { resolveEnvRefs, type LoreConfig } from './config.js'
 import { resolveContext } from './context.js'
 import type { Connector, RemoteAttachment } from './types.js'
+import { slack, slackMessageRef, SLACK_FILES } from './connectors/slack.js'
 import { authorizeWrite } from './write.js'
 import { applyChange, findItem, readWorkItems, workPrefix, writeWorkItems, type ExternalRef } from './work.js'
 
 /**
  * Files on tickets — screenshots, recordings, PDFs — from the board or
- * imported from the linked Jira / GitHub / Linear issue.
+ * imported from the linked Jira / GitHub / Linear issue or cited Slack message.
  *
  * Git holds only the record (`context/attachments.yaml`, one entry per file
  * per ticket); the bytes live in the asset store (blobs.ts), keyed by
@@ -30,7 +31,7 @@ export interface AttachmentRecord {
   name: string
   type: string
   size?: number
-  source: 'board' | ExternalRef['system']
+  source: 'board' | 'slack' | ExternalRef['system']
   /** For imports: the source's own id for the file, so a re-scan knows it has it. */
   source_id?: string
   /** For imports: where the file lives (the issue, or the file itself). */
@@ -188,7 +189,7 @@ export interface ImportResult {
 }
 
 /**
- * Import the files on the external issues behind open lore tickets.
+ * Import files on external issues and Slack messages cited by open lore tickets.
  * Runs after mirroring in `lore sync`. Only open tickets; a file over the
  * size cap is recorded as a link, not downloaded; a file already recorded
  * (by source id) is left alone. Failures are reported, never fatal: the
@@ -204,73 +205,99 @@ export async function importAttachments(
   max = MAX_ATTACHMENT_BYTES,
 ): Promise<ImportResult> {
   const result: ImportResult = { imported: 0, skipped: 0, errors: [] }
-  const items = readWorkItems(root, workPrefix(config)).filter((i) => i.state === 'open' && i.external)
+  const items = readWorkItems(root, workPrefix(config)).filter((i) => i.state === 'open')
   if (items.length === 0) return result
   const records = readAttachments(root)
   const have = new Set(records.filter((r) => r.source_id).map((r) => `${r.source}|${r.ticket}|${r.source_id}`))
-  const byRef = new Map(items.map((i) => [i.external!.id, i]))
   let changed = false
 
-  for (const system of Object.keys(SOURCE_OF) as ExternalRef['system'][]) {
-    const source = SOURCE_OF[system]
+  for (const system of [...Object.keys(SOURCE_OF), 'slack'] as (ExternalRef['system'] | 'slack')[]) {
+    const source = system
     const connector = registry[source]
     const cfg = resolved(source)
-    const refs = items.filter((i) => i.external!.system === system).map((i) => i.external!.id)
+    const byRef = new Map<string, typeof items>()
+    for (const item of items) {
+      const refs = system === 'slack'
+        ? item.sources.map(slackMessageRef).filter((s): s is string => Boolean(s))
+        : item.external?.system === system ? [item.external.id] : []
+      for (const ref of new Set(refs)) byRef.set(ref, [...(byRef.get(ref) ?? []), item])
+    }
+    const refs = [...byRef.keys()]
     if (!connector?.attachments || !connector.download || !cfg || refs.length === 0) continue
+    const attachmentContext = { config: cfg, log, readFile: (rel: string) => {
+      // Only the connector's source-owned metadata is available here.
+      if (rel !== SLACK_FILES) return undefined
+      const path = join(root, rel)
+      return existsSync(path) ? readFileSync(path, 'utf8') : undefined
+    } }
     let remote: RemoteAttachment[]
     try {
-      remote = await connector.attachments({ config: cfg, log }, refs)
+      remote = await connector.attachments(attachmentContext, refs)
     } catch (err) {
       result.errors.push(`${source} attachments: ${err instanceof Error ? err.message : err}`)
       continue
     }
     for (const att of remote) {
-      const item = byRef.get(att.ref)
-      if (!item) continue
-      const id = `${system}|${item.key}|${att.sourceId}`
-      if (have.has(id)) continue
-      const base: AttachmentRecord = {
-        ticket: item.key,
-        name: cleanName(att.name),
-        type: guessType(att.name, att.mime),
-        ...(att.size !== undefined ? { size: att.size } : {}),
-        source: system,
-        source_id: att.sourceId,
-        source_url: item.external!.url || att.url,
-        by: att.author ?? system,
-        at: att.created ?? new Date().toISOString(),
-      }
-      if (att.size !== undefined && att.size > max) {
-        records.push({ ...base, skipped: `larger than ${Math.round(max / 1024 / 1024)} MB` })
-        have.add(id)
-        changed = true
-        result.skipped++
-        continue
-      }
-      try {
-        const res = await connector.download({ config: cfg, log }, att)
-        if (!res.ok || !res.body) throw new Error(`download ${res.status}`)
-        const length = Number(res.headers.get('content-length'))
-        if (length > max) throw new TooLarge(max)
-        const got = await writeHashed(Readable.fromWeb(res.body as never), store.dir, max)
-        const type = guessType(att.name, att.mime ?? res.headers.get('content-type'))
-        await store.put(got.tmp, got.sha, type)
-        records.push({ ...base, sha256: got.sha, type, size: got.size })
-        result.imported++
-      } catch (err) {
-        if (err instanceof TooLarge) {
+      for (const item of byRef.get(att.ref) ?? []) {
+        const id = `${system}|${item.key}|${att.sourceId}`
+        if (have.has(id)) continue
+        const base: AttachmentRecord = {
+          ticket: item.key,
+          name: cleanName(att.name),
+          type: guessType(att.name, att.mime),
+          ...(att.size !== undefined ? { size: att.size } : {}),
+          source: system,
+          source_id: att.sourceId,
+          source_url: system === 'slack' ? att.ref : item.external!.url || att.url,
+          by: att.author ?? system,
+          at: att.created ?? new Date().toISOString(),
+        }
+        if (att.size !== undefined && att.size > max) {
           records.push({ ...base, skipped: `larger than ${Math.round(max / 1024 / 1024)} MB` })
+          have.add(id)
+          changed = true
           result.skipped++
-        } else {
-          result.errors.push(`${item.key} ${att.name}: ${err instanceof Error ? err.message : err}`)
           continue
         }
+        try {
+          const res = await connector.download(attachmentContext, att)
+          if (!res.ok || !res.body) throw new Error(`download ${res.status}`)
+          const length = Number(res.headers.get('content-length'))
+          if (length > max) throw new TooLarge(max)
+          const got = await writeHashed(Readable.fromWeb(res.body as never), store.dir, max)
+          const type = guessType(att.name, att.mime ?? res.headers.get('content-type'))
+          await store.put(got.tmp, got.sha, type)
+          records.push({ ...base, sha256: got.sha, type, size: got.size })
+          result.imported++
+        } catch (err) {
+          if (err instanceof TooLarge) {
+            records.push({ ...base, skipped: `larger than ${Math.round(max / 1024 / 1024)} MB` })
+            result.skipped++
+          } else {
+            result.errors.push(`${item.key} ${att.name}: ${err instanceof Error ? err.message : err}`)
+            continue
+          }
+        }
+        have.add(id)
+        changed = true
       }
-      have.add(id)
-      changed = true
     }
   }
   if (changed) writeAttachments(root, records)
   if (result.imported || result.skipped) log(`attachments: ${result.imported} imported${result.skipped ? `, ${result.skipped} too large (linked)` : ''}`)
   return result
+}
+
+/** Newly extracted tickets can use this sync's file index immediately. Retry on the next sync on failure. */
+export async function importSlackAttachments(root: string, config: LoreConfig): Promise<void> {
+  const raw = config.sources.slack
+  if (!raw || raw.disabled || !existsSync(join(root, SLACK_FILES))) return
+  try {
+    const { resolved, missing } = resolveEnvRefs(raw)
+    if (missing.length) throw new Error(`missing env vars: ${missing.join(', ')}`)
+    const result = await importAttachments(root, config, { slack }, blobStoreFromEnv(), (source) => source === 'slack' ? resolved : undefined, console.log)
+    for (const error of result.errors) console.error(`✗ attachments: ${error}`)
+  } catch (err) {
+    console.error(`✗ attachments: ${err instanceof Error ? err.message : err}`)
+  }
 }

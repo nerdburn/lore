@@ -341,6 +341,22 @@ and `sudo systemctl restart lore-www`. The Worker refuses a PUT whose bytes
 don't hash to the name, and the host verifies what it reads back, so the
 store can only ever hold what the records say.
 
+**Slack files** need `files:read` on the bot token (add the scope and reinstall
+the Slack app). File downloads use a different host from the Web API, so a
+proxy-only installation also needs a file integration using that workspace's
+token:
+
+```sh
+ssh exe.dev integrations add http-proxy --name slack-files --target https://files.slack.com --bearer xoxb-… --attach tag:lore
+```
+
+Set `sources.slack.files_base` in the client's `lore.json` to
+`https://slack-files.int.exe.xyz`. Keep `api_base` pointing to the Slack API
+proxy. A local installation with `sources.slack.token` downloads directly.
+Files are imported from exact message permalinks in open tickets' `sources`;
+file names and metadata are retained during sync, and newly extracted tickets
+pick them up in the same run. Missing file access is reported and retried.
+
 **Linear** (for clients who use it) needs two integrations, since uploads
 live on their own host:
 

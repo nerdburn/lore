@@ -135,7 +135,7 @@ export interface Attachment {
   name: string
   type: string
   size?: number
-  source: 'board' | 'jira' | 'github' | 'linear'
+  source: 'board' | 'jira' | 'github' | 'linear' | 'slack'
   source_id?: string
   source_url?: string
   by: string
@@ -155,7 +155,7 @@ export interface Comment {
   url?: string
 }
 
-export const SOURCE_NAME: Record<string, string> = { board: 'Board', jira: 'Jira', github: 'GitHub', linear: 'Linear' }
+export const SOURCE_NAME: Record<string, string> = { board: 'Board', jira: 'Jira', github: 'GitHub', linear: 'Linear', slack: 'Slack' }
 
 export interface OAuthRequest {
   client: string

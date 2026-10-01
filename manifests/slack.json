@@ -21,7 +21,8 @@
         "channels:read",
         "groups:history",
         "groups:read",
-        "users:read"
+        "users:read",
+        "files:read"
       ]
     }
   },

@@ -1,5 +1,6 @@
 import { reconcileProjects } from '../projects.js'
 import { reconcileDelivery } from '../delivery.js'
+import { importSlackAttachments } from '../attachments.js'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -24,7 +25,7 @@ import type { Pin } from '../types.js'
  * - Every new/changed item cites source permalinks
  * - Old unresolved requests → status "stale", never silently dropped
  * - Pins in facts.yaml are audited against fresh evidence → contradictions
- * - No network except the LLM (connectors never run here)
+ * - New tickets import files from Slack metadata already collected by sync.
  *
  * Two interchangeable backends:
  * - "sdk": the Claude API via @anthropic-ai/sdk — API-key billing, used
@@ -389,6 +390,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     }
   }
 
+  await importSlackAttachments(root, config)
   // The list half of status.md follows whatever the fold (or anything since) did to the tracker and artifacts.
   if (wantArtifacts.length > 0) writeStatus(root, config)
 

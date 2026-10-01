@@ -1,9 +1,11 @@
-import type { Connector, ConnectorContext, Cursor, Doc } from '../types.js'
+import { parse, stringify } from 'yaml'
+import type { Connector, ConnectorContext, Doc, RemoteAttachment } from '../types.js'
 
 /**
  * Slack connector.
  *
  * Requires a bot token with `channels:history`, `channels:read`, `users:read`,
+ * and `files:read` for file downloads,
  * invited to every whitelisted channel. Only channels listed in config are
  * synced — never "everything the bot can see" (see SPEC §10).
  *
@@ -55,8 +57,61 @@ const DEFAULT_OVERLAP_DAYS = 1
 const DEFAULT_THREAD_WINDOW_DAYS = 30
 const DAY_S = 86_400
 
+export const SLACK_FILES = 'context/source-files/slack.yaml'
+interface MessageFiles { channel: string; files: RemoteAttachment[] }
+
+/** Workspace URLs and generic permalinks identify the same message; query strings do not. */
+export function slackMessageRef(raw: string): string | undefined {
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'https:' || !(u.hostname === 'slack.com' || u.hostname.endsWith('.slack.com'))) return
+    const m = /^\/archives\/([A-Z0-9]+)\/p(\d{16,})\/?$/.exec(u.pathname)
+    if (m) return `https://slack.com/archives/${m[1]}/p${m[2]}`
+  } catch { /* not a URL */ }
+}
+
+function readFileIndex(text: string | undefined): Record<string, MessageFiles> {
+  const value = text ? parse(text) : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
 export const slack: Connector = {
   name: 'slack',
+
+  async attachments(ctx, refs) {
+    const index = readFileIndex(ctx.readFile?.(SLACK_FILES))
+    const allowed = new Set(((ctx.config.channels as string[]) ?? []).map((c) => c.replace(/^#/, '')))
+    return [...new Set(refs)].flatMap((ref) => {
+      const entry = index[ref]
+      return entry && allowed.has(entry.channel.replace(/^#/, '')) ? entry.files : []
+    })
+  },
+
+  async download(ctx, att) {
+    const token = ctx.config.token as string | undefined
+    const base = ctx.config.files_base as string | undefined
+    if (!token && !base) throw new Error('slack files: set files_base to a files.slack.com token-injecting proxy, or supply a token with files:read')
+    let fileUrl = att.url
+    if (!fileUrl) {
+      const api = slackClient(((ctx.config.api_base as string | undefined) ?? DEFAULT_API_BASE).replace(/\/$/, ''), token)
+      const result = await api('files.info', { file: att.sourceId })
+      const file = result.file as SlackFile | undefined
+      fileUrl = file?.url_private_download || file?.url_private || ''
+      if (!fileUrl) throw new Error('slack files: no downloadable file; check files:read and channel access')
+    }
+    let url = new URL(fileUrl)
+    if (url.protocol !== 'https:' || url.hostname !== 'files.slack.com' || url.username || url.password || url.port) {
+      throw new Error('slack files: refused a download outside files.slack.com')
+    }
+    if (base) url = new URL(`${base.replace(/\/$/, '')}${url.pathname}${url.search}`)
+    const res = await fetch(url, { headers: !base && token ? { Authorization: `Bearer ${token}` } : {} })
+    // A missing/expired token can produce a login page with HTTP 200.
+    if (res.ok && res.headers.get('content-type')?.includes('text/html') && att.mime !== 'text/html') {
+      await res.body?.cancel()
+      throw new Error('slack files: received a login page; check files:read and file proxy authentication')
+    }
+    return res
+  },
 
   async fetch(ctx: ConnectorContext) {
     const token = ctx.config.token as string | undefined
@@ -75,6 +130,7 @@ export const slack: Connector = {
     const docs: Doc[] = []
     const errors: string[] = []
     const nowS = Date.now() / 1000
+    const fileIndex = readFileIndex(ctx.readFile(SLACK_FILES))
 
     for (const name of wanted) {
       const channel = channels.get(name.replace(/^#/, ''))
@@ -84,7 +140,12 @@ export const slack: Connector = {
       }
       const prev = readCursor(cursor[channel.id])
       const meta = { team, channel: channel.id }
-      const mkDoc = (msg: SlackMessage, thread?: string) => toDoc(msg, name, channel.id, users, meta, thread)
+      const channelFiles: Record<string, MessageFiles> = {}
+      const mkDoc = (msg: SlackMessage, thread?: string) => {
+        const doc = toDoc(msg, name, channel.id, users, meta, thread)
+        channelFiles[doc.permalink!] = { channel: name, files: messageFiles(msg, doc.permalink!, doc.author) }
+        return doc
+      }
       /** Replies for one thread; a deleted parent means "stop tracking it", not a failed sync. */
       const replies = async (parentTs: string, after: string | undefined): Promise<string | undefined | null> => {
         try {
@@ -119,7 +180,7 @@ export const slack: Connector = {
           const messages = (res.messages as SlackMessage[]) ?? []
 
           for (const msg of messages) {
-            if (!msg.text || msg.subtype === 'channel_join') continue
+            if ((!msg.text && !msg.files?.length) || msg.subtype === 'channel_join') continue
             docs.push(mkDoc(msg))
             if (msg.ts > latestSeen) latestSeen = msg.ts
 
@@ -143,6 +204,10 @@ export const slack: Connector = {
         }
 
         cursor[channel.id] = { ts: latestSeen, threads }
+        for (const [ref, entry] of Object.entries(channelFiles)) {
+          if (entry.files.length) fileIndex[ref] = entry
+          else delete fileIndex[ref]
+        }
         ctx.log(`slack: ${name} → ${docs.length} docs so far`)
       } catch (err) {
         // This channel keeps its previous cursor and is retried next run;
@@ -152,7 +217,7 @@ export const slack: Connector = {
       }
     }
 
-    return { docs, nextCursor: cursor, ...(errors.length ? { errors } : {}) }
+    return { docs, nextCursor: cursor, files: { [SLACK_FILES]: stringify(fileIndex) }, ...(errors.length ? { errors } : {}) }
   },
 }
 
@@ -176,7 +241,7 @@ async function pullReplies(
       ...(pageCursor ? { cursor: pageCursor } : {}),
     })
     for (const reply of (res.messages as SlackMessage[]) ?? []) {
-      if (reply.ts === parentTs || !reply.text) continue
+      if (reply.ts === parentTs || (!reply.text && !reply.files?.length)) continue
       if (after && reply.ts <= after) continue
       emit(reply)
       if (!newest || reply.ts > newest) newest = reply.ts
@@ -204,6 +269,25 @@ interface SlackMessage {
   subtype?: string
   reply_count?: number
   edited?: { user?: string; ts: string }
+  files?: SlackFile[]
+}
+
+interface SlackFile {
+  id: string
+  name?: string
+  title?: string
+  mimetype?: string
+  size?: number
+  url_private?: string
+  url_private_download?: string
+}
+
+function messageFiles(msg: SlackMessage, ref: string, author: string): RemoteAttachment[] {
+  return (msg.files ?? []).map((f) => {
+    const url = f.url_private_download || f.url_private || ''
+    return { ref, sourceId: f.id, name: f.name || f.title || f.id, mime: f.mimetype, size: f.size, url,
+      author, created: new Date(Number(msg.ts) * 1000).toISOString() }
+  })
 }
 
 type SlackApi = (method: string, params: Record<string, string>) => Promise<Record<string, unknown>>
@@ -280,6 +364,6 @@ function toDoc(
     permalink: `https://slack.com/archives/${channelId}/p${msg.ts.replace('.', '')}`,
     thread,
     meta,
-    text: msg.text ?? '',
+    text: [msg.text ?? '', ...(msg.files ?? []).map((f) => `Attachment: ${JSON.stringify(f.name || f.title || f.id)} (${f.mimetype || 'file'}; Slack file ${f.id})`)].filter(Boolean).join('\n\n'),
   }
 }

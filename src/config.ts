@@ -46,6 +46,8 @@ export const sourceSchemas = {
       token: envRef.optional(),
       /** Slack Web API base (default https://slack.com/api); a proxy URL when tokens live off-host. */
       api_base: z.string().url().optional(),
+      /** Proxy targeting https://files.slack.com, with the workspace token injected. */
+      files_base: z.string().url().optional(),
     /** Days of history re-read on every sync (default 7). */
     overlap_days: z.number().min(0).optional(),
       /** Days a thread stays tracked for late replies (default 30). */

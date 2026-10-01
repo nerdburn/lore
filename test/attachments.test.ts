@@ -299,3 +299,41 @@ test('github: media in an issue\'s rendered HTML — signed private-user-images,
     { url: 'https://private-user-images.githubusercontent.com/1/vid-9.mov?jwt=zz', sourceId: 'https://private-user-images.githubusercontent.com/1/vid-9.mov', name: 'vid-9.mov' },
   ])
 })
+
+test('Slack files: cited messages attach to native tickets, survive resync, retry failures, and respect removals', async () => {
+  const { slack, SLACK_FILES, slackMessageRef } = await import('../src/connectors/slack.js')
+  const { writeWorkItems } = await import('../src/work.js')
+  const { stringify } = await import('yaml')
+  const ref = 'https://slack.com/archives/C0ACME/p1790859600000100'
+  const workspaceRef = ref.replace('slack.com', 'acme.slack.com') + '?thread_ts=1790859600.000100&cid=C0ACME'
+  assert.equal(slackMessageRef(workspaceRef), ref)
+  assert.equal(slackMessageRef('https://evil.example/archives/C0ACME/p1790859600000100'), undefined)
+  const bytes = Buffer.from('banner screenshot')
+  const cfg = { ...ACME, sources: { slack: { channels: ['#acme'], files_base: 'https://slack-files.int.example', api_base: 'https://slack.int.example/api' } } }
+  const metadata = { [ref]: { channel: '#acme', files: [{ ref, sourceId: 'F1', name: 'banner.png', mime: 'image/png', size: bytes.length, url: 'https://files.slack.com/files-pri/T-F1/banner.png', author: 'Ella' }] } }
+  const root = makeContextRepo({ [SLACK_FILES]: stringify(metadata) }, cfg)
+  const item = (key: string, sources: string[], closed = false) => ({ key, title: 'Keep community banner', status: closed ? 'done' as const : 'todo' as const, state: closed ? 'closed' as const : 'open' as const, sources, labels: [], created: '2026-10-01', updated: '2026-10-01', history: [] })
+  writeWorkItems(root, 'ACM', [item('ACM-1', [workspaceRef, ref]), item('ACM-2', [ref]), item('ACM-3', [ref], true), item('ACM-4', ['https://slack.com/archives/C0ACME/p1790859600000200'])])
+  const store = createBlobStore({ dir: mkdtempSync(join(tmpdir(), 'lore-slack-blobs-')) })
+  let downloads = 0
+  let fail = true
+  globalThis.fetch = (async () => { downloads++; return fail ? new Response('retry', { status: 503 }) : new Response(bytes, { headers: { 'content-type': 'image/png' } }) }) as typeof fetch
+  const run = () => importAttachments(root, cfg as never, { slack }, store, (s) => s === 'slack' ? cfg.sources.slack : undefined)
+  assert.equal((await run()).errors.length, 2)
+  assert.equal(readAttachments(root).length, 0)
+  fail = false
+  assert.deepEqual(await run(), { imported: 2, skipped: 0, errors: [] })
+  const records = readAttachments(root)
+  assert.deepEqual(records.map((r) => r.ticket), ['ACM-1', 'ACM-2'])
+  assert.equal(records[0].sha256, sha(bytes))
+  assert.equal(records[0].source_url, ref)
+  assert.equal(records[0].source, 'slack')
+  assert.equal(records[0].by, 'Ella')
+  assert.deepEqual(readFileSync((await store.path(sha(bytes)))!), bytes)
+  const downloaded = downloads
+  assert.deepEqual(await run(), { imported: 0, skipped: 0, errors: [] })
+  assert.equal(downloads, downloaded)
+  await captureConsole(() => removeAttachment(root, 'ACM-1', { source_id: 'F1' }, { context: root, by: 'shawn' }))
+  assert.deepEqual(await run(), { imported: 0, skipped: 0, errors: [] })
+  assert.equal(readAttachments(root)[0].removed?.by, 'shawn')
+})

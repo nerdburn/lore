@@ -15,6 +15,7 @@ interface Msg {
   subtype?: string
   reply_count?: number
   edited?: { ts: string }
+  files?: { id: string; name?: string; mimetype?: string; size?: number; url_private?: string }[]
 }
 
 function fakeSlack() {
@@ -279,4 +280,62 @@ test('slack: a channel that fails mid-fetch is reported and keeps its cursor; th
   assert.deepEqual(errors, ['#acme-dev: slack conversations.history: internal_error'])
   assert.equal((nextCursor.C0ACME as { ts: string }).ts, daysAgo(1))
   assert.deepEqual(nextCursor.C0DEV, { ts: daysAgo(3), threads: {} }, 'the failed channel is retried from its old cursor next run')
+})
+
+test('slack: retains file-only messages and replies, and keeps file metadata across incremental syncs', async () => {
+  const s = fakeSlack()
+  const parent = daysAgo(5)
+  const reply = daysAgo(4)
+  const file = { id: 'F1', name: 'banner.png', mimetype: 'image/png', size: 12, url_private: 'https://files.slack.com/files-pri/T-F1/banner.png' }
+  s.history.C0ACME = [{ ts: parent, user: 'U0PRIYA', files: [file], reply_count: 1 }]
+  s.replies[parent] = [{ ts: reply, files: [{ ...file, id: 'F2' }], text: '' }]
+  const first = await slack.fetch(ctx())
+  assert.equal(first.docs.length, 2)
+  assert.match(first.docs[0].text, /Attachment: "banner.png"/)
+  assert.equal(first.docs[1].thread, parent)
+  assert.equal((first.nextCursor.C0ACME as { threads: Record<string, string> }).threads[parent], reply)
+  const refs = first.docs.map((d) => d.permalink!)
+  const attachmentCtx = { config: ctx().config, log: () => {}, readFile: (p: string) => first.files?.[p] }
+  const files = await slack.attachments!(attachmentCtx, refs)
+  assert.deepEqual(files.map((f) => [f.sourceId, f.ref]), [['F1', refs[0]], ['F2', refs[1]]])
+  assert.equal(files[0].author, 'Priya')
+  s.history.C0ACME = [{ ts: daysAgo(0), text: 'new text' }]
+  const second = await slack.fetch(ctx({ cursor: first.nextCursor, readFile: attachmentCtx.readFile }))
+  const later = await slack.attachments!({ ...attachmentCtx, readFile: (p) => second.files?.[p] }, refs)
+  assert.deepEqual(later, files, 'old files remain available when a ticket is created after the message left the overlap')
+  assert.deepEqual(await slack.attachments!({ ...attachmentCtx, config: { channels: ['#different'] } }, refs), [])
+})
+
+test('slack: a failed channel cannot publish partial file metadata', async () => {
+  const s = fakeSlack()
+  const parent = daysAgo(1)
+  s.history.C0ACME = [{ ts: parent, files: [{ id: 'F1', name: 'image.png', url_private: 'https://files.slack.com/x' }], reply_count: 1 }]
+  const inner = globalThis.fetch
+  globalThis.fetch = (async (input, init) => String(input).includes('conversations.replies')
+    ? new Response(JSON.stringify({ ok: false, error: 'internal_error' })) : inner(input, init)) as typeof fetch
+  const result = await slack.fetch(ctx())
+  assert.equal(result.docs.length, 0)
+  assert.equal(result.errors?.length, 1)
+  assert.deepEqual(await slack.attachments!({ config: ctx().config, log: () => {}, readFile: (p) => result.files?.[p] }, [`https://slack.com/archives/C0ACME/p${parent.replace('.', '')}`]), [])
+})
+
+test('slack: downloads use the file token or file proxy and refuse unrelated hosts and login pages', async () => {
+  const calls: { url: string; auth: string | null }[] = []
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ url: String(input), auth: new Headers(init?.headers).get('authorization') })
+    return new Response('image bytes', { headers: { 'content-type': 'image/png' } })
+  }) as typeof fetch
+  const att = { ref: 'r', sourceId: 'F1', name: 'image.png', mime: 'image/png', url: 'https://files.slack.com/files-pri/T-F1/image.png' }
+  const ac = { config: { token: 'test-token' }, log: () => {} }
+  await slack.download!(ac, att)
+  await slack.download!({ ...ac, config: { token: 'test-token', files_base: 'https://slack-files.int.example' } }, att)
+  assert.deepEqual(calls, [
+    { url: att.url, auth: 'Bearer test-token' },
+    { url: 'https://slack-files.int.example/files-pri/T-F1/image.png', auth: null },
+  ])
+  await assert.rejects(slack.download!(ac, { ...att, url: 'https://evil.example/image.png' }), /outside files.slack.com/)
+  await assert.rejects(slack.download!({ ...ac, config: { api_base: 'https://slack.int.example/api' } }, att), /files_base/)
+  assert.equal(calls.length, 2)
+  globalThis.fetch = (async () => new Response('<html>Login</html>', { headers: { 'content-type': 'text/html' } })) as typeof fetch
+  await assert.rejects(slack.download!(ac, att), /login page/)
 })

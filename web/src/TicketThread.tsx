@@ -197,7 +197,7 @@ export function TicketThread({ context, itemKey, canEdit, onError, onChanged }: 
               <Modal.Body>
                 <p className="text-sm">
                   <span className="font-medium break-all">{removing?.name}</span> will be taken off {itemKey}
-                  {removing && removing.source !== 'board' ? `. It stays on the ${SOURCE_NAME[removing.source]} issue, and lore won't import it again.` : '.'}
+                  {removing && removing.source !== 'board' ? `. It stays on the ${SOURCE_NAME[removing.source]} ${removing.source === 'slack' ? 'message' : 'issue'}, and lore won't import it again.` : '.'}
                 </p>
               </Modal.Body>
               <Modal.Footer>

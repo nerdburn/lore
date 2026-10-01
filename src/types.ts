@@ -70,7 +70,7 @@ export interface Connector {
   /**
    * Files attached to these external issues (ExternalRef ids, e.g.
    * "jira:INPT-12"), for sync to import into the asset store. Optional:
-   * sources without issues have none.
+   * Slack uses canonical message permalinks instead of issue ids.
    */
   attachments?(ctx: AttachmentContext, refs: string[]): Promise<RemoteAttachment[]>
   /** Fetch one attachment's bytes (auth as the connector does it). */
@@ -80,11 +80,13 @@ export interface Connector {
 export interface AttachmentContext {
   config: Record<string, unknown>
   log: (msg: string) => void
+  /** Read source-owned metadata retained by sync. */
+  readFile?: (relPath: string) => string | undefined
 }
 
-/** A file on an external issue, as the source describes it. */
+/** A file on an external issue or cited message, as the source describes it. */
 export interface RemoteAttachment {
-  /** The issue: an ExternalRef id ("jira:INPT-12", "github:owner/repo#4", "linear:PRP-3"). */
+  /** An ExternalRef id ("jira:INPT-12", etc.) or canonical Slack message permalink. */
   ref: string
   /** Stable id within the source (Jira attachment id, the upload URL…) — how a re-scan knows it has it. */
   sourceId: string
