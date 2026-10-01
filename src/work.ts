@@ -203,6 +203,82 @@ export function nextKey(items: LoreWorkItem[], prefix: string): string {
   return `${prefix}-${max + 1}`
 }
 
+export interface WorkMergeResult {
+  items: LoreWorkItem[]
+  /** Our new items whose key the other side had already taken: old key → new key. */
+  rekeyed: Record<string, string>
+}
+
+/**
+ * Three-way merge of one tracker table, item by item, so neither side's edits
+ * are dropped wholesale. When both sides created the same key, `theirs` keeps
+ * it and ours moves to the next free key — `theirs` is what people have
+ * already seen and cited.
+ */
+export function mergeWorkItems(base: LoreWorkItem[], ours: LoreWorkItem[], theirs: LoreWorkItem[], prefix: string): WorkMergeResult {
+  const byKey = (items: LoreWorkItem[]) => new Map(items.map((i) => [i.key, i]))
+  const B = byKey(base)
+  const O = byKey(ours)
+  const T = byKey(theirs)
+  const merged = new Map<string, LoreWorkItem>()
+  const collided: LoreWorkItem[] = []
+
+  for (const t of theirs) {
+    const o = O.get(t.key)
+    const b = B.get(t.key)
+    if (o && b) merged.set(t.key, mergeItem(b, o, t))
+    else {
+      merged.set(t.key, t)
+      if (o && !same(o, t)) collided.push(o)
+    }
+  }
+  for (const o of ours) {
+    if (T.has(o.key)) continue
+    const b = B.get(o.key)
+    if (b && same(o, b)) continue
+    merged.set(o.key, o)
+  }
+
+  const rekeyed: Record<string, string> = {}
+  for (const o of collided) {
+    const key = nextKey([...merged.values()], prefix)
+    rekeyed[o.key] = key
+    merged.set(key, { ...o, key })
+  }
+
+  const baseOrder = (order: LoreWorkItem[]) => order.map((i) => i.key).filter((k) => B.has(k) && T.has(k)).join()
+  const theirsReranked = baseOrder(theirs) !== baseOrder(base)
+  const keys = [...(theirsReranked ? theirs : ours), ...theirs, ...ours].map((i) => i.key).concat(Object.values(rekeyed))
+  const items = [...new Set(keys)].flatMap((k) => merged.get(k) ?? [])
+  return { items, rekeyed }
+}
+
+function mergeItem(b: LoreWorkItem, o: LoreWorkItem, t: LoreWorkItem): LoreWorkItem {
+  if (same(o, b)) return t
+  if (same(t, b)) return o
+  const [bb, oo, tt] = [b, o, t] as unknown as Record<string, unknown>[]
+  const out: Record<string, unknown> = {}
+  for (const f of new Set([...Object.keys(tt), ...Object.keys(oo)])) {
+    const v = same(tt[f], bb[f]) ? oo[f] : tt[f]
+    if (v !== undefined) out[f] = v
+  }
+  const history = new Map<string, WorkHistoryEntry>()
+  for (const h of [...t.history, ...o.history]) history.set(JSON.stringify([h.at, h.by, h.via, h.change]), h)
+  out.history = [...history.values()].sort((x, y) => x.at.localeCompare(y.at))
+  out.updated = [o.updated, t.updated].sort().at(-1)
+  return out as unknown as LoreWorkItem
+}
+
+function same(a: unknown, b: unknown): boolean {
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
+}
+
+function canonical(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonical)
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical((v as Record<string, unknown>)[k])]))
+  return v
+}
+
 export function findItem(items: LoreWorkItem[], key: string): LoreWorkItem | undefined {
   const k = key.trim().toUpperCase()
   return items.find((i) => i.key.toUpperCase() === k)

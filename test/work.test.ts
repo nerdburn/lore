@@ -16,6 +16,7 @@ import {
   applyFoldCreations,
   deriveWorkPrefix,
   mergeTrackerLabels,
+  mergeWorkItems,
   mirrorExternal,
   readExternalIssues,
   readWorkItems,
@@ -582,4 +583,49 @@ test('work mirror: project labels added in lore survive every sync; the tracker 
   assert.deepEqual(mergeTrackerLabels(legacy, ['bug']), ['bug'], 'sync-only item: every label was the tracker\'s')
   const touched = { labels: ['bug', 'mine'], history: [{ at: AT, by: 'me', via: 'cli' as const, change: { labels: [[], ['bug', 'mine']] }, reason: 'x' }], external: undefined }
   assert.deepEqual(mergeTrackerLabels(touched, ['bug']), ['bug', 'mine'], 'a person labeled it: keep theirs')
+})
+
+const ticket = (key: string, title: string, extra: Partial<LoreWorkItem> = {}): LoreWorkItem => ({
+  key,
+  title,
+  status: 'todo',
+  state: 'open',
+  labels: [],
+  sources: [],
+  created: '2026-10-01',
+  updated: '2026-10-01',
+  history: [{ at: AT, by: 'me', via: 'mcp', change: { created: true }, reason: 'x' }],
+  ...extra,
+})
+
+test('work merge: a key both sides created stays upstream\'s; ours moves to the next free key', () => {
+  const base = [ticket('MOM-1', 'Existing')]
+  const ours = [...base, ticket('MOM-2', 'Fold: 720p rendition', { history: [{ at: AT, by: 'lore-extract', via: 'fold', change: { created: true }, reason: 'fold' }] })]
+  const theirs = [...base, ticket('MOM-2', 'Composer behind keyboard'), ticket('MOM-3', 'Admin: set postpartum level')]
+  const { items, rekeyed } = mergeWorkItems(base, ours, theirs, 'MOM')
+  assert.deepEqual(rekeyed, { 'MOM-2': 'MOM-4' })
+  assert.deepEqual(items.map((i) => `${i.key} ${i.title}`), ['MOM-1 Existing', 'MOM-2 Composer behind keyboard', 'MOM-3 Admin: set postpartum level', 'MOM-4 Fold: 720p rendition'])
+})
+
+test('work merge: an item both sides edited merges field by field, upstream winning a shared field, histories unioned', () => {
+  const b = ticket('MOM-1', 'Existing')
+  const moved = { at: '2026-10-01T11:00:00.000Z', by: 'cory', via: 'web' as const, change: { status: ['todo', 'done'] }, reason: 'moved' }
+  const ranked = { at: '2026-10-01T10:30:00.000Z', by: 'lore-extract', via: 'fold' as const, change: { priority: [null, 'P1'], title: ['Existing', 'Fold title'] }, reason: 'fold' }
+  const o = { ...b, priority: 'P1' as const, title: 'Fold title', history: [...b.history, ranked] }
+  const t = { ...b, status: 'done' as const, state: 'closed' as const, title: 'Person title', history: [...b.history, moved] }
+  const [m] = mergeWorkItems([b], [o], [t], 'MOM').items
+  assert.equal(m.status, 'done', 'upstream move kept')
+  assert.equal(m.priority, 'P1', 'our priority kept')
+  assert.equal(m.title, 'Person title', 'both changed the title: upstream wins')
+  assert.deepEqual(m.history.map((h) => h.by), ['me', 'lore-extract', 'cory'])
+})
+
+test('work merge: one-sided edits pass through, and upstream re-ranking wins over our order', () => {
+  const base = [ticket('MOM-1', 'A'), ticket('MOM-2', 'B')]
+  const ours = [base[0], { ...base[1], priority: 'P2' as const }, ticket('MOM-3', 'New')]
+  const theirs = [base[1], base[0]]
+  const { items, rekeyed } = mergeWorkItems(base, ours, theirs, 'MOM')
+  assert.deepEqual(rekeyed, {})
+  assert.deepEqual(items.map((i) => i.key), ['MOM-2', 'MOM-1', 'MOM-3'])
+  assert.equal(items[0].priority, 'P2')
 })

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { before, test } from 'node:test'
-import { runAll } from '../src/commands/run-all.js'
+import { pushWithRebase, runAll } from '../src/commands/run-all.js'
 import { buildSources } from '../src/commands/setup.js'
 import { FOLD_UNIT_PRELUDE, hostCommands, refresh, sshTargetFromRemote, START_CMD, STATE_CMD, UNIT_PRELUDE, unitOutcome, WAIT_CMD } from '../src/commands/refresh.js'
 import { configSchema } from '../src/config.js'
@@ -15,6 +15,8 @@ import type { Connector, Doc } from '../src/types.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
 import { acquireLock, lockHolder, tryLock } from '../src/lock.js'
 import { loadState, updateState } from '../src/state.js'
+import { appendAudit, readAudit } from '../src/audit.js'
+import { applyFoldCreations, readWorkItems, writeWorkItems } from '../src/work.js'
 import { rmSync } from 'node:fs'
 
 const home = mkdtempSync(join(tmpdir(), 'lore-home-'))
@@ -273,6 +275,46 @@ test('run-all: a commit pushed to the bare repo mid-run is absorbed — sync com
   assert.equal(g(check, 'log', '--format=%s', '-3').split('\n').length, 3, 'pin commit preserved underneath')
   assert.match(readFileSync(join(check, 'context/facts.yaml'), 'utf8'), /pinned mid-run/, 'the laptop pin survived')
   assert.ok(existsSync(join(check, 'context/streams/fake/#c/2026-09-01.md')), 'the sync output survived')
+})
+
+test('run-all: tickets people create while a fold runs survive its push — the fold\'s colliding ticket takes the next key', async () => {
+  const bare = seedBare('lore-tracker', { project: 'tracker', sources: {} })
+  const host = mkdtempSync(join(tmpdir(), 'lore-host-'))
+  const laptop = mkdtempSync(join(tmpdir(), 'lore-laptop-'))
+  for (const dir of [host, laptop]) {
+    execFileSync('git', ['clone', '--quiet', bare, dir])
+    g(dir, 'config', 'user.email', 't@t')
+    g(dir, 'config', 'user.name', 't')
+  }
+  const at = '2026-10-01T21:17:59.891Z'
+  const items = readWorkItems(host, 'MOM')
+  applyFoldCreations(items, 'MOM', [{ title: 'Request a 720p static rendition', reason: 'PR #436', sources: ['https://github.com/o/r/pull/436'], confidence: 'high', evidence_date: '2026-09-02' }], at)
+  writeWorkItems(host, 'MOM', items)
+  appendAudit(host, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: items[0].key })
+  g(host, 'add', '-A')
+  g(host, 'commit', '--quiet', '-m', 'chore(lore): sync lore-tracker')
+
+  const human = readWorkItems(laptop, 'MOM')
+  for (const title of ['Comment composer hidden behind keyboard', 'Admin: set a postpartum level and phase']) {
+    const key = `MOM-${human.length + 1}`
+    human.push({ key, title, status: 'todo', state: 'open', labels: [], sources: [], created: '2026-10-01', updated: '2026-10-01', history: [{ at, by: 'cory', via: 'mcp', change: { created: true }, reason: 'asked' }] })
+    appendAudit(laptop, { at, action: 'work', actor: 'cory', via: 'mcp', id: key })
+  }
+  writeWorkItems(laptop, 'MOM', human)
+  g(laptop, 'add', '-A')
+  g(laptop, 'commit', '--quiet', '-m', 'lore: work add')
+  g(laptop, 'push', '--quiet', 'origin', 'main')
+
+  const { err } = await captureConsole(() => pushWithRebase(host))
+  assert.match(err, /MOM-1 was created upstream while this run held it — ours is now MOM-3/)
+  const check = mkdtempSync(join(tmpdir(), 'lore-check-tracker-'))
+  execFileSync('git', ['clone', '--quiet', bare, check])
+  assert.deepEqual(
+    readWorkItems(check, 'MOM').map((i) => `${i.key} ${i.title}`),
+    ['MOM-1 Comment composer hidden behind keyboard', 'MOM-2 Admin: set a postpartum level and phase', 'MOM-3 Request a 720p static rendition'],
+  )
+  assert.deepEqual(readAudit(check).map((e) => `${e.actor} ${e.id}`), ['cory MOM-1', 'cory MOM-2', 'lore-extract MOM-3'])
+  assert.equal(g(check, 'log', '-1', '--format=%s'), 'chore(lore): sync lore-tracker')
 })
 
 test('run-all: no-change runs commit a state heartbeat only', async () => {
