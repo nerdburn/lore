@@ -52,6 +52,8 @@ export const sourceSchemas = {
     overlap_days: z.number().min(0).optional(),
       /** Days a thread stays tracked for late replies (default 30). */
       thread_window_days: z.number().min(0).optional(),
+      /** Days back that team 👍/✅ reactions are picked up, as tickets opened/closed (default 7). */
+      reaction_window_days: z.number().min(0).optional(),
     })
     .refine((s) => s.token || s.api_base, { message: 'slack needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
   github: baseSource

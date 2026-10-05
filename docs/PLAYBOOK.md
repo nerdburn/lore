@@ -240,6 +240,17 @@ Sync stops, writes are refused, reads are labelled ARCHIVED. The repo stays.
 | `lore check` (in a context repo) | config + per-source health |
 | `lore run-all` (on the host) | what the timer runs |
 
+**Slack reactions drive tickets.** In a synced channel, a team member's 👍
+on a client's message opens a `todo` ticket for it; a ✅ marks it done
+(opening it first if nobody 👍'd). It applies on the next sync, covers
+reactions on messages from the last 7 days (`reaction_window_days`), is
+recorded as `via: slack` by whoever reacted, and reuses a ticket already
+tracking that message or its request. Each reaction acts once, so a ticket
+reopened after a ✅ stays open. Only full workspace members count as team;
+guests and Slack Connect users are the client. Reactions present when a
+context first ran this were recorded, not acted on. Use 👍 for "ticket
+this", not "thanks".
+
 Trust order: pins → work tables (GitHub is authoritative for delivery state) →
 derived (LLM, cited) → reports → raw streams. Meetings are evidence, not decisions.
 

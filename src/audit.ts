@@ -14,7 +14,7 @@ export interface AuditEntry {
   action: 'remember' | 'sow' | 'doc' | 'work' | 'source' | 'board' | 'comment' | 'attach'
   /** OS user (or --by on the CLI) — never a value supplied over MCP; `lore-extract` for a fold's inference. */
   actor: string
-  via: 'cli' | 'mcp' | 'web' | 'fold'
+  via: 'cli' | 'mcp' | 'web' | 'slack' | 'fold'
   /** The id of the record written (pin id, SOW slug, document id, work item key, or source name). */
   id: string
   /** Supporting rationale or source link, when given. */

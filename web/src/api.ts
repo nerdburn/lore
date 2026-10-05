@@ -21,7 +21,7 @@ export const PRIORITIES: Priority[] = ['P1', 'P2', 'P3']
 export interface HistoryEntry {
   at: string
   by: string
-  via: 'cli' | 'mcp' | 'web' | 'sync' | 'fold'
+  via: 'cli' | 'mcp' | 'web' | 'slack' | 'sync' | 'fold'
   change: Record<string, unknown>
   reason: string
   sources?: string[]

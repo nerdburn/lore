@@ -32,8 +32,8 @@ export type WorkStatus = 'todo' | 'in_progress' | 'blocked' | 'review' | 'done' 
 export const WORK_STATUSES: WorkStatus[] = ['todo', 'in_progress', 'blocked', 'review', 'done', 'archived']
 export type WorkPriority = 'P1' | 'P2' | 'P3'
 export const WORK_PRIORITIES: WorkPriority[] = ['P1', 'P2', 'P3']
-/** The surface a change came through. `web` = the board (`lore www`); `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
-export type WorkVia = 'cli' | 'mcp' | 'web' | 'sync' | 'fold'
+/** The surface a change came through. `web` = the board (`lore www`); `slack` = a team member's 👍/✅ reaction; `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
+export type WorkVia = 'cli' | 'mcp' | 'web' | 'slack' | 'sync' | 'fold'
 export type WorkState = 'open' | 'closed'
 
 export interface ExternalRef {
@@ -122,7 +122,7 @@ export interface WorkItemSummary extends Omit<LoreWorkItem, 'history'> {
   drift?: boolean
 }
 
-export const HUMAN_VIAS: WorkVia[] = ['cli', 'mcp', 'web']
+export const HUMAN_VIAS: WorkVia[] = ['cli', 'mcp', 'web', 'slack']
 
 // ---- prefix / file ----
 

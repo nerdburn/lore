@@ -12,6 +12,10 @@ import { reconcileDelivery } from '../delivery.js'
 import { writeStatus } from '../status.js'
 import { importAttachments } from '../attachments.js'
 import { blobStoreFromEnv, type BlobStore } from '../blobs.js'
+import { applySlackReactions, plainSlackText, TITLE_SYSTEM, type TitleWriter } from '../slack-reactions.js'
+import { shortText } from './extract.js'
+
+const llmTitle: TitleWriter = async (signal) => (await shortText(TITLE_SYSTEM, plainSlackText(signal.text).slice(0, 4000)))?.split('\n')[0].replace(/^["']|["'.]$/g, '').slice(0, 120)
 
 /** Connector-supplied paths must stay inside context/. */
 function safeRel(rel: string): string {
@@ -47,7 +51,7 @@ export interface SyncSummary {
  * instead: see run-all, where a partial sync is `degraded`, not `failed`.
  * Only `"disabled": true` skips a source quietly.
  */
-export async function sync(root: string, registry: Record<string, Connector> = connectors, opts: { store?: BlobStore } = {}): Promise<SyncSummary> {
+export async function sync(root: string, registry: Record<string, Connector> = connectors, opts: { store?: BlobStore; title?: TitleWriter } = {}): Promise<SyncSummary> {
   const config = loadConfig(root)
   const summary: SyncSummary = { ok: true, sources: {} }
   if (config.lifecycle === 'archived') {
@@ -130,6 +134,17 @@ export async function sync(root: string, registry: Record<string, Connector> = c
   try {
     const m = mirrorExternal(root, config)
     if (m.created || m.updated) console.log(`work: ${m.created} mirrored, ${m.updated} updated → ${m.file}`)
+    // 👍/✅ from the team on client messages → tickets opened / closed.
+    if (config.sources.slack && !config.sources.slack.disabled) {
+      try {
+        const r = await applySlackReactions(root, config, { title: opts.title ?? llmTitle })
+        for (const line of r.created) console.log(`work: new ${line}`)
+        for (const line of r.done) console.log(`work: done ${line}`)
+        if ((r.created.length || r.done.length) && existsSync(join(root, 'context/derived'))) writeStatus(root, config)
+      } catch (err) {
+        console.error(`✗ slack reactions: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     if (summary.sources.github?.status === 'ok') await reconcileDelivery(root, config, { log: console.log, freshSync: true })
     if (config.sources.github_projects && !config.sources.github_projects.disabled) {
       try {

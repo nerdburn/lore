@@ -597,6 +597,13 @@ export function parseFoldOutput(text: string): FoldResult {
   return obj as unknown as FoldResult
 }
 
+/** One short completion on whichever backend the fold uses — undefined when no LLM is configured. */
+export async function shortText(system: string, user: string): Promise<string | undefined> {
+  if (!process.env.LORE_LLM && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) return undefined
+  const model = MODEL_INCREMENTAL
+  return pickBackend() === 'sdk' ? sdkText(model, system, user) : cliCall(model, system, user)
+}
+
 function cliCall(model: string, system: string, user: string): string {
   // Prompt over stdin: batches are far larger than argv allows.
   const out = execFileSync('claude', ['-p', '--output-format', 'json', '--model', cliModelAlias(model)], {
