@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { brotliCompressSync, gzipSync } from 'node:zlib'
 import { after, before, test } from 'node:test'
 import { parse } from 'yaml'
 import { assigneeResolver, boardRole, principalMatches } from '../src/board/access.js'
@@ -308,6 +309,33 @@ test('board: the SPA is served under /board with a fallback to index.html', asyn
   assert.match(asset.headers.get('cache-control')!, /immutable/)
   const escape = await fetch(`${base}/board/..%2f..%2frepos`)
   assert.match(await escape.text(), /id="root"/)
+})
+
+test('board: assets go out precompressed when the browser accepts it', async () => {
+  const js = 'console.log("compressed")'.repeat(50)
+  writeFileSync(join(webDir, 'assets', 'big-abc.js'), js)
+  writeFileSync(join(webDir, 'assets', 'big-abc.js.br'), brotliCompressSync(js))
+  writeFileSync(join(webDir, 'assets', 'big-abc.js.gz'), gzipSync(js))
+  const url = `${base}/board/assets/big-abc.js`
+
+  const br = await fetch(url, { headers: { 'accept-encoding': 'gzip, deflate, br' } })
+  assert.equal(br.headers.get('content-encoding'), 'br')
+  assert.equal(br.headers.get('vary'), 'accept-encoding')
+  assert.match(br.headers.get('content-type')!, /javascript/)
+  assert.equal(await br.text(), js)
+
+  const gz = await fetch(url, { headers: { 'accept-encoding': 'gzip, br;q=0' } })
+  assert.equal(gz.headers.get('content-encoding'), 'gzip')
+  assert.equal(await gz.text(), js)
+
+  const plain = await fetch(url, { headers: { 'accept-encoding': 'identity' } })
+  assert.equal(plain.headers.get('content-encoding'), null)
+  assert.equal(plain.headers.get('vary'), 'accept-encoding')
+  assert.equal(await plain.text(), js)
+
+  const uncompressed = await fetch(`${base}/board/assets/app-abc.js`, { headers: { 'accept-encoding': 'br' } })
+  assert.equal(uncompressed.headers.get('content-encoding'), null, 'no .br on disk: the raw file')
+  assert.equal(await uncompressed.text(), 'console.log(1)')
 })
 
 test('board: with the board on, the host pages need an admin', async () => {

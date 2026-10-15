@@ -108,7 +108,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
   async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
     const path = url.pathname
     if (path === BOARD_PATH || path.startsWith(`${BOARD_PATH}/`)) {
-      serveStatic(res, webDir, path.slice(BOARD_PATH.length))
+      serveStatic(res, webDir, path.slice(BOARD_PATH.length), req.headers['accept-encoding'] ?? '')
       return true
     }
     if (path !== BOARD_API && !path.startsWith(`${BOARD_API}/`)) return false
@@ -639,7 +639,7 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
 }
 
-function serveStatic(res: ServerResponse, root: string, rel: string): void {
+function serveStatic(res: ServerResponse, root: string, rel: string, acceptEncoding: string): void {
   const index = join(root, 'index.html')
   if (!existsSync(index)) {
     res.writeHead(503, { 'content-type': 'text/plain' })
@@ -656,11 +656,29 @@ function serveStatic(res: ServerResponse, root: string, rel: string): void {
   let file = join(root, safe)
   if (!file.startsWith(root + sep) || !existsSync(file) || !statSync(file).isFile()) file = index
   const isIndex = file === index
+  const variants = ENCODINGS.filter((e) => existsSync(file + e.ext))
+  const encoding = variants.find((e) => accepts(acceptEncoding, e.name))
   res.writeHead(200, {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     // Vite fingerprints everything under assets/; the shell must always be fresh.
     'cache-control': isIndex ? 'no-cache' : file.includes(`${sep}assets${sep}`) ? 'public, max-age=31536000, immutable' : 'public, max-age=3600',
+    ...(variants.length ? { vary: 'accept-encoding' } : {}),
+    ...(encoding ? { 'content-encoding': encoding.name } : {}),
     ...SECURITY_HEADERS,
   })
-  res.end(readFileSync(file))
+  res.end(readFileSync(encoding ? file + encoding.ext : file))
+}
+
+// Written next to each asset by web/vite.config.ts, in order of preference.
+const ENCODINGS = [
+  { name: 'br', ext: '.br' },
+  { name: 'gzip', ext: '.gz' },
+]
+
+function accepts(header: string, coding: string): boolean {
+  return header.split(',').some((part) => {
+    const [name, ...params] = part.trim().toLowerCase().split(';')
+    const q = params.map((p) => /^\s*q=([\d.]+)\s*$/.exec(p)?.[1]).find(Boolean)
+    return name === coding && (q === undefined || Number(q) > 0)
+  })
 }
