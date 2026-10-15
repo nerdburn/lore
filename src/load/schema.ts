@@ -22,6 +22,9 @@ export const loadConfigSchema = z.object({
     sources: z.array(z.enum(['slack', 'gmail', 'granola', 'board', 'github', 'jira', 'linear', 'docs', 'figma', 'notion'])).default(['slack', 'gmail', 'granola', 'board', 'github', 'jira', 'linear', 'docs', 'figma', 'notion']),
     from: dateSchema.optional(), to: dateSchema.optional(),
     max_batches: z.number().int().min(1).max(100).default(1),
+    excluded_events: z.array(z.object({
+      id: z.string().regex(/^load-sem-[a-f0-9]{32}$/), reason: z.string().trim().min(1), reviewed_on: dateSchema,
+    }).strict()).optional(),
     gate: z.object({ mode: z.enum(['off', 'shadow', 'filter']).default('shadow'), threshold: z.number().gt(0).lt(1).default(0.1) }).optional(),
   }).refine(s => !s.from || !s.to || s.from < s.to, 'semantic range must be [from, to)').optional(),
   actors: z.array(actorSchema).default([]),
@@ -53,7 +56,7 @@ export interface LoadSnapshot {
   version: 1; extractor: 1 | 2 | 3; project: string; timezone: string; built_at: string; input_revision?: string
   fingerprint: string; inputs: Record<string, string>; events: LoadEvent[]; coverage: LoadCoverage[]; warnings: string[]
   semantic?: SemanticState
-  semanticCoverage?: { enabled: boolean; sources: string[]; from?: string; to?: string; chunks: number; processed: number; pending: number; screened?: number; invalidatedEvents: number; lastSuccess?: string; error?: string }
+  semanticCoverage?: { enabled: boolean; sources: string[]; from?: string; to?: string; chunks: number; processed: number; pending: number; screened?: number; excludedEvents?: number; invalidatedEvents: number; lastSuccess?: string; error?: string }
 }
 
 export interface SemanticClaim {

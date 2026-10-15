@@ -710,3 +710,27 @@ Review validation: 100 existing focused tests passed across streams, extract,
 gate, GitHub, Granola, Gmail, Figma, and work. The same-length replacement was
 also reproduced in an isolated temporary directory. These validate the current
 baseline, not the proposed feature.
+
+## Project scope review
+
+When a retained semantic claim belongs to another project (for example, a PR
+from a shared repository), add a project-local review in
+`load.semantic.excluded_events` in `lore.json`:
+
+```json
+{
+  "id": "load-sem-203b259984d15f71ef3baafd5641970d",
+  "reason": "Confirmed by Shawn: $64/month signup pricing belongs to The Aesthetic Vault only.",
+  "reviewed_on": "2026-10-15"
+}
+```
+
+Commit the config and run `lore load rebuild`. Reviewed IDs are omitted from
+accepted and candidate counts; `semanticCoverage.excludedEvents` reports how
+many retained claims were excluded. Original claims, quotes and checkpoints
+remain intact, so ordinary rebuilds, exact-anchor replays and ledger merges
+do not resurrect those IDs. Removing a review restores the original assessment.
+The extraction prompt also receives the reviews and project-scope guidance;
+semantic duplicate matching remains an inference and can still require review
+when a model creates a different claim ID. Reviews affect semantic activity
+only, not source PR counts. No model call is needed to apply a review.

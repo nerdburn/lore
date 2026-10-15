@@ -140,6 +140,7 @@ export function buildLoad(root: string, input: LoadInputs = readLoadInputs(root)
   if (inferred.coverage.pending) warnings.add(`Semantic backlog: ${inferred.coverage.pending} source chunks have not been processed at their current revision.`)
   if (inferred.coverage.screened) warnings.add(`Jev screened out ${inferred.coverage.screened} low-signal chunks; these were not extracted by Claude. Disabling or changing the gate makes them pending again.`)
   if (inferred.coverage.invalidatedEvents) warnings.add(`${inferred.coverage.invalidatedEvents} semantic events lost their supporting quotes and are excluded pending re-extraction.`)
+  if (inferred.coverage.excludedEvents) warnings.add(`${inferred.coverage.excludedEvents} semantic events are excluded by project review; their original claims and evidence remain in the ledger.`)
   const all = [...events.values()].sort((a, b) => (a.occurred_at ?? a.occurred_on ?? '').localeCompare(b.occurred_at ?? b.occurred_on ?? '') || a.id.localeCompare(b.id))
   const state = JSON.parse(input.files.get('state.json') ?? '{}')
   const coverage: LoadCoverage[] = ['github', 'gmail', 'granola', 'board'].map(source => {

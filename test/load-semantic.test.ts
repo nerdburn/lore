@@ -8,9 +8,9 @@ import { makeContextRepo } from './helpers.js'
 import { readLoadInputs } from '../src/load/inputs.js'
 import { buildLoad } from '../src/load/build.js'
 import { queryLoad } from '../src/load/query.js'
-import { acceptSemantic, emptySemantic, mergeSemantic, semanticChunks } from '../src/load/semantic-events.js'
+import { acceptSemantic, emptySemantic, mergeSemantic, semanticChunks, semanticPrompt } from '../src/load/semantic-events.js'
 import { extractSemanticLoad } from '../src/load/semantic-extract.js'
-import { LOAD_FILE, readLoad, rebuildLoad } from '../src/load/store.js'
+import { LOAD_FILE, readLoad, rebuildLoad, saveLoad } from '../src/load/store.js'
 
 const config = configSchema.parse({ project: 'acme', sources: {}, load: { enabled: true, timezone: 'America/Vancouver', semantic: { enabled: true }, actors: [
   { id: 'dev', name: 'Developer', kind: 'human', identities: ['name:Developer', 'email:dev@team.com'], roles: [{ role: 'technical_lead' }] },
@@ -209,4 +209,38 @@ test('concurrent ledgers retain all event evidence and conflicting revisions sta
   assert.equal(merged.records[0].evidence.length, 2)
   assert.equal(merged.checkpoints[c.key], undefined)
   assert.equal(merged.checkpoints.other, 'other-digest')
+})
+
+test('project review excludes accepted or candidate claims across replay, merge and rebuild without deleting evidence', () => {
+  for (const confidence of ['high', 'medium']) {
+    const root = fixture(), chunks = semanticChunks(readLoadInputs(root), config), c = chunks.find(c => c.source === 'slack')!
+    const state = acceptSemantic(emptySemantic(), [c], { events: [{ ...propose(c.key), confidence }] }, 'test')
+    const id = state.records[0].id
+    const cfg = structuredClone(config)
+    cfg.load!.semantic!.excluded_events = [{ id, reason: 'Confirmed as a different project request.', reviewed_on: '2026-10-15' }]
+    writeFileSync(join(root, 'lore.json'), JSON.stringify(cfg))
+    const replayed = acceptSemantic(state, [c], { events: [propose(c.key)] }, 'test')
+    const merged = mergeSemantic(replayed, state)
+    saveLoad(root, buildLoad(root, undefined, merged))
+    const snapshot = rebuildLoad(root)
+    assert.deepEqual(snapshot.semantic, JSON.parse(JSON.stringify(merged)))
+    assert.deepEqual(snapshot.semantic!.records, state.records)
+    assert.equal(snapshot.events.some(e => e.id === id), false)
+    assert.equal(queryLoad(snapshot, { method: 'inferred' }).matchedEvents, 0)
+    assert.equal(snapshot.semanticCoverage!.excludedEvents, 1)
+    assert.equal(snapshot.semanticCoverage!.invalidatedEvents, 0)
+    assert.match(snapshot.warnings.join('\n'), /excluded by project review/)
+    const prompt = JSON.parse(semanticPrompt(cfg, [c], state).user)
+    assert.equal(prompt.reviewed_exclusions[0].id, id)
+    assert.equal(prompt.reviewed_exclusions[0].summary, state.records[0].summary)
+    writeFileSync(join(root, 'lore.json'), JSON.stringify(config))
+    assert.equal(rebuildLoad(root).events.find(e => e.id === id)!.status, confidence === 'high' ? 'accepted' : 'candidate')
+  }
+})
+
+test('project review requires a semantic ID, meaningful reason and valid review date', () => {
+  const review = { id: 'load-sem-' + 'a'.repeat(32), reason: 'Different project', reviewed_on: '2026-10-15' }
+  const parse = (entry: unknown) => configSchema.parse({ project: 'acme', load: { semantic: { excluded_events: [entry] } } })
+  assert.doesNotThrow(() => parse(review))
+  for (const patch of [{ id: 'unknown' }, { reason: ' ' }, { reviewed_on: '2026-02-30' }]) assert.throws(() => parse({ ...review, ...patch }))
 })

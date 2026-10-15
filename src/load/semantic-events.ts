@@ -88,6 +88,7 @@ Types:
 - decision.made: an explicit choice or resolution by a person. A proposed option, code change, PR merge, status update, description of existing behavior, or automatic policy is not itself a decision.
 - client.requested: a distinct client/customer ask. Exclude internal task coordination, bot requests, status reports, and statements of an already implemented feature. An unknown requester may be a candidate; never invent a customer identity.
 - human.committed: an explicit undertaking by a named person to perform an action. A bare request, assignment, suggestion, generic plan, ticket creation or completion is not a commitment. This is separate from contracted SOW capacity.
+Only extract acts belonging to the supplied project. A shared repository or a shared customer does not establish project scope. Respect reviewed_exclusions: omit those acts or match their existing_id when attaching evidence; never recreate them as new events.
 Count the act, not every mention. Match repeated reports, meeting notes/transcripts, email recaps and ticket copies to the same existing_id. Preserve its established original actor and date. Fill an unknown actor/date when a later-processed ORIGINAL direct statement provides them. Follow-ups are evidence; a reversal or materially new request/undertaking is a NEW event with the earlier ID in related. Repeated independent acts on different dates remain separate. A commitment reported both in a meeting and later in Slack is usually one undertaking, not two.
 Return zero events when no act is supported. Extract a handful of substantive acts, not an event per sentence. Never count imported artifact rows as acts. A ticket/PR description only qualifies when it explicitly records who asked, chose or committed and when; implementing a feature does not establish who requested or decided it.
 Every event needs exact contiguous source quotes (whitespace may differ), from chunk IDs provided in this batch. Include enough context to substantiate the act AND its actor. A quote that only says 'requested by Mike' is insufficient: also quote the actual request. Never paraphrase quotes. For meeting/transcript evidence name the speaker only when identifiable; the note creator is not automatically the decider. For quoted emails, attribute the original speaker, not the forwarder. For other sources the document author can support attribution of their own direct statements. Use supplied identity keys for known people. For an unknown direct author prefer a supplied author_key (such as slack:TEAM:USER); otherwise name:<actual name>, or [] when unknown. Never infer human/agent status from a display name. Do not turn a clearly team-side request into a client.requested candidate; omit it.
@@ -114,6 +115,7 @@ export function semanticPrompt(config: LoreConfig, batch: SemanticChunk[], state
     else uniquePeople.push({ ...person, identities: [...new Set(person.identities)] })
   }
   return { catalog, user: JSON.stringify({ project: config.project, timezone: config.load?.timezone ?? 'UTC', people: uniquePeople,
+    reviewed_exclusions: config.load?.semantic?.excluded_events?.map(review => ({ ...review, summary: state.records.find(r => r.id === review.id)?.summary })),
     existing_events: { columns: ['id', 'type', 'summary', 'occurred_on', 'actor_keys'], rows: catalog.map(r => [r.id, r.type, r.summary, r.occurred_on ?? null, r.actor_keys]) },
     documents: batch.map(c => ({ chunk: c.key, source: c.source, author: c.doc.author, author_keys: sourceActorKeys(c.doc), fields: c.doc.fields, day: c.day, text: c.text })),
   }) }
@@ -165,8 +167,12 @@ export function materializeSemantic(input: LoadInputs, config: LoreConfig, state
     if (!docs.has(path)) docs.set(path, parseStreamFile(input.files.get(path) ?? ''))
     return docs.get(path)!.find(d => d.fields.id === id)
   }
-  let invalidatedEvents = 0
+  const excluded = new Set(config.load?.semantic?.excluded_events?.map(r => r.id) ?? [])
+  let invalidatedEvents = 0, excludedEvents = 0
   for (const r of state.records) {
+    // Keep the claim and its anchors in the ledger for replay/deduplication and audit.
+    // Project-local review survives ledger merges and can be reversed in config.
+    if (excluded.has(r.id)) { excludedEvents++; continue }
     const valid = r.evidence.flatMap(ref => {
       const doc = getDoc(ref.path, ref.doc_id)
       return doc && containsQuote(doc.text, ref.quote) ? [{ ref, doc }] : []
@@ -201,7 +207,7 @@ export function materializeSemantic(input: LoadInputs, config: LoreConfig, state
   const screened = chunks.filter(c => state.checkpoints[c.key] !== c.hash && checkpointMatches(c.hash, state.checkpoints[c.key], config)).length
   return { events, coverage: { enabled: Boolean(config.load?.semantic?.enabled), sources: config.load?.semantic?.sources ?? [],
     from: config.load?.semantic?.from, to: config.load?.semantic?.to, chunks: chunks.length, processed, pending: chunks.length - processed, screened,
-    invalidatedEvents, lastSuccess: state.lastSuccess, error: state.error } }
+    invalidatedEvents, excludedEvents, lastSuccess: state.lastSuccess, error: state.error } }
 }
 
 function sourceActorKeys(doc: StreamDoc): string[] {
