@@ -82,6 +82,24 @@ across types never form an effort score. `ticket.assigned` includes assignments
 to any actor kind; filter human assignees explicitly. Unknown email direction
 is visible as `email.unclassified` rather than silently omitted.
 
+`ticket.completed` counts each non-archived Lore work item once, at its first
+recorded transition into `done`, across web, CLI/MCP, Slack, fold, and tracker
+sync history. Reopening and completing it again adds no delivery. Work-item
+creation, archival, and a current `done` snapshot without a recorded transition
+are excluded. Archived items are excluded even if previously completed.
+Unknown completion dates remain undated candidates instead of receiving a
+later completion date. Counts describe recorded completion, not independently
+verified delivery. The recording surface and actor remain visible; the actor
+who recorded completion is not assumed to be the person who implemented it.
+These are source-history counts, including previously inferred fold changes;
+no new model calls are needed. CLI/JSON/MCP include a completion breakdown by
+recording surface. Rebuild older projections to include this event type.
+
+```sh
+lore load --type ticket.completed
+lore load events --type ticket.completed --json
+```
+
 New Lore writes carry immutable history IDs and operation IDs; one board drag's
 status/rank changes count once. Initial assignments are preserved on creation.
 Legacy board status/rank entries lack operation IDs and remain **candidates**,
@@ -483,6 +501,7 @@ occurred, not when Lore synced or inferred it. Use the following initial units:
 | Figma design activity | `design.version_observed`: one changed file version observed after a baseline; `design.comment_created`: one comment ID | Existing records are changed frame text/index snapshots plus comments. Group frames by file/version, never count frames as edits. Initial import is a baseline. Add an explicit version-observation record even when the rendered frame text is unchanged. Polling does not measure all edits, editing sessions, or design time; latest editor does not identify every contributor. |
 | Tickets assigned to humans | `ticket.human_assigned`: a transition into a known human assignment, including creation with a known human assignee | Lore history supplies assignment changes, but creation history only says `created: true`; enrich new creation records with initial assignment. Current assignment alone cannot reconstruct its start time. A reassignment to another human is another assignment event. |
 | Tickets requiring human intervention | `ticket.intervention_requested`: one explicit intervention episode | Add structured open/resolved intervention records, with a reason and linked escalation if applicable. Infer only from explicit evidence initially; `blocked` or `review` status alone is insufficient. Reopening after resolution starts another episode. |
+| Work items completed | `ticket.completed`: first recorded transition into `done` per non-archived Lore item | Count once across retained history, preserving recording surface and actor. Exclude creation, archival, and repeat completion after reopening; missing dates remain undated candidates. |
 | Tickets moved by humans in Lore's board | `ticket.board_moved`: one actual status/rank mutation by a signed-in board user | Use ticket history (`via: web`) and verified actor attribution; status + rank in one operation counts once. No-op moves, sync/fold changes, comments, and edits to titles are excluded. Other human mutation surfaces can be exposed as a separate filter/type later. |
 | Production incidents and QA | `incident.opened`: one production incident; `qa.performed`: one distinct test/review session or run with reported results | These are separate types. Existing conversations/tickets can provide inferred evidence, but there is no dedicated ingestion here. Deduplicate incident updates by incident identity. A bug mention is not automatically a production incident or completed QA activity. |
 | Production deploys | `deployment.production_succeeded`: one successful deployment identity + environment | The GitHub connector currently collects releases, not deployment/status records. A release or merged PR does not prove production deployment. Add an explicit deployment source; before that, clearly label deployment evidence inferred from explicit announcements. |

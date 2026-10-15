@@ -597,6 +597,7 @@ lore load --from 2026-09-01 --to 2026-10-01 --type pr.created --group-by role
 lore load events --type meeting.held --role technical_lead --participation attendee
 lore load extract --max-batches 1
 lore load events --type decision.made --method inferred --json
+lore load --type ticket.completed
 ```
 
 Configure `load.actors` and `load.timezone` in `lore.json`; `load.enabled: true`

@@ -113,7 +113,7 @@ test('legacy moves are candidate entries and sync changes do not become human ac
     { at: '2026-10-01T12:00:00Z', by: 'lore-sync', via: 'sync', change: { assignee: ['', 'Developer'], status: ['todo', 'done'] } },
   ] }]) }, config)
   const q = queryLoad(buildLoad(root))
-  assert.deepEqual(q.groups, [{ key: 'ticket.board_moved', accepted: 0, candidates: 2 }])
+  assert.deepEqual(q.groups, [{ key: 'ticket.board_moved', accepted: 0, candidates: 2 }, { key: 'ticket.completed', accepted: 1, candidates: 0 }])
 })
 
 test('atomic snapshots replay unchanged, queries paginate, same-length source changes invalidate', () => {
@@ -151,4 +151,84 @@ test('a failed rebuild preserves the last complete snapshot', () => {
   writeFileSync(join(root, 'context/work/lore/BAD.yaml'), 'broken: [')
   assert.throws(() => rebuildLoad(root))
   assert.equal(readFileSync(join(root, LOAD_FILE), 'utf8'), before)
+})
+
+test('completions count the first recorded done transition once, even after reopening, in its original period', () => {
+  const history = [
+    { at: '2026-10-01T12:00:00Z', by: 'Developer', via: 'cli', change: { status: ['review', 'done'] } },
+    { at: '2026-09-30T12:00:00Z', by: 'dev@team.com', via: 'web', change: { status: ['todo', 'done'] } },
+    { at: '2026-09-30T13:00:00Z', by: 'Developer', via: 'cli', change: { status: ['done', 'review'] } },
+  ]
+  const path = 'context/work/lore/ACM.yaml'
+  const rows = [
+    { key: 'ACM-1', title: 'Recompleted', status: 'review', history },
+    { key: 'ACM-2', title: 'Only archived', status: 'archived', history: [{ at: '2026-10-01T12:00:00Z', by: 'Developer', via: 'cli', change: { status: ['todo', 'archived'] } }] },
+    { key: 'ACM-3', title: 'Created done without a transition', status: 'done', history: [{ at: '2026-10-01T12:00:00Z', by: 'lore-extract', via: 'fold', change: { created: true } }] },
+    { key: 'ACM-4', title: 'No-op done', status: 'done', history: [{ at: '2026-10-01T12:00:00Z', by: 'Developer', via: 'cli', change: { status: ['done', 'done'] } }] },
+    { key: 'ACM-5', title: 'Archived after done', status: 'archived', history },
+  ]
+  const root = makeContextRepo({ [path]: JSON.stringify(rows) }, config)
+  const snapshot = buildLoad(root)
+  const events = snapshot.events.filter(e => e.type === 'ticket.completed')
+  assert.equal(events.length, 1)
+  assert.equal(events[0].occurred_at, '2026-09-30T12:00:00.000Z')
+  assert.equal(events[0].actor?.id, 'dev')
+  assert.deepEqual(events[0].actor?.roles, ['software_developer'])
+  assert.equal(events[0].attributes.surface, 'web')
+  assert.equal(queryLoad(snapshot, { type: 'ticket.completed', from: '2026-09-01', to: '2026-10-01' }).matchedEvents, 1)
+  assert.equal(queryLoad(snapshot, { type: 'ticket.completed', from: '2026-10-01', to: '2026-11-01' }).matchedEvents, 0)
+  rows[0].history.reverse()
+  writeFileSync(join(root, path), JSON.stringify(rows))
+  const rebuilt = buildLoad(root).events.find(e => e.type === 'ticket.completed')!
+  assert.equal(rebuilt.id, events[0].id)
+  assert.equal(rebuilt.occurred_at, events[0].occurred_at)
+  assert.equal(rebuilt.evidence[0].history_id, events[0].evidence[0].history_id)
+})
+
+test('completion counts preserve manual, Slack, inferred fold and tracker-sync recording provenance', () => {
+  const surfaces = ['web', 'cli', 'mcp', 'slack', 'fold', 'sync']
+  const rows = surfaces.map((via, i) => ({ key: `ACM-${i + 1}`, title: via, status: 'done', assignee: 'Developer', history: [
+    { id: `h-${i}`, operation_id: `op-${i}`, at: '2026-10-01T12:00:00Z', by: via === 'fold' ? 'lore-extract' : via === 'sync' ? 'lore-sync' : 'Developer', via, change: { status: ['in_progress', 'done'] } },
+  ] }))
+  const root = makeContextRepo({ 'context/work/lore/ACM.yaml': JSON.stringify(rows) }, config)
+  const q = queryLoad(buildLoad(root), { type: 'ticket.completed', events: true })
+  assert.equal(q.matchedEvents, 6)
+  assert.deepEqual(q.completionBySurface, [...surfaces].sort().map(surface => ({ surface, accepted: 1, candidates: 0 })))
+  const inferred = q.events!.find(e => e.attributes.surface === 'fold')!
+  assert.equal(inferred.attributes.completionBasis, 'fold-inference')
+  assert.equal(inferred.attributes.recordedBy, 'lore-extract')
+  assert.equal(inferred.actor?.kind, 'unknown')
+  assert.deepEqual(inferred.participants, [], 'current assignee is not evidence of who completed the work')
+  assert.equal(inferred.method, 'source', 'reads recorded history without another inference pass')
+  assert.equal(q.events!.find(e => e.attributes.surface === 'slack')!.attributes.completionBasis, 'slack-reaction')
+  assert.equal(q.events!.find(e => e.attributes.surface === 'sync')!.attributes.completionBasis, 'tracker-sync')
+})
+
+test('an undated completion stays a candidate and cannot borrow a later completion date', () => {
+  const root = makeContextRepo({ 'context/work/lore/ACM.yaml': JSON.stringify([{ key: 'ACM-1', title: 'Unknown first date', history: [
+    { at: '2026-10-01T12:00:00Z', by: 'Developer', via: 'cli', change: { status: ['review', 'done'] } },
+    { at: 'unknown', by: 'Developer', via: 'cli', change: { status: ['todo', 'done'] } },
+  ] }]) }, config)
+  const snapshot = buildLoad(root)
+  const q = queryLoad(snapshot, { type: 'ticket.completed', undated: true, events: true })
+  assert.equal(q.matchedEvents, 1)
+  assert.equal(q.events![0].status, 'candidate')
+  assert.deepEqual(q.events![0].attributes.candidateReasons, ['first completion date unknown'])
+  assert.equal(queryLoad(snapshot, { type: 'ticket.completed' }).matchedEvents, 0)
+  assert.equal(queryLoad(snapshot, { type: 'ticket.completed' }).undatedExcluded, 1)
+})
+
+test('rebuild upgrades old projections even with unchanged inputs and preserves semantic checkpoints', () => {
+  const root = fixture()
+  const first = rebuildLoad(root)
+  first.extractor = 2
+  first.semantic = { version: 1, checkpoints: { historical: 'digest' }, records: [] }
+  writeFileSync(join(root, LOAD_FILE), JSON.stringify(first))
+  assert.equal(loadFreshness(root, readLoad(root)), 'stale')
+  const next = rebuildLoad(root)
+  assert.equal(next.extractor, 3)
+  assert.deepEqual(next.semantic, first.semantic)
+  const saved = readFileSync(join(root, LOAD_FILE), 'utf8')
+  rebuildLoad(root)
+  assert.equal(readFileSync(join(root, LOAD_FILE), 'utf8'), saved)
 })

@@ -52,6 +52,7 @@ function printLoad(result: ReturnType<typeof queryLoad>, json = false): void {
   console.log(`${result.project}: observed activity (${result.range.timezone}; end date exclusive)`)
   console.log(`Built ${result.projection.builtAt}${result.projection.inputRevision ? ` from ${result.projection.inputRevision.slice(0, 12)}` : ''}`)
   for (const row of result.groups) console.log(`${row.key}: ${row.accepted} accepted${row.candidates ? `; ${row.candidates} candidate events` : ''}`)
+  if (result.completionBySurface.length) console.log(`Completions recorded via: ${result.completionBySurface.map(r => `${r.surface}: ${r.accepted} accepted${r.candidates ? `; ${r.candidates} candidates` : ''}`).join(', ')} (recorder, not necessarily implementer)`)
   if (!result.groups.length) console.log('No dated matches in retained evidence. Check coverage below.')
   if (result.events) for (const e of result.events) console.log(`${e.id} | ${e.occurred_at ?? e.occurred_on ?? 'unknown date'} | ${e.type} | ${e.method} | ${e.status} | ${e.summary}\n  ${e.evidence.map(v => `${v.path}#${v.doc_id ?? v.history_id}${v.quote ? `\n    ${v.quote}` : ''}`).join('\n  ')}`)
   if (result.semanticCoverage) console.log(`Semantic coverage: ${result.semanticCoverage.processed}/${result.semanticCoverage.chunks} chunks processed; ${result.semanticCoverage.pending} pending${result.semanticCoverage.error ? `; ${result.semanticCoverage.error}` : ''}`)

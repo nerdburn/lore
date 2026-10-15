@@ -52,7 +52,7 @@ function loadOptions(cmd: Command): Command {
     .option('--from <date>', 'inclusive local date YYYY-MM-DD')
     .option('--to <date>', 'exclusive local date YYYY-MM-DD')
     .option('--tz <timezone>', 'IANA timezone (default: project Load timezone, otherwise UTC)')
-    .option('--type <type>', 'activity type, e.g. pr.created or meeting.held')
+    .option('--type <type>', 'activity type, e.g. ticket.completed, pr.created or meeting.held')
     .option('--role <role>', 'customer, account_manager, client_strategist, technical_lead, software_developer, designer')
     .option('--actor-kind <kind>', 'human, agent, service, unknown')
     .option('--actor <id>', 'canonical actor ID')

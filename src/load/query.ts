@@ -62,6 +62,11 @@ export function queryLoad(snapshot: LoadSnapshot, input: LoadQuery = {}) {
     matchedEvents: events.length, undatedExcluded: q.undated ? 0 : undated, undatedOnly: q.undated,
     attribution: { eventsWithoutKnownActor: events.filter(e => !involved(e, q.participation).some(a => a.kind !== 'unknown')).length, eventsWithoutKnownRole: events.filter(e => !involved(e, q.participation).some(a => a.roles.length)).length },
     actors, coverage: snapshot.coverage, semanticCoverage: snapshot.semanticCoverage,
+    completionBySurface: [...new Set(events.filter(e => e.type === 'ticket.completed').map(e => String(e.attributes.surface ?? 'unknown')))].sort().map(surface => ({
+      surface,
+      accepted: events.filter(e => e.type === 'ticket.completed' && e.attributes.surface === surface && e.status === 'accepted').length,
+      candidates: events.filter(e => e.type === 'ticket.completed' && e.attributes.surface === surface && e.status === 'candidate').length,
+    })),
     byMethod: ['source', 'inferred'].map(method => ({ method, accepted: events.filter(e => e.method === method && e.status === 'accepted').length, candidates: events.filter(e => e.method === method && e.status === 'candidate').length })),
     warnings: [...snapshot.warnings, 'Missing groups are zero observed matches, not proof of zero activity. Check source coverage.', 'Role and actor groups can overlap. Counts across activity types are not units of effort.', ...(q.tz && q.tz !== snapshot.timezone && events.some(e => e.time_precision === 'day') ? ['Day-precision events retain their project-local date; their unknown time cannot be converted to another timezone.'] : [])],
     ...(q.events ? { events: events.slice(q.offset, q.offset + q.limit), nextOffset: q.offset + q.limit < events.length ? q.offset + q.limit : null } : {}),

@@ -3,7 +3,7 @@ import { z } from 'zod'
 export const LOAD_ROLES = ['customer', 'account_manager', 'client_strategist', 'technical_lead', 'software_developer', 'designer'] as const
 export const ACTOR_KINDS = ['human', 'agent', 'service', 'unknown'] as const
 export const SEMANTIC_TYPES = ['decision.made', 'client.requested', 'human.committed'] as const
-export const LOAD_TYPES = ['pr.created', 'email.sent', 'email.received', 'email.unclassified', 'meeting.held', 'ticket.board_moved', 'ticket.assigned', ...SEMANTIC_TYPES] as const
+export const LOAD_TYPES = ['pr.created', 'email.sent', 'email.received', 'email.unclassified', 'meeting.held', 'ticket.board_moved', 'ticket.assigned', 'ticket.completed', ...SEMANTIC_TYPES] as const
 export type LoadRole = typeof LOAD_ROLES[number]
 export type ActorKind = typeof ACTOR_KINDS[number]
 export type LoadType = typeof LOAD_TYPES[number]
@@ -50,7 +50,7 @@ export interface LoadCoverage {
   documents: number; firstOccurrence?: string; lastOccurrence?: string; lastSync?: string; error?: string; limitations: string[]
 }
 export interface LoadSnapshot {
-  version: 1; extractor: 1 | 2; project: string; timezone: string; built_at: string; input_revision?: string
+  version: 1; extractor: 1 | 2 | 3; project: string; timezone: string; built_at: string; input_revision?: string
   fingerprint: string; inputs: Record<string, string>; events: LoadEvent[]; coverage: LoadCoverage[]; warnings: string[]
   semantic?: SemanticState
   semanticCoverage?: { enabled: boolean; sources: string[]; from?: string; to?: string; chunks: number; processed: number; pending: number; screened?: number; invalidatedEvents: number; lastSuccess?: string; error?: string }

@@ -30,7 +30,7 @@ export function readLoad(root: string): LoadSnapshot {
   const previous = cache.get(file)
   if (previous?.signature === signature) return previous.snapshot
   const snapshot = JSON.parse(readFileSync(file, 'utf8')) as LoadSnapshot
-  if (snapshot.version !== 1 || ![1, 2].includes(snapshot.extractor) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.coverage)) throw new Error('Unsupported Load snapshot; use a compatible version of Lore.')
+  if (snapshot.version !== 1 || ![1, 2, 3].includes(snapshot.extractor) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.coverage)) throw new Error('Unsupported Load snapshot; use a compatible version of Lore.')
   if (snapshot.semantic && (snapshot.semantic.version !== 1 || !Array.isArray(snapshot.semantic.records) || !snapshot.semantic.checkpoints || typeof snapshot.semantic.checkpoints !== 'object')) throw new Error('Invalid semantic ledger; restore a valid snapshot before rebuilding.')
   cache.delete(file)
   // Queries only retain small snapshots; larger files are read without retaining.
@@ -56,6 +56,7 @@ export const optionalLoad = (root: string): LoadSnapshot | undefined => existsSy
 
 /** Freshness checks never parse source history or rebuild on the query path. */
 export function loadFreshness(root: string, snapshot: LoadSnapshot): 'current' | 'stale' | 'unknown' {
+  if (snapshot.extractor !== 3) return 'stale'
   if (!snapshot.input_revision) return 'unknown'
   try {
     const changed = execFileSync('git', ['-C', root, 'diff', '--name-only', snapshot.input_revision, '--', ...LOAD_INPUT_PATHS], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
