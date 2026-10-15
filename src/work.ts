@@ -52,6 +52,10 @@ export interface ExternalRef {
 }
 
 export interface WorkHistoryEntry {
+  /** Immutable identity for new mutations; legacy history has no ID. */
+  id?: string
+  /** Groups status/rank mutations from the same user action. */
+  operation_id?: string
   /** ISO 8601. */
   at: string
   /** OS user / --by; "lore-sync" for mirroring; "lore-extract" for the fold. */
@@ -263,7 +267,7 @@ function mergeItem(b: LoreWorkItem, o: LoreWorkItem, t: LoreWorkItem): LoreWorkI
     if (v !== undefined) out[f] = v
   }
   const history = new Map<string, WorkHistoryEntry>()
-  for (const h of [...t.history, ...o.history]) history.set(JSON.stringify([h.at, h.by, h.via, h.change]), h)
+  for (const h of [...t.history, ...o.history]) history.set(h.id ?? JSON.stringify([h.at, h.by, h.via, h.change]), h)
   out.history = [...history.values()].sort((x, y) => x.at.localeCompare(y.at))
   out.updated = [o.updated, t.updated].sort().at(-1)
   return out as unknown as LoreWorkItem

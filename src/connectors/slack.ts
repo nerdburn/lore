@@ -21,10 +21,11 @@ import type { Connector, ConnectorContext, Doc, RemoteAttachment } from '../type
  * Rate-limit aware: honors 429 Retry-After, which matters for backfills (new
  * non-Marketplace apps get ~1 req/min on conversations.history).
  *
- * Reactions are delivery signals: a team member's 👍 on a client's message
- * means "we've got it, it's a ticket", a ✅ means "done". The connector only
+ * Reactions are candidate delivery signals: a team member's 👍 can approve
+ * a client request, a ✅ can mean "done". The connector only
  * records them (SLACK_REACTIONS); `applySlackReactions` turns them into
- * tracker changes after sync. Reactions land after the message, so history
+ * tracker changes after sync, checking for a request before ticket creation.
+ * Reactions land after the message, so history
  * is re-read back to `reaction_window_days` (default 7) and threads active in
  * that window are re-read whole — the same calls sync already makes, with a
  * wider window. "Team" is a full member of the bot's workspace; guests
@@ -73,7 +74,7 @@ export const SLACK_FILES = 'context/source-files/slack.yaml'
 interface MessageFiles { channel: string; files: RemoteAttachment[] }
 
 export const SLACK_REACTIONS = 'context/source-files/slack-reactions.yaml'
-/** A client message a team member reacted to with 👍 (ticket) or ✅ (done); keyed by permalink. */
+/** A candidate client message with team 👍/✅; request intent must be checked before creation. Keyed by permalink. */
 export interface ReactionSignal {
   channel: string
   /** Slack message ts. */
@@ -341,7 +342,7 @@ interface SlackMessage {
 }
 
 /** `team`: a full member of the bot's workspace — not a guest, bot, deactivated or Slack Connect user. */
-interface SlackUser { name: string; team: boolean }
+interface SlackUser { name: string; team: boolean; email?: string }
 
 interface SlackFile {
   id: string
@@ -391,7 +392,7 @@ interface SlackMember {
   is_bot?: boolean
   is_restricted?: boolean
   is_ultra_restricted?: boolean
-  profile?: { display_name?: string; real_name?: string }
+  profile?: { display_name?: string; real_name?: string; email?: string }
 }
 
 async function userMap(api: SlackApi, team: string): Promise<Map<string, SlackUser>> {
@@ -402,6 +403,7 @@ async function userMap(api: SlackApi, team: string): Promise<Map<string, SlackUs
     for (const u of (res.members as SlackMember[]) ?? []) {
       map.set(u.id, {
         name: u.profile?.display_name || u.profile?.real_name || u.id,
+        email: u.profile?.email?.toLowerCase(),
         team: !u.deleted && !u.is_bot && !u.is_restricted && !u.is_ultra_restricted && u.id !== 'USLACKBOT' && (!u.team_id || u.team_id === team),
       })
     }
@@ -438,6 +440,7 @@ function toDoc(
   const meta: Record<string, string> = { team: ids.team, channel: ids.channel }
   if (msg.user) meta.user = msg.user
   else if (msg.bot_id) meta.bot = msg.bot_id
+  if (msg.user && users.get(msg.user)?.email) meta.email = users.get(msg.user)!.email!
   if (msg.edited) meta.edited = msg.edited.ts
   return {
     id: `slack-${channelId}-${msg.ts}`,

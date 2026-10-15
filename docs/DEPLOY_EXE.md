@@ -144,20 +144,17 @@ delta. Set both to the same id to use one model everywhere. Check the
 incremental model is reachable through the LLM integration before relying on
 it: `journalctl -u lore-sync` shows `[sdk:<model>]` on the extracting line.
 
-**Fold gate.** With `TYPESAFE_API_KEY` in `/etc/lore/env`, each routine
-incremental fold is preceded by one call to TypeSafe's Jev: a few calibrated
-yes/no questions over only the newly appended material (does anyone ask,
-decide, plan, report progress, or contradict a pin?). If none reaches
-`LORE_GATE_THRESHOLD` (default 0.3) the fold is skipped and the material
-marked consumed — `gate: nothing to fold … [jev]` in the journal. Backfills,
-re-folds, `--review`, attached documents and first folds always fold, and any
-gate error folds. Skipped material is still in the streams (grep, the weekly
-report); only derived artifacts and fold ticket moves depend on the fold.
-`LORE_GATE=off` disables it. Measure a threshold per client before trusting
-it: `lore gate replay --since "2 weeks ago"` in a work clone replays the gate
-over past sync commits and reports, per threshold, folds skipped and folds
-that would have lost a change. The gate sends client material to TypeSafe as
-well as the LLM provider.
+**Jev classification.** Set `TYPESAFE_API_KEY` in `/etc/lore/env` for PR
+matching and Load screening. These send relevant client material to TypeSafe.
+Ordinary artifact extraction processes changed material without a Jev gate;
+the former ordinary gate and its environment flags have been removed.
+
+On lore-host the **Load** filter is enabled per project through
+`load.semantic.gate` (`mode: "filter"`, `threshold: 0.3`). Its shared score cache
+is configured by `LORE_LOAD_JEV_CACHE`, and successful-batch usage telemetry
+by `LORE_LOAD_METRICS_DIR`. See [Load evaluation](LOAD.md) for measurements,
+shadow mode, reversible skip checkpoints and coverage limitations.
+`LORE_PR_MATCHING=off` independently disables new Jev PR matching evaluations.
 
 ## 5a. What runs when
 

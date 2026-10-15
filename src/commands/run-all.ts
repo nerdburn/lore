@@ -11,6 +11,11 @@ import type { Connector } from '../types.js'
 import { mergeWorkItems, parseWorkItems, WORK_DIR, writeWorkItems, type LoreWorkItem } from '../work.js'
 import { extract } from './extract.js'
 import { sync } from './sync.js'
+import { LOAD_FILE, rebuildLoad, saveLoad } from '../load/store.js'
+import { extractSemanticLoad } from '../load/semantic-extract.js'
+import { mergeSemantic } from '../load/semantic-events.js'
+import { buildLoad } from '../load/build.js'
+import type { LoadSnapshot } from '../load/schema.js'
 
 export interface RunAllOptions {
   /** Directory of bare repos, one per client: <repos>/<name>.git */
@@ -141,6 +146,18 @@ async function runClient(
         failure = err instanceof Error ? err : new Error(String(err))
       }
       committed = (await withGitLock(locks.git, () => commitAndPush(root, name))) || committed
+      // Source counts are independent of --extract and semantic screening.
+      // Build from committed inputs and publish one complete projection file.
+      if (config.load?.enabled) {
+        committed = (await withGitLock(locks.git, () => {
+          rebuildLoad(root)
+          git(root, 'add', LOAD_FILE)
+          if (!git(root, 'diff', '--cached', '--name-only', '--', LOAD_FILE)) return false
+          git(root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', 'chore(lore): activity counts', '--', LOAD_FILE)
+          pushWithRebase(root)
+          return true
+        })) || committed
+      }
     } finally {
       syncLock.release()
     }
@@ -167,7 +184,12 @@ async function runClient(
         notes.push('fold skipped: in flight elsewhere')
       } else {
         let foldFailure: Error | undefined
+        // Separate semantic checkpoint: an artifact-fold failure cannot
+        // silently consume semantic evidence.
         try {
+          try {
+            if (loadConfig(root).load?.semantic?.enabled) await extractSemanticLoad(root)
+          } catch (err) { foldFailure = err instanceof Error ? err : new Error(String(err)) }
           await extract(root, { report: opts.report })
         } catch (err) {
           foldFailure = err instanceof Error ? err : new Error(String(err))
@@ -280,7 +302,7 @@ export function pushWithRebase(root: string, attempts = 3): void {
  */
 export function mergeRecords(root: string, upstream: string): () => void {
   const base = git(root, 'merge-base', 'HEAD', upstream)
-  const changed = (rev: string) => new Set(git(root, 'diff', '--name-only', base, rev, '--', WORK_DIR, AUDIT_FILE).split('\n').filter(Boolean))
+  const changed = (rev: string) => new Set(git(root, 'diff', '--name-only', base, rev, '--', WORK_DIR, AUDIT_FILE, LOAD_FILE).split('\n').filter(Boolean))
   const ours = changed('HEAD')
   const both = [...changed(upstream)].filter((p) => ours.has(p))
   const show = (rev: string, path: string) => {
@@ -301,10 +323,14 @@ export function mergeRecords(root: string, upstream: string): () => void {
   }
   for (const [from, to] of Object.entries(rekeyed)) console.warn(`  work: ${from} was created upstream while this run held it — ours is now ${to}`)
   const audit = both.includes(AUDIT_FILE) ? mergeAudit(show(base, AUDIT_FILE), show('HEAD', AUDIT_FILE), show(upstream, AUDIT_FILE), rekeyed) : undefined
+  const loadOurs = both.includes(LOAD_FILE) ? JSON.parse(show('HEAD', LOAD_FILE)) as LoadSnapshot : undefined
+  const loadTheirs = both.includes(LOAD_FILE) ? JSON.parse(show(upstream, LOAD_FILE)) as LoadSnapshot : undefined
+  const semantic = loadOurs?.semantic || loadTheirs?.semantic ? mergeSemantic(loadOurs?.semantic, loadTheirs?.semantic) : undefined
 
   return () => {
-    if (tables.length === 0 && audit === undefined) return
+    if (tables.length === 0 && audit === undefined && !semantic) return
     const paths = tables.map(({ prefix, items }) => writeWorkItems(root, prefix, items))
+    if (semantic) { saveLoad(root, buildLoad(root, undefined, semantic)); paths.push(LOAD_FILE) }
     if (audit !== undefined) {
       writeFileSync(join(root, AUDIT_FILE), audit)
       paths.push(AUDIT_FILE)

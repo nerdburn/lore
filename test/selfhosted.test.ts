@@ -51,6 +51,26 @@ test('config: LORE_HOME redirects the global config, registry and cache', () => 
   assert.ok(cachePath('lore-acme').startsWith(home))
 })
 
+test('run-all: Load builds and publishes independently of LLM extraction', async () => {
+  const bare = seedBare('lore-load-test', { project: 'load-test', sources: {}, extract: [], load: { enabled: true } })
+  const separate = mkdtempSync(join(tmpdir(), 'lore-load-repos-'))
+  const localWork = mkdtempSync(join(tmpdir(), 'lore-load-work-'))
+  try {
+    execFileSync('git', ['clone', '--bare', '--quiet', bare, join(separate, 'lore-load-test.git')])
+    const { result } = await captureConsole(() => runAll({ repos: separate, work: localWork, extract: false }))
+    assert.equal(result.ok, true)
+    const target = join(separate, 'lore-load-test.git')
+    const snapshot = JSON.parse(g(target, 'show', 'HEAD:context/derived/load.json'))
+    assert.equal(snapshot.project, 'load-test')
+    assert.ok(snapshot.input_revision)
+    assert.deepEqual(snapshot.events, [])
+    assert.equal(snapshot.coverage[0].status, 'unavailable')
+  } finally {
+    rmSync(separate, { recursive: true, force: true })
+    rmSync(localWork, { recursive: true, force: true })
+  }
+})
+
 test('context: bare names are repo refs when a remote is configured; owner/repo stays GitHub', () => {
   assert.ok(isRepoRef('lore-acme'))
   assert.ok(isRepoRef('inputlogic/lore-acme'))

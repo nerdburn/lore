@@ -1,4 +1,5 @@
 import { closeSync, createReadStream, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -360,7 +361,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         if (!options.includes(assignee)) return send(res, 400, { error: `"${body.assignee}" is not someone on this project — pick from the list` }), true
       }
       const reason = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined
-      const w: WorkWriteOptions = { context, via: 'web', actor: email }
+      const w: WorkWriteOptions = { context, via: 'web', actor: email, operationId: randomUUID() }
       const write = (fn: () => LoreWorkItem | Promise<LoreWorkItem>) => serializeFor(context)(async () => fn())
 
       if (!key && method === 'POST') {

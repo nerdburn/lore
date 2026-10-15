@@ -103,7 +103,9 @@ test('work add: keys count up per prefix, history records who and why, audit lin
   assert.equal(a.status, 'todo')
   assert.equal(a.state, 'open')
   assert.deepEqual(a.labels, ['email'])
-  assert.deepEqual(a.history, [{ at: AT, by: me, via: 'cli', change: { created: true }, reason: 'added', sources: ['https://slack.com/archives/C1/p1'] }])
+  assert.ok(a.history[0].id)
+  assert.ok(a.history[0].operation_id)
+  assert.deepEqual(a.history.map(({ id, operation_id, ...h }) => h), [{ at: AT, by: me, via: 'cli', change: { created: true }, reason: 'added', sources: ['https://slack.com/archives/C1/p1'] }])
   assert.match(out, /add ACM-1: Onboarding email sequence/)
 
   const b = await captureConsole(() => workAdd(root, { title: 'Second', reason: 'client asked in the call' }, opts(root)))
@@ -156,7 +158,11 @@ test('work move / set / rank: every change needs a reason and lands in history; 
   )
   assert.equal(moved.status, 'in_progress')
   assert.equal(moved.updated, '2026-09-16')
-  assert.deepEqual(moved.history[1], { at: later, by: 'shawn', via: 'cli', change: { status: ['todo', 'in_progress'] }, reason: 'Cory started on it', sources: ['https://slack.com/archives/C1/p2'] })
+  const { id, operation_id, ...moveHistory } = moved.history[1]
+  assert.ok(id)
+  assert.ok(operation_id)
+  assert.notEqual(id, moved.history[0].id)
+  assert.deepEqual(moveHistory, { at: later, by: 'shawn', via: 'cli', change: { status: ['todo', 'in_progress'] }, reason: 'Cory started on it', sources: ['https://slack.com/archives/C1/p2'] })
   assert.deepEqual(moved.sources, ['https://slack.com/archives/C1/p2'], 'evidence given with a move is kept on the item')
   assert.match(out, /move ACM-1 todo → in_progress \(Cory started on it\)/)
   await assert.rejects(captureConsole(() => workMove(root, 'ACM-1', 'in_progress', { reason: 'again' }, opts(root))), /already in_progress/)

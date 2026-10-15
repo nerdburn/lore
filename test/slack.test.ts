@@ -51,7 +51,7 @@ function fakeSlack() {
         return json({
           ok: true,
           members: [
-            { id: 'U0PRIYA', profile: { display_name: 'Priya' } },
+            { id: 'U0PRIYA', profile: { display_name: 'Priya', email: 'Priya@acme.com' } },
             { id: 'U0SHAWN', profile: { display_name: '', real_name: 'Shawn Adrian' } },
             { id: 'U0CORY', team_id: 'T0TEAM', profile: { display_name: 'cory' } },
             { id: 'U0GUEST', team_id: 'T0TEAM', is_restricted: true, is_ultra_restricted: true, profile: { display_name: 'Brayden' } },
@@ -117,7 +117,7 @@ test('slack: first sync backfills from `since`, maps users, keeps machine ids', 
   assert.equal(first.author, 'Priya')
   assert.equal(first.channel, '#acme')
   assert.equal(first.permalink, `https://slack.com/archives/C0ACME/p${daysAgo(5).replace('.', '')}`)
-  assert.deepEqual(first.meta, { team: 'T0TEAM', channel: 'C0ACME', user: 'U0PRIYA', edited: daysAgo(4) })
+  assert.deepEqual(first.meta, { team: 'T0TEAM', channel: 'C0ACME', user: 'U0PRIYA', email: 'priya@acme.com', edited: daysAgo(4) })
   assert.equal(docs[1].author, 'U0BOT')
   const c = nextCursor.C0ACME as { ts: string; threads: Record<string, string> }
   assert.equal(c.ts, daysAgo(3))

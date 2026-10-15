@@ -11,7 +11,6 @@ import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
 import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readExternalIssues, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
-import { alwaysFolds, gateConfig, newPart, runGate } from '../gate.js'
 import { STATUS_SUMMARY_SYSTEM, statusSummaryInput, writeStatus } from '../status.js'
 import type { Pin } from '../types.js'
 
@@ -238,10 +237,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   // change, or to open tickets for work already committed in memory).
   const review = opts.review === true && newFiles.length === 0
 
-  let gated = false
-  if (wantArtifacts.length > 0 && newFiles.length > 0 && !review) gated = await gateSkips(root, config, state, newFiles, today)
-
-  if (wantArtifacts.length > 0 && (newFiles.length > 0 || review) && !gated) {
+  if (wantArtifacts.length > 0 && (newFiles.length > 0 || review)) {
     const artifacts: Record<string, unknown[]> = {}
     for (const name of wantArtifacts) artifacts[name] = readYamlList(root, `context/derived/${name}.yaml`)
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
@@ -364,7 +360,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         `⚠ ${contradictions.length} pinned fact(s) contradicted by fresh evidence — see derived/contradictions.yaml`,
       )
     }
-  } else if (wantArtifacts.length > 0 && !gated) {
+  } else if (wantArtifacts.length > 0) {
     console.log('no new stream material since last extract')
   }
 
@@ -395,44 +391,6 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   if (wantArtifacts.length > 0) writeStatus(root, config)
 
   updateState(root, { extracted: state.extracted, lastExtract: new Date().toISOString() })
-}
-
-/**
- * Ask the gate whether this hour's material is worth an incremental fold.
- * Only the incremental path is gated — a backfill, a re-fold, a new source,
- * an attached document or an empty tracker always folds. On a skip the
- * files are marked consumed, exactly as a fold that found nothing would.
- * Any gate failure folds.
- */
-async function gateSkips(root: string, config: ReturnType<typeof loadConfig>, state: ReturnType<typeof loadState>, newFiles: StreamFile[], today: string): Promise<boolean> {
-  const gate = gateConfig()
-  if (!gate) return false
-  const newChars = newFiles.reduce((n, f) => n + f.text.length, 0)
-  const existing = ARTIFACTS.reduce((n, a) => n + readYamlList(root, `context/derived/${a}.yaml`).length, 0)
-  if (!isIncremental(pack(newFiles, BATCH_CHARS).length, existing, newChars) || newFiles.some((f) => alwaysFolds(f.path))) return false
-  try {
-    const items = readWorkItems(root, workPrefix(config))
-    const r = await runGate(
-      {
-        material: newFiles.map((f) => ({ path: f.path, text: newPart(f.text, state.extracted?.[f.path]) })),
-        trackedWork: describeWorkForPrompt(items, today),
-        pins: readRaw(root, 'context/facts.yaml'),
-      },
-      gate,
-    )
-    const why = `${r.top.question} p=${r.top.p.toFixed(2)}, threshold ${gate.threshold}; ${r.inputTokens} tokens`
-    if (r.fold) {
-      console.log(`gate: folding — ${why}`)
-      return false
-    }
-    for (const f of newFiles) state.extracted![f.path] = f.text.length
-    updateState(root, { extracted: state.extracted })
-    console.log(`gate: nothing to fold in ${newFiles.length} stream file(s) — ${why} [jev]`)
-    return true
-  } catch (err) {
-    console.warn(`  ⚠ gate failed (${err instanceof Error ? err.message : err}) — folding`)
-    return false
-  }
 }
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
@@ -479,7 +437,43 @@ async function sdkFold(model: string, user: string): Promise<FoldResult> {
   return JSON.parse(text) as FoldResult
 }
 
-async function sdkText(model: string, system: string, user: string, schema?: Record<string, unknown>): Promise<string> {
+/** Independent consumers use the same configured provider, without running the artifact fold. */
+export interface CompletionUsage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
+function completionUsage(raw: Record<string, unknown> = {}): CompletionUsage {
+  const number = (key: string) => typeof raw[key] === 'number' && Number.isFinite(raw[key]) ? raw[key] as number : 0
+  return { inputTokens: number('input_tokens'), outputTokens: number('output_tokens'), cacheReadTokens: number('cache_read_input_tokens'), cacheWriteTokens: number('cache_creation_input_tokens') }
+}
+export async function structuredCompletion(system: string, user: string, schema: Record<string, unknown>): Promise<{ value: unknown; model: string; usage?: CompletionUsage }> {
+  const model = process.env.LORE_LOAD_MODEL ?? process.env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
+  let usage: CompletionUsage | undefined
+  const output = pickBackend() === 'sdk'
+    ? await sdkText(model, system, user, schema, raw => { usage = completionUsage(raw) })
+    : cliStructuredCompletion(model, system + '\nReturn only JSON matching this schema:\n' + JSON.stringify(schema), user, raw => { usage = completionUsage(raw) })
+  const start = output.indexOf('{'), end = output.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error('load: no JSON in semantic output')
+  return { value: JSON.parse(output.slice(start, end + 1)), model, usage }
+}
+
+function cliStructuredCompletion(model: string, system: string, user: string, onUsage?: (raw: Record<string, unknown>) => void): string {
+  let output: string
+  try {
+    output = execFileSync('claude', ['-p', '--output-format', 'json', '--model', cliModelAlias(model),
+      '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--system-prompt', system], {
+      input: user, maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).toString()
+  } catch (err) {
+    const stdout = (err as { stdout?: Buffer }).stdout?.toString()
+    let reason = 'configured CLI failed; check its authentication and availability'
+    try { const e = JSON.parse(stdout ?? '{}'); if (e.is_error && typeof e.result === 'string') reason = e.result.slice(0, 300) } catch { /* no model envelope */ }
+    throw new Error(`load: ${reason}`)
+  }
+  const envelope = JSON.parse(output) as { is_error?: boolean; result?: string; usage?: Record<string, unknown> }
+  if (envelope.is_error || typeof envelope.result !== 'string') throw new Error('load: configured CLI did not return a successful completion')
+  if (envelope.usage) onUsage?.(envelope.usage)
+  return envelope.result
+}
+
+async function sdkText(model: string, system: string, user: string, schema?: Record<string, unknown>, onUsage?: (raw: Record<string, unknown>) => void): Promise<string> {
   const client = new Anthropic()
   const stream = client.messages.stream({
     model,
@@ -490,6 +484,7 @@ async function sdkText(model: string, system: string, user: string, schema?: Rec
     messages: [{ role: 'user', content: user }],
   })
   const message = await stream.finalMessage()
+  onUsage?.({ ...message.usage })
   if (message.stop_reason === 'refusal') throw new Error('extract: model refused the request')
   if (message.stop_reason === 'max_tokens') throw new Error('extract: output truncated — lower BATCH_CHARS')
   return message.content

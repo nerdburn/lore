@@ -19,6 +19,8 @@ import { sourceAdd, sourceList } from './source.js'
 import { KNOWN_SOURCES } from '../config.js'
 import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 import type { WriteGateOptions } from '../write.js'
+import { queryLoad, loadQuerySchema } from '../load/query.js'
+import { readLoad, loadFreshness } from '../load/store.js'
 
 const PULL_INTERVAL_MS = 60_000
 
@@ -30,6 +32,7 @@ const PULL_INTERVAL_MS = 60_000
  * that drifts. A test asserts the registered tools match this table exactly.
  */
 export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: string }[] = [
+  { name: 'lore_load', writes: false, summary: 'observed activity counts, project roles, source coverage and paginated evidence' },
   { name: 'lore_grep', writes: false, summary: 'regex search across synced memory' },
   { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
   { name: 'lore_status', writes: false, summary: "what's outstanding, ready to relay: summary, live open work, freshness" },
@@ -123,6 +126,22 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     const wrapped = writes.has(name) && hooks.serialize ? ((...args: Parameters<typeof handler>) => hooks.serialize!(async () => (handler as (...a: unknown[]) => Promise<unknown>)(...args))) : handler
     return server.registerTool(name, def, wrapped as typeof handler)
   }
+
+  tool(
+    'lore_load',
+    {
+      description: 'Query this project’s prebuilt Load activity counts. These are observed activities, never hours or effort. Report source coverage, semanticCoverage.pending/errors, unknown attribution and undated exclusions. Decisions, customer requests and commitments are inferred events with quoted evidence; distinguish accepted from candidates and source from inferred counts. Role filters default to involvement; use participation=performed for the primary actor. Legacy board mutations are candidates, not exact action counts. No extraction or writes occur. Use events=true for paginated evidence. Missing snapshot: ask the host operator to run lore load rebuild.',
+      inputSchema: loadQuerySchema.innerType().shape,
+    },
+    async (args) => {
+      freshen()
+      const snapshot = readLoad(ctx.root)
+      const freshness = loadFreshness(ctx.root, snapshot)
+      const result = queryLoad(snapshot, args)
+      if (freshness !== 'current') result.warnings.push(`Projection freshness: ${freshness}; rebuild to include newer source data or role mappings.`)
+      return text({ ...result, freshness })
+    },
+  )
 
   tool(
     'lore_grep',
