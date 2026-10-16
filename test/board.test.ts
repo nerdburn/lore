@@ -459,6 +459,11 @@ test('board assignees: offered from the project, and nothing else is accepted', 
   // Clearing is always allowed.
   const cleared = await api('/p/lore-acme/items/ACM-2', { method: 'PATCH', cookie: jane, body: { assignee: '', priority: 'P3' } })
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body))
+  const assigned = await api('/p/lore-acme/items/ACM-2', { method: 'PATCH', cookie: jane, body: { assignee: board.body.assignees[0] } })
+  assert.equal(assigned.body.item.assignee, board.body.assignees[0])
+  const unassigned = await api('/p/lore-acme/items/ACM-2', { method: 'PATCH', cookie: jane, body: { assignee: '' } })
+  assert.equal(unassigned.status, 200, JSON.stringify(unassigned.body))
+  assert.equal(unassigned.body.item.assignee, undefined)
 })
 
 test('board files: a member removes a file — it leaves the ticket and is no longer served; history says so', async () => {
