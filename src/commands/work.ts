@@ -312,7 +312,7 @@ export function workSet(cwd: string, key: string, fields: WorkSetInput, input: C
         ...(fields.title?.trim() ? { title: fields.title.trim() } : {}),
         ...(fields.description !== undefined ? { description: fields.description.trim() } : {}),
         ...(priority ? { priority } : {}),
-        ...(fields.assignee !== undefined ? { assignee: fields.assignee.trim() || undefined } : {}),
+        ...(fields.assignee !== undefined ? { assignee: fields.assignee.trim() || null } : {}),
         ...(fields.labels ? { labels: cleanList(fields.labels) } : {}),
       },
       { at, by: actor, via: opts.via ?? 'cli', reason, sources: sources.length ? sources : undefined },
