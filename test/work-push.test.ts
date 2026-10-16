@@ -9,6 +9,8 @@ import { equalityClauses, inSync, pickTransition, workPush } from '../src/comman
 import { mirrorExternal, readWorkItems, type LoreWorkItem } from '../src/work.js'
 import { ACME, captureConsole, makeContextRepo } from './helpers.js'
 
+const MIRROR_CONFIG = { ...ACME, sources: { jira: { projects: ['INPT'], boards: [293] } } }
+
 const AT = '2026-09-16T10:00:00.000Z'
 const SITE = 'https://acme.atlassian.net'
 const CFG = { project: 'acme', sources: { jira: { boards: [293], site: SITE, api_base: 'https://jira.int.example/rest/api/3' } }, extract: [] as string[] }
@@ -156,7 +158,7 @@ test('work push: status mapping — in sync means Jira already expresses lore\'s
 
 test('work push: transitions a linked ticket whose status differs, records it, and leaves in-sync tickets alone', async () => {
   const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }, { key: 'INPT-2', status: 'To Do', category: 'To Do' }]) }, CFG)
-  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   await captureConsole(() => workMove(root, 'ACM-1', 'done', { reason: 'shipped' }, { context: root, at: '2026-09-15T12:00:00.000Z' }))
   const jira = fakeJira({ 'INPT-1': 'In Progress', 'INPT-2': 'To Do' })
 
@@ -180,7 +182,7 @@ test('work push: transitions a linked ticket whose status differs, records it, a
 
   // The next sync rewrites the Jira table with what the push did; mirroring then sees no delta — lore already knows.
   writeFileSync(join(root, 'context/work/jira/board-293.yaml'), jiraTable([{ key: 'INPT-1', status: 'Done', category: 'Done' }, { key: 'INPT-2', status: 'To Do', category: 'To Do' }]))
-  const again = mirrorExternal(root, ACME, '2026-09-16T11:00:00.000Z')
+  const again = mirrorExternal(root, MIRROR_CONFIG, '2026-09-16T11:00:00.000Z')
   assert.equal(again.updated, 0)
   assert.equal(readWorkItems(root, 'ACM')[0].history.length, 3, 'created, moved by shawn, pushed — nothing more')
 
@@ -193,7 +195,7 @@ test('work push: transitions a linked ticket whose status differs, records it, a
 
 test('work push: creates a Jira issue for an open ticket without one, scoped onto the board, and links it back', async () => {
   const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'To Do', category: 'To Do' }]) }, CFG)
-  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   await captureConsole(() => workAdd(root, { title: 'Clause library', priority: 'P1', labels: ['agreement builder'], sources: ['https://slack.com/x'] }, { context: root, at: '2026-09-15T11:00:00.000Z' }))
   await captureConsole(() => workMove(root, 'ACM-2', 'in_progress', { reason: 'Cory started' }, { context: root, at: '2026-09-15T12:00:00.000Z' }))
   await captureConsole(() => workAdd(root, { title: 'Already shipped', status: 'done' }, { context: root, at: '2026-09-15T13:00:00.000Z' }))
@@ -239,7 +241,7 @@ test('work push: creates a Jira issue for an open ticket without one, scoped ont
   assert.deepEqual(item.history.at(-1)!.change, { external_status: ['To Do', 'In Progress'] })
   // Mirroring afterwards recognises the issue as already tracked — no duplicate ticket.
   const before = readWorkItems(root, 'ACM').length
-  mirrorExternal(root, ACME, '2026-09-16T11:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-16T11:00:00.000Z')
   assert.equal(readWorkItems(root, 'ACM').length, before)
 })
 
@@ -322,7 +324,7 @@ test('work push: an in-flight ticket in no sprint goes into the active sprint; t
 
 test('work push: an in-flight ticket the client already planned into a sprint is left there; no active sprint says so', async () => {
   const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }, { key: 'INPT-2', status: 'In Progress', category: 'In Progress' }]) }, CFG)
-  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   const jira = scrum(fakeJira({ 'INPT-1': 'In Progress', 'INPT-2': 'In Progress' }))
   jira.sprints.membership['INPT-1'] = 15
 
@@ -337,7 +339,7 @@ test('work push: an in-flight ticket the client already planned into a sprint is
 
 test('work push --sprint: named tickets go into the sprint asked for, whatever their status', async () => {
   const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'To Do', category: 'To Do' }, { key: 'INPT-2', status: 'To Do', category: 'To Do' }]) }, CFG)
-  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   const jira = scrum(fakeJira({ 'INPT-1': 'To Do', 'INPT-2': 'To Do' }))
   jira.sprints.membership['INPT-2'] = 15
 
@@ -358,14 +360,14 @@ test('work push --sprint: named tickets go into the sprint asked for, whatever t
 
 test('work push sprints: kanban boards and opted-out clients never get sprint changes; the board is found or named', async () => {
   const root = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }]) }, CFG)
-  mirrorExternal(root, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   const kanban = fakeJira({ 'INPT-1': 'In Progress' })
   assert.deepEqual((await workPush(root, { all: true }, { context: root, at: AT }, kanban.deps)).actions, [], 'kanban: nothing to report')
   const asked = await workPush(root, { keys: ['ACM-1'], sprint: 'active' }, { context: root, at: AT }, kanban.deps)
   assert.deepEqual(asked.actions, [{ key: 'ACM-1', kind: 'error', detail: 'board Jointly is a kanban board — it has no sprints', jira: 'INPT-1' }])
 
   const off = makeContextRepo({ 'context/work/jira/board-293.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }]) }, { ...CFG, sources: { jira: { ...CFG.sources.jira, push: { sprints: false } } } })
-  mirrorExternal(off, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(off, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   const offJira = scrum(fakeJira({ 'INPT-1': 'In Progress' }))
   assert.deepEqual((await workPush(off, { all: true }, { context: off, at: AT }, offJira.deps)).actions, [])
   assert.ok(!offJira.calls.some((c) => c.startsWith('sprint')), 'sprints off: no sprint lookups at all')
@@ -373,7 +375,7 @@ test('work push sprints: kanban boards and opted-out clients never get sprint ch
   // No boards configured: the project's one scrum board, else ask for push.board.
   const byProject = { project: 'acme', sources: { jira: { projects: ['INPT'], site: SITE, api_base: 'https://jira.int.example/rest/api/3' } }, extract: [] as string[] }
   const p = makeContextRepo({ 'context/work/jira/INPT.yaml': jiraTable([{ key: 'INPT-1', status: 'In Progress', category: 'In Progress' }]) }, byProject)
-  mirrorExternal(p, ACME, '2026-09-15T10:00:00.000Z')
+  mirrorExternal(p, MIRROR_CONFIG, '2026-09-15T10:00:00.000Z')
   const one = scrum(fakeJira({ 'INPT-1': 'In Progress' }))
   one.sprints.projectBoards = [{ id: 7, name: 'INPT kanban', type: 'kanban' }, { id: 8, name: 'INPT sprints', type: 'scrum' }]
   const r = await workPush(p, { all: true }, { context: p, at: AT }, one.deps)

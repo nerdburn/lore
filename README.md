@@ -353,9 +353,6 @@ everything else is kept verbatim), so an incremental fold is small and
 never drops an existing item. A first fold or multi-batch re-fold uses
 `LORE_MODEL` (default `claude-opus-4-8`); the routine one-batch fold onto
 existing artifacts uses `LORE_MODEL_INCREMENTAL` (default `claude-sonnet-5`).
-With `TYPESAFE_API_KEY` set, a fast Jev check on the new material skips
-incremental folds with nothing to find (see docs/DEPLOY_EXE.md, "Fold gate";
-`lore gate replay` measures it on a client's history first).
 
 </details>
 
@@ -459,10 +456,10 @@ negative matches, are cached by the ticket requirements, PR evidence and
 model in `context/delivery/matches.json`. Each extract evaluates at most 240
 uncached pairs; later runs automatically continue the catch-up. API failures
 keep known links and retry on a later extract. `LORE_PR_MATCHING=off` disables
-new Jev evaluations independently of `LORE_GATE=off`.
+new Jev evaluations.
 
-Changed relationships create delivery stream events that always bypass the
-fold gate. The fold reads ticket descriptions, related PR states, coverage
+Changed relationships create delivery stream events for extraction. The fold
+reads ticket descriptions, related PR states, coverage
 judgments and PR descriptions, then applies its existing cited,
 high-confidence status-change rules. A related or merged PR alone never
 automatically completes a ticket; partial implementation and outstanding
@@ -504,6 +501,11 @@ lore board show --context lore-acme
 ```
 
 People sign in with an emailed 6-digit code and stay signed in for 90 days.
+The server caches parsed board configs and tickets in memory, checking each
+file's Git blob ID on every read. Ticket edits and access changes take effect
+immediately; unchanged files stay cached across sync commits. The cache holds
+at most 128 files and 16 MiB of source data (parsed heap usage may be larger),
+evicting the least recently used entries. No Redis or extra service is needed.
 Host admins (`LORE_BOARD_ADMINS`) are members of every enabled board. Every
 board change is a history entry `via: web` signed with the person's email,
 committed and pushed like any other write — the fold treats it as a human
@@ -578,6 +580,41 @@ into its stream docs, so recall and the fold can say "JNT-12 is in Sprint 14".
 Jira is reachable only from the lore host, so from a laptop or agent the
 command runs itself there over SSH (like `lore refresh --trigger`) and pulls
 the result back. The timer never pushes.
+
+### Load — observed project activity
+
+Load counts retained PR openings, emails, meetings, board changes, and assignment
+transitions, with evidence and project-specific actor roles. It separates human,
+agent, service, and unknown accounts. These are activity counts, not hours or
+capacity. Coverage gaps and ambiguous historical board changes remain visible.
+An optional semantic stage also tracks decisions, customer requests, and human
+commitments with quoted evidence and separate accepted/candidate counts.
+
+```sh
+lore load rebuild --preview --json
+lore load rebuild
+lore load --from 2026-09-01 --to 2026-10-01 --type pr.created --group-by role
+lore load events --type meeting.held --role technical_lead --participation attendee
+lore load extract --max-batches 1
+lore load events --type decision.made --method inferred --json
+lore load --type ticket.completed
+```
+
+Configure `load.actors` and `load.timezone` in `lore.json`; `load.enabled: true`
+enables rebuilding after self-hosted sync, independently of LLM extraction.
+`load.semantic.enabled: true` enables bounded semantic batches during scheduled
+extraction; set `load.semantic.from` to choose a historical starting date.
+With `TYPESAFE_API_KEY`, `load.semantic.gate: {"mode":"shadow","threshold":0.3}`
+measures Jev's event screening without skipping evidence. After validating a
+threshold, `mode: "filter"` lets clearly low-signal passages bypass Claude;
+uncertain passages, long documents and provider failures still reach extraction.
+Scores are cached by content/model/classifier version, and disabling or changing
+the gate reopens its skipped checkpoints. Ordinary artifact extraction does
+not use this filter. Load also records separate Jev and
+Claude usage metrics; see the evaluation and configuration details below.
+Commit inputs/config before rebuilding in a Git context. CLI and the read-only
+`lore_load` MCP tool query the same cached projection. See
+[Load configuration, counting rules, and roadmap](docs/LOAD.md).
 
 ### Commitments — statements of work
 

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { loadConfigSchema } from './load/schema.js'
 
 const backfillSchema = z
   .object({ months: z.number().int().min(0).default(0) })
@@ -52,6 +53,8 @@ export const sourceSchemas = {
     overlap_days: z.number().min(0).optional(),
       /** Days a thread stays tracked for late replies (default 30). */
       thread_window_days: z.number().min(0).optional(),
+      /** Days back that team 👍/✅ reactions are checked for approved client requests or ticket completion (default 7). */
+      reaction_window_days: z.number().min(0).optional(),
     })
     .refine((s) => s.token || s.api_base, { message: 'slack needs a token (env:…) or an api_base proxy that injects one', path: ['token'] }),
   github: baseSource
@@ -293,6 +296,8 @@ export const configSchema = z.object({
   sources: sourcesSchema.default({}),
   backfill: backfillSchema.default({ months: 0 }),
   extract: z.array(z.string()).default([]),
+  /** Activity counts and project-specific actor assignments. Independent of LLM extraction. */
+  load: loadConfigSchema.optional(),
   report: z
     .object({ post_to: z.string(), day: z.string().default('friday') })
     .optional(),

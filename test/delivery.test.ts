@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { stringify } from 'yaml'
 import { loadConfig } from '../src/config.js'
 import { explicitPrReference, reconcileDelivery } from '../src/delivery.js'
-import { alwaysFolds, type Fetch } from '../src/gate.js'
+import { type Fetch } from '../src/jev.js'
 import { describeWorkForPrompt, mirrorExternal, readWorkItems, writeWorkItems, type LoreWorkItem } from '../src/work.js'
 import { recallData } from '../src/recall.js'
 import { extract, streamFiles } from '../src/commands/extract.js'
@@ -67,7 +67,7 @@ test('delivery: explicit relationships refresh without Jev, preserve description
   assert.equal(rows(root)[0].history.length, 1)
   const streams = streamFiles(root)
   assert.equal(streams.length, 1)
-  assert.ok(alwaysFolds(streams[0].path))
+  assert.match(streams[0].path, /^context\/streams\/delivery\//)
   assert.match(streams[0].text, /UI and email remain/)
   assert.match(describeWorkForPrompt(rows(root), '2026-10-01'), /Description: Reset endpoint/)
   const recalled = recallData(root, config, 'work').work['lore/ACM'].open[0] as LoreWorkItem
@@ -211,7 +211,7 @@ test('delivery: bounded catch-up continues automatically without repeating evalu
   assert.equal(second.pending, 0)
 })
 
-test('extract: historical delivery evidence bypasses a negative gate and reaches the fold with descriptions', async () => {
+test('extract: historical delivery evidence reaches the fold with descriptions without extra classification', async () => {
   const { root } = fixture([ticket()], [pr(42, { state: 'closed', merged: true, draft: false })])
   writeFileSync(join(root, 'context/derived/requests.yaml'), '- id: req-0001\n  request: Account recovery\n  status: open\n')
   const bin = join(root, 'bin')
@@ -226,19 +226,18 @@ if (prompt.includes('# New material')) {
   console.log(JSON.stringify({result: JSON.stringify({requests: [], decisions: [], roadmap: [], contradictions: [], work_new: [], work_changes: [{key: 'ACM-1', status: 'in_progress', reason: 'Backend merged, UI and email remain', sources: ['https://github.com/acme/web/pull/42'], confidence: 'high', evidence_date: '2026-09-29'}]})}));
 } else console.log(JSON.stringify({result: 'Backend merged; UI and email remain.'}));
 `, { mode: 0o755 })
-  const names = ['PATH', 'LORE_LLM', 'TYPESAFE_API_KEY', 'LORE_PR_MATCHING', 'LORE_GATE'] as const
+  const names = ['PATH', 'LORE_LLM', 'TYPESAFE_API_KEY', 'LORE_PR_MATCHING'] as const
   const old = Object.fromEntries(names.map(name => [name, process.env[name]]))
   const realFetch = globalThis.fetch
-  let gateCalls = 0
+  let classificationCalls = 0
   try {
     process.env.PATH = `${bin}:${process.env.PATH}`
     process.env.LORE_LLM = 'cli'
     process.env.TYPESAFE_API_KEY = 'test'
     process.env.LORE_PR_MATCHING = 'off'
-    delete process.env.LORE_GATE
-    globalThis.fetch = (async () => { gateCalls++; throw new Error('Delivery must bypass the gate') }) as Fetch
+    globalThis.fetch = (async () => { classificationCalls++; throw new Error('No classification expected with PR matching disabled') }) as Fetch
     await captureConsole(() => extract(root))
-    assert.equal(gateCalls, 0, 'the fold must run without consulting the chatter gate')
+    assert.equal(classificationCalls, 0, 'ordinary extraction needs no additional classification')
     const prompt = readFileSync(promptFile, 'utf8')
     assert.match(prompt, /Related PR acme\/web#42/)
     assert.match(prompt, /Reset endpoint, email and reset screen/)

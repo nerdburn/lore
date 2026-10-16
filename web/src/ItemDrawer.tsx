@@ -242,7 +242,7 @@ function Description({ value, canEdit, saving, onSave }: { value: string; canEdi
   )
 }
 
-const VIA: Record<HistoryEntry['via'], string> = { cli: 'CLI', mcp: 'agent', web: 'board', sync: 'tracker sync', fold: 'lore (inferred)' }
+const VIA: Record<HistoryEntry['via'], string> = { cli: 'CLI', mcp: 'agent', web: 'board', slack: 'Slack reaction', sync: 'tracker sync', fold: 'lore (inferred)' }
 
 function HistoryRow({ h }: { h: HistoryEntry }) {
   return (

@@ -47,7 +47,7 @@ async function projectedWrite(cwd: string, opts: WorkWriteOptions, fn: (root: st
   })
 }
 function localOptions(opts: WorkWriteOptions): WorkWriteOptions {
-  return { by: opts.by, actor: opts.actor, via: opts.via, at: opts.at, pull: false }
+  return { by: opts.by, actor: opts.actor, via: opts.via, at: opts.at, operationId: opts.operationId, pull: false }
 }
 export async function workMove(cwd: string, key: string, status: string, input: ChangeInput, opts: WorkWriteOptions = {}): Promise<LoreWorkItem> {
   return projectedWrite(cwd, opts, root => moveLocal(root, key, status, input, root === cwd ? opts : localOptions(opts)))

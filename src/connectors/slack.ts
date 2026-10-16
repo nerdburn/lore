@@ -21,6 +21,16 @@ import type { Connector, ConnectorContext, Doc, RemoteAttachment } from '../type
  * Rate-limit aware: honors 429 Retry-After, which matters for backfills (new
  * non-Marketplace apps get ~1 req/min on conversations.history).
  *
+ * Reactions are candidate delivery signals: a team member's 👍 can approve
+ * a client request, a ✅ can mean "done". The connector only
+ * records them (SLACK_REACTIONS); `applySlackReactions` turns them into
+ * tracker changes after sync, checking for a request before ticket creation.
+ * Reactions land after the message, so history
+ * is re-read back to `reaction_window_days` (default 7) and threads active in
+ * that window are re-read whole — the same calls sync already makes, with a
+ * wider window. "Team" is a full member of the bot's workspace; guests
+ * (single/multi-channel) and Slack Connect users are the client side.
+ *
  * Failure model: a channel that fails mid-fetch (an API error other than
  * the ones handled below) is reported and keeps its previous cursor, while
  * the other channels still sync. A tracked thread whose parent was deleted
@@ -55,10 +65,41 @@ const DEFAULT_API_BASE = 'https://slack.com/api'
  */
 const DEFAULT_OVERLAP_DAYS = 1
 const DEFAULT_THREAD_WINDOW_DAYS = 30
+const DEFAULT_REACTION_WINDOW_DAYS = 7
+/** Reaction records older than this are dropped from the index; their tickets already exist. */
+const REACTION_KEEP_DAYS = 60
 const DAY_S = 86_400
 
 export const SLACK_FILES = 'context/source-files/slack.yaml'
 interface MessageFiles { channel: string; files: RemoteAttachment[] }
+
+export const SLACK_REACTIONS = 'context/source-files/slack-reactions.yaml'
+/** A candidate client message with team 👍/✅; request intent must be checked before creation. Keyed by permalink. */
+export interface ReactionSignal {
+  channel: string
+  /** Slack message ts. */
+  ts: string
+  author: string
+  text: string
+  /** Display names of the team members who reacted. */
+  ticket?: string[]
+  done?: string[]
+}
+
+const TICKET_REACTION = /^(\+1|thumbsup)(::skin-tone-\d)?$/
+const DONE_REACTION = /^(white_check_mark|heavy_check_mark|ballot_box_with_check)$/
+
+/** Team 👍/✅ reactions on a message by someone outside the team; undefined when there are none. */
+export function reactionSignal(msg: Pick<SlackMessage, 'ts' | 'user' | 'text' | 'reactions'>, channel: string, users: Map<string, SlackUser>): ReactionSignal | undefined {
+  if (!msg.reactions?.length || (msg.user && users.get(msg.user)?.team)) return
+  const by = (pattern: RegExp) => [...new Set(msg.reactions!.filter((r) => pattern.test(r.name)).flatMap((r) => r.users ?? [])
+    .filter((u) => users.get(u)?.team).map((u) => users.get(u)!.name))]
+  const ticket = by(TICKET_REACTION)
+  const done = by(DONE_REACTION)
+  if (!ticket.length && !done.length) return
+  return { channel, ts: msg.ts, author: (msg.user && users.get(msg.user)?.name) || msg.user || 'unknown', text: msg.text ?? '',
+    ...(ticket.length ? { ticket } : {}), ...(done.length ? { done } : {}) }
+}
 
 /** Workspace URLs and generic permalinks identify the same message; query strings do not. */
 export function slackMessageRef(raw: string): string | undefined {
@@ -70,7 +111,7 @@ export function slackMessageRef(raw: string): string | undefined {
   } catch { /* not a URL */ }
 }
 
-function readFileIndex(text: string | undefined): Record<string, MessageFiles> {
+function readFileIndex<T = MessageFiles>(text: string | undefined): Record<string, T> {
   const value = text ? parse(text) : {}
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
@@ -121,16 +162,19 @@ export const slack: Connector = {
     if (wanted.length === 0) throw new Error('slack: no channels whitelisted in config')
     const overlapS = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_S
     const threadWindowS = numberOr(ctx.config.thread_window_days, DEFAULT_THREAD_WINDOW_DAYS) * DAY_S
+    const reactionWindowS = numberOr(ctx.config.reaction_window_days, DEFAULT_REACTION_WINDOW_DAYS) * DAY_S
 
     const api = slackClient(apiBase, token)
     const team = await teamId(api)
-    const users = await userMap(api)
+    const users = await userMap(api, team)
     const channels = await channelMap(api)
     const cursor = { ...(ctx.cursor as SlackCursor) }
     const docs: Doc[] = []
     const errors: string[] = []
     const nowS = Date.now() / 1000
     const fileIndex = readFileIndex(ctx.readFile(SLACK_FILES))
+    const reactionIndex = readFileIndex<ReactionSignal>(ctx.readFile(SLACK_REACTIONS))
+    const reactionFrom = nowS - reactionWindowS
 
     for (const name of wanted) {
       const channel = channels.get(name.replace(/^#/, ''))
@@ -141,15 +185,23 @@ export const slack: Connector = {
       const prev = readCursor(cursor[channel.id])
       const meta = { team, channel: channel.id }
       const channelFiles: Record<string, MessageFiles> = {}
+      const channelReactions: Record<string, ReactionSignal> = {}
       const mkDoc = (msg: SlackMessage, thread?: string) => {
         const doc = toDoc(msg, name, channel.id, users, meta, thread)
         channelFiles[doc.permalink!] = { channel: name, files: messageFiles(msg, doc.permalink!, doc.author) }
         return doc
       }
-      /** Replies for one thread; a deleted parent means "stop tracking it", not a failed sync. */
+      const noteReactions = (msg: SlackMessage) => {
+        if (Number(msg.ts) < reactionFrom) return
+        const signal = reactionSignal(msg, name, users)
+        if (signal) channelReactions[permalinkFor(channel.id, msg.ts)] = signal
+      }
+      /** Replies for one thread; a deleted parent means "stop tracking it", not a failed sync. A thread
+       * active inside the reaction window is re-read whole so reactions on earlier replies are seen. */
       const replies = async (parentTs: string, after: string | undefined): Promise<string | undefined | null> => {
         try {
-          return await pullReplies(api, channel.id, parentTs, after, (r) => docs.push(mkDoc(r, parentTs)))
+          const whole = after === undefined || Number(after) >= reactionFrom
+          return await pullReplies(api, channel.id, parentTs, after, (r) => docs.push(mkDoc(r, parentTs)), whole ? noteReactions : undefined)
         } catch (err) {
           if (err instanceof SlackApiError && err.code === 'thread_not_found') {
             ctx.log(`slack: ${name} thread ${parentTs} no longer exists — dropped from tracking`)
@@ -163,7 +215,7 @@ export const slack: Connector = {
       // No cursor (first sync, or channel newly added to config) → start at
       // the backfill window. Otherwise back off by the overlap so late edits
       // and deliveries are re-read; dedupe makes the re-read harmless.
-      const oldest = prev ? String(Math.max(Number(prev.ts) - overlapS, ctx.since / 1000)) : String(ctx.since / 1000)
+      const oldest = prev ? String(Math.max(Math.min(Number(prev.ts) - overlapS, reactionFrom), ctx.since / 1000)) : String(ctx.since / 1000)
       let latestSeen = prev?.ts ?? oldest
       const threads: Record<string, string> = {}
       const seenParents = new Set<string>()
@@ -182,6 +234,7 @@ export const slack: Connector = {
           for (const msg of messages) {
             if ((!msg.text && !msg.files?.length) || msg.subtype === 'channel_join') continue
             docs.push(mkDoc(msg))
+            noteReactions(msg)
             if (msg.ts > latestSeen) latestSeen = msg.ts
 
             if (msg.reply_count && msg.reply_count > 0) {
@@ -208,6 +261,11 @@ export const slack: Connector = {
           if (entry.files.length) fileIndex[ref] = entry
           else delete fileIndex[ref]
         }
+        // This channel's window was re-read: what it holds now replaces what the index had.
+        for (const [ref, entry] of Object.entries(reactionIndex)) {
+          if (entry.channel === name && Number(entry.ts) >= reactionFrom) delete reactionIndex[ref]
+        }
+        Object.assign(reactionIndex, channelReactions)
         ctx.log(`slack: ${name} → ${docs.length} docs so far`)
       } catch (err) {
         // This channel keeps its previous cursor and is retried next run;
@@ -217,18 +275,27 @@ export const slack: Connector = {
       }
     }
 
-    return { docs, nextCursor: cursor, files: { [SLACK_FILES]: stringify(fileIndex) }, ...(errors.length ? { errors } : {}) }
+    for (const [ref, entry] of Object.entries(reactionIndex)) if (Number(entry.ts) < nowS - REACTION_KEEP_DAYS * DAY_S) delete reactionIndex[ref]
+    return {
+      docs,
+      nextCursor: cursor,
+      files: { [SLACK_FILES]: stringify(fileIndex), [SLACK_REACTIONS]: stringify(reactionIndex) },
+      ...(errors.length ? { errors } : {}),
+    }
   },
 }
 
 /** Fetch replies to one thread, newer than `after` when given (exclusive).
- * Returns the newest reply ts seen, or undefined when there were none. */
+ * Returns the newest reply ts seen, or undefined when there were none.
+ * With `scan`, the whole thread is read and every reply passed to it;
+ * only replies newer than `after` are still emitted. */
 async function pullReplies(
   api: SlackApi,
   channel: string,
   parentTs: string,
   after: string | undefined,
   emit: (reply: SlackMessage) => void,
+  scan?: (reply: SlackMessage) => void,
 ): Promise<string | undefined> {
   let newest: string | undefined
   let pageCursor: string | undefined
@@ -237,11 +304,12 @@ async function pullReplies(
       channel,
       ts: parentTs,
       limit: '200',
-      ...(after ? { oldest: after } : {}),
+      ...(after && !scan ? { oldest: after } : {}),
       ...(pageCursor ? { cursor: pageCursor } : {}),
     })
     for (const reply of (res.messages as SlackMessage[]) ?? []) {
       if (reply.ts === parentTs || (!reply.text && !reply.files?.length)) continue
+      scan?.(reply)
       if (after && reply.ts <= after) continue
       emit(reply)
       if (!newest || reply.ts > newest) newest = reply.ts
@@ -270,7 +338,11 @@ interface SlackMessage {
   reply_count?: number
   edited?: { user?: string; ts: string }
   files?: SlackFile[]
+  reactions?: { name: string; users?: string[]; count?: number }[]
 }
+
+/** `team`: a full member of the bot's workspace — not a guest, bot, deactivated or Slack Connect user. */
+interface SlackUser { name: string; team: boolean; email?: string }
 
 interface SlackFile {
   id: string
@@ -313,13 +385,27 @@ async function teamId(api: SlackApi): Promise<string> {
   return (res.team_id as string) ?? 'unknown'
 }
 
-async function userMap(api: SlackApi): Promise<Map<string, string>> {
-  const map = new Map<string, string>()
+interface SlackMember {
+  id: string
+  team_id?: string
+  deleted?: boolean
+  is_bot?: boolean
+  is_restricted?: boolean
+  is_ultra_restricted?: boolean
+  profile?: { display_name?: string; real_name?: string; email?: string }
+}
+
+async function userMap(api: SlackApi, team: string): Promise<Map<string, SlackUser>> {
+  const map = new Map<string, SlackUser>()
   let cursor: string | undefined
   do {
     const res = await api('users.list', { limit: '200', ...(cursor ? { cursor } : {}) })
-    for (const u of (res.members as { id: string; profile?: { display_name?: string; real_name?: string } }[]) ?? []) {
-      map.set(u.id, u.profile?.display_name || u.profile?.real_name || u.id)
+    for (const u of (res.members as SlackMember[]) ?? []) {
+      map.set(u.id, {
+        name: u.profile?.display_name || u.profile?.real_name || u.id,
+        email: u.profile?.email?.toLowerCase(),
+        team: !u.deleted && !u.is_bot && !u.is_restricted && !u.is_ultra_restricted && u.id !== 'USLACKBOT' && (!u.team_id || u.team_id === team),
+      })
     }
     cursor = (res.response_metadata as { next_cursor?: string })?.next_cursor || undefined
   } while (cursor)
@@ -347,23 +433,28 @@ function toDoc(
   msg: SlackMessage,
   channelName: string,
   channelId: string,
-  users: Map<string, string>,
+  users: Map<string, SlackUser>,
   ids: { team: string; channel: string },
   thread?: string,
 ): Doc {
   const meta: Record<string, string> = { team: ids.team, channel: ids.channel }
   if (msg.user) meta.user = msg.user
   else if (msg.bot_id) meta.bot = msg.bot_id
+  if (msg.user && users.get(msg.user)?.email) meta.email = users.get(msg.user)!.email!
   if (msg.edited) meta.edited = msg.edited.ts
   return {
     id: `slack-${channelId}-${msg.ts}`,
     source: 'slack',
     channel: channelName,
-    author: (msg.user && users.get(msg.user)) || msg.user || 'unknown',
+    author: (msg.user && users.get(msg.user)?.name) || msg.user || 'unknown',
     timestamp: new Date(Number(msg.ts) * 1000).toISOString(),
-    permalink: `https://slack.com/archives/${channelId}/p${msg.ts.replace('.', '')}`,
+    permalink: permalinkFor(channelId, msg.ts),
     thread,
     meta,
     text: [msg.text ?? '', ...(msg.files ?? []).map((f) => `Attachment: ${JSON.stringify(f.name || f.title || f.id)} (${f.mimetype || 'file'}; Slack file ${f.id})`)].filter(Boolean).join('\n\n'),
   }
+}
+
+function permalinkFor(channelId: string, ts: string): string {
+  return `https://slack.com/archives/${channelId}/p${ts.replace('.', '')}`
 }

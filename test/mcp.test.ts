@@ -9,6 +9,8 @@ import { readAudit } from '../src/audit.js'
 import { createServer, MCP_TOOLS } from '../src/commands/mcp.js'
 import { resolveContext } from '../src/context.js'
 import { recallData } from '../src/recall.js'
+import { rebuildLoad } from '../src/load/store.js'
+import { queryLoad } from '../src/load/query.js'
 import { ACME, fullFixtureRepo, makeContextRepo } from './helpers.js'
 
 async function connect(root: string) {
@@ -26,12 +28,13 @@ async function connect(root: string) {
   return { client, call, close: () => Promise.all([client.close(), server.close()]) }
 }
 
-test('mcp: exposes the nineteen tools', async () => {
+test('mcp: exposes the registered tools including read-only Load', async () => {
   const s = await connect(fullFixtureRepo())
   const tools = (await s.client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
     'lore_doc_add',
     'lore_grep',
+    'lore_load',
     'lore_project_item_add',
     'lore_project_item_move',
     'lore_read',
@@ -55,9 +58,25 @@ test('mcp: exposes the nineteen tools', async () => {
   assert.deepEqual([...MCP_TOOLS.map((t) => t.name)].sort(), tools)
   assert.deepEqual(
     MCP_TOOLS.filter((t) => !t.writes).map((t) => t.name),
-    ['lore_grep', 'lore_read', 'lore_status', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
+    ['lore_load', 'lore_grep', 'lore_read', 'lore_status', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
   )
   await s.close()
+})
+
+test('mcp: Load shares query results and requires a built snapshot', async () => {
+  const root = fullFixtureRepo()
+  const s = await connect(root)
+  try {
+    assert.equal((await s.call('lore_load')).isError, true)
+    const snapshot = rebuildLoad(root)
+    const result = await s.call('lore_load', { groupBy: 'type', events: true, limit: 2 })
+    assert.equal(result.isError, false)
+    const { freshness, warnings, ...actual } = JSON.parse(result.text)
+    const { warnings: expectedWarnings, ...expected } = queryLoad(snapshot, { groupBy: 'type', events: true, limit: 2 })
+    assert.deepEqual(actual, JSON.parse(JSON.stringify(expected)))
+    assert.equal(freshness, 'unknown')
+    assert.ok(warnings.length >= expectedWarnings.length)
+  } finally { await s.close() }
 })
 
 test('mcp: lore_recall with no category matches the CLI recall surface exactly', async () => {

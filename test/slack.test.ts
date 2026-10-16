@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { slack } from '../src/connectors/slack.js'
+import { parse } from 'yaml'
+import { slack, SLACK_REACTIONS } from '../src/connectors/slack.js'
 import type { ConnectorContext } from '../src/types.js'
 
 /**
@@ -16,6 +17,7 @@ interface Msg {
   reply_count?: number
   edited?: { ts: string }
   files?: { id: string; name?: string; mimetype?: string; size?: number; url_private?: string }[]
+  reactions?: { name: string; users: string[]; count?: number }[]
 }
 
 function fakeSlack() {
@@ -49,8 +51,10 @@ function fakeSlack() {
         return json({
           ok: true,
           members: [
-            { id: 'U0PRIYA', profile: { display_name: 'Priya' } },
+            { id: 'U0PRIYA', profile: { display_name: 'Priya', email: 'Priya@acme.com' } },
             { id: 'U0SHAWN', profile: { display_name: '', real_name: 'Shawn Adrian' } },
+            { id: 'U0CORY', team_id: 'T0TEAM', profile: { display_name: 'cory' } },
+            { id: 'U0GUEST', team_id: 'T0TEAM', is_restricted: true, is_ultra_restricted: true, profile: { display_name: 'Brayden' } },
           ],
         })
       case 'conversations.list':
@@ -113,7 +117,7 @@ test('slack: first sync backfills from `since`, maps users, keeps machine ids', 
   assert.equal(first.author, 'Priya')
   assert.equal(first.channel, '#acme')
   assert.equal(first.permalink, `https://slack.com/archives/C0ACME/p${daysAgo(5).replace('.', '')}`)
-  assert.deepEqual(first.meta, { team: 'T0TEAM', channel: 'C0ACME', user: 'U0PRIYA', edited: daysAgo(4) })
+  assert.deepEqual(first.meta, { team: 'T0TEAM', channel: 'C0ACME', user: 'U0PRIYA', email: 'priya@acme.com', edited: daysAgo(4) })
   assert.equal(docs[1].author, 'U0BOT')
   const c = nextCursor.C0ACME as { ts: string; threads: Record<string, string> }
   assert.equal(c.ts, daysAgo(3))
@@ -338,4 +342,41 @@ test('slack: downloads use the file token or file proxy and refuse unrelated hos
   assert.equal(calls.length, 2)
   globalThis.fetch = (async () => new Response('<html>Login</html>', { headers: { 'content-type': 'text/html' } })) as typeof fetch
   await assert.rejects(slack.download!(ac, att), /login page/)
+})
+
+test('slack: team 👍/✅ on client messages are indexed, in history and in threads; guest and team-authored ones are not', async () => {
+  const s = fakeSlack()
+  const parent = daysAgo(3)
+  s.history.C0ACME = [
+    { ts: daysAgo(20), user: 'U0GUEST', text: 'old ask', reactions: [{ name: '+1', users: ['U0CORY'] }] },
+    { ts: parent, user: 'U0GUEST', text: 'Rename Affiliate to Ambassador', reply_count: 1, reactions: [{ name: '+1::skin-tone-3', users: ['U0CORY'] }, { name: 'joy', users: ['U0SHAWN'] }] },
+    { ts: daysAgo(2), user: 'U0GUEST', text: 'self-approved', reactions: [{ name: '+1', users: ['U0GUEST'] }] },
+    { ts: daysAgo(2, '000200'), user: 'U0CORY', text: 'Build 37 pushed', reactions: [{ name: '+1', users: ['U0SHAWN'] }] },
+  ]
+  s.replies[parent] = [{ ts: daysAgo(2, '000300'), user: 'U0GUEST', text: 'also the footer', reactions: [{ name: 'white_check_mark', users: ['U0SHAWN', 'U0CORY'] }] }]
+  const { files } = await slack.fetch(ctx({ config: { token: 't', channels: ['#acme'], reaction_window_days: 7 } }))
+  const index = parse(files![SLACK_REACTIONS]) as Record<string, { ticket?: string[]; done?: string[]; author: string; text: string }>
+  const link = (ts: string) => `https://slack.com/archives/C0ACME/p${ts.replace('.', '')}`
+  assert.deepEqual(Object.keys(index).sort(), [link(parent), link(daysAgo(2, '000300'))].sort())
+  assert.deepEqual(index[link(parent)], { channel: '#acme', ts: parent, author: 'Brayden', text: 'Rename Affiliate to Ambassador', ticket: ['cory'] })
+  assert.deepEqual(index[link(daysAgo(2, '000300'))].done, ['Shawn Adrian', 'cory'])
+})
+
+test('slack: a thread active in the reaction window is re-read whole; replies are still emitted once', async () => {
+  const s = fakeSlack()
+  const parent = daysAgo(3)
+  s.history.C0ACME = [{ ts: parent, user: 'U0GUEST', text: 'parent', reply_count: 2 }]
+  s.replies[parent] = [
+    { ts: daysAgo(3, '000200'), user: 'U0GUEST', text: 'first reply' },
+    { ts: daysAgo(1), user: 'U0CORY', text: 'second reply' },
+  ]
+  const first = await slack.fetch(ctx())
+  s.replies[parent][0].reactions = [{ name: '+1', users: ['U0CORY'] }]
+  s.calls.length = 0
+  const second = await slack.fetch(ctx({ cursor: first.nextCursor, readFile: (rel) => first.files?.[rel] }))
+  const call = s.calls.find((c) => c.method === 'conversations.replies')!
+  assert.equal(call.params.oldest, undefined)
+  assert.deepEqual(second.docs.filter((d) => d.thread).map((d) => d.text), [], 'no reply newer than the last one seen')
+  const index = parse(second.files![SLACK_REACTIONS]) as Record<string, { ticket?: string[] }>
+  assert.deepEqual(Object.values(index).map((e) => e.ticket), [['cory']])
 })
