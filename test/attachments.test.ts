@@ -15,6 +15,8 @@ import type { Connector, RemoteAttachment } from '../src/types.js'
 import { mirrorExternal, readWorkItems } from '../src/work.js'
 import { ACME, captureConsole, makeContextRepo } from './helpers.js'
 
+const MIRROR_CONFIG = { ...ACME, sources: { jira: { projects: ['ACM'] } } }
+
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const realFetch = globalThis.fetch
 afterEach(() => {
@@ -111,7 +113,7 @@ const jiraTable = (rows: { key: string; category: string }[]) =>
 
 test('attachments import: files on open linked tickets are stored and recorded once; oversize ones are linked; closed tickets are left alone', async () => {
   const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable([{ key: 'ACM-7', category: 'To Do' }, { key: 'ACM-8', category: 'In Progress' }]) }, { ...ACME, sources: { jira: { projects: ['ACM'], site: 'https://acme.atlassian.net' } } })
-  mirrorExternal(root, ACME)
+  mirrorExternal(root, MIRROR_CONFIG)
   const shot = Buffer.from('screenshot bytes')
   const tracker = fakeTracker({
     'jira:ACM-7': [{ name: 'shot.png', bytes: shot, mime: 'image/png' }, { name: 'walkthrough.mov', size: 500 * 1024 * 1024 }],
@@ -139,14 +141,14 @@ test('attachments import: files on open linked tickets are stored and recorded o
 
   // Closed in the tracker → closed in lore → not scanned.
   writeFileSync(join(root, 'context/work/jira/ACM.yaml'), jiraTable([{ key: 'ACM-7', category: 'Done' }, { key: 'ACM-8', category: 'Done' }]))
-  mirrorExternal(root, ACME)
+  mirrorExternal(root, MIRROR_CONFIG)
   const closed = fakeTracker({ 'jira:ACM-7': [{ name: 'late.png', bytes: Buffer.from('x') }] })
   assert.deepEqual(await importAttachments(root, ACME as never, { jira: closed }, store, cfg), { imported: 0, skipped: 0, errors: [] })
 })
 
 test('attachments import: a file someone removed from the ticket is not imported again', async () => {
   const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable([{ key: 'ACM-7', category: 'To Do' }]) }, { ...ACME, sources: { jira: { projects: ['ACM'], site: 'https://acme.atlassian.net', api_base: 'https://jira.int.example/rest/api/3' } } })
-  mirrorExternal(root, ACME)
+  mirrorExternal(root, MIRROR_CONFIG)
   const tracker = fakeTracker({ 'jira:ACM-7': [{ name: 'noise.png', bytes: Buffer.from('noise') }] })
   const store = createBlobStore({ dir: mkdtempSync(join(tmpdir(), 'lore-blobs-')) })
   await importAttachments(root, ACME as never, { jira: tracker }, store, () => ({}))
@@ -161,7 +163,7 @@ test('attachments import: a file someone removed from the ticket is not imported
 
 test('attachments import: a failed download is reported and retried next time, never fatal', async () => {
   const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable([{ key: 'ACM-7', category: 'To Do' }]) }, { ...ACME, sources: { jira: { projects: ['ACM'], site: 'https://acme.atlassian.net' } } })
-  mirrorExternal(root, ACME)
+  mirrorExternal(root, MIRROR_CONFIG)
   const tracker = fakeTracker({ 'jira:ACM-7': [{ name: 'shot.png', bytes: Buffer.from('x') }] })
   tracker.download = async () => new Response('gone', { status: 502 })
   const store = createBlobStore({ dir: mkdtempSync(join(tmpdir(), 'lore-blobs-')) })
