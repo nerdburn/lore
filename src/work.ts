@@ -286,7 +286,10 @@ export function findItem(items: LoreWorkItem[], key: string): LoreWorkItem | und
 
 // ---- changes ----
 
-export type WorkFields = Partial<Pick<LoreWorkItem, 'status' | 'priority' | 'title' | 'description' | 'assignee' | 'labels'>>
+export type WorkFields = Partial<Pick<LoreWorkItem, 'status' | 'priority' | 'title' | 'description' | 'labels'>> & {
+  /** null clears it. */
+  assignee?: string | null
+}
 
 export interface ChangeMeta {
   at: string
@@ -310,7 +313,8 @@ export function applyChange(item: LoreWorkItem, fields: WorkFields, meta: Change
     const from = item[field]
     if (JSON.stringify(from ?? null) === JSON.stringify(to ?? null)) continue
     change[field] = [from ?? null, to]
-    ;(item as unknown as Record<string, unknown>)[field] = to
+    if (to === null) delete (item as unknown as Record<string, unknown>)[field]
+    else (item as unknown as Record<string, unknown>)[field] = to
   }
   if (Object.keys(change).length === 0) return change
   if (fields.status) item.state = stateFor(fields.status)
