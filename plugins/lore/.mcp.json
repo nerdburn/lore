@@ -3,7 +3,8 @@
     "lore": {
       "command": "lore",
       "args": [
-        "mcp"
+        "mcp",
+        "--portfolio"
       ]
     }
   }

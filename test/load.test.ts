@@ -143,6 +143,21 @@ test('Git builds pin committed input and queries report newer evidence as stale'
   assert.equal(buildLoad(root).project, 'acme')
 })
 
+test('sync bookkeeping in state.json alone does not make a projection stale', () => {
+  const root = fixture()
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const commit = (message: string) => { git('add', '.'); git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', message) }
+  writeFileSync(join(root, 'state.json'), JSON.stringify({ cursors: { github: 1 }, lastSync: '2026-10-01T00:00:00Z' }))
+  git('init', '--quiet'); commit('evidence')
+  const snapshot = rebuildLoad(root)
+  writeFileSync(join(root, 'state.json'), JSON.stringify({ cursors: { github: 2 }, lastSync: '2026-10-01T00:05:00Z' }))
+  commit('chore(lore): heartbeat')
+  assert.equal(loadFreshness(root, snapshot), 'current')
+  writeDocs(root, [{ source: 'github', channel: 'acme_web', id: 'github-acme/web-pr-3', author: 'dev', timestamp: '2026-10-02T15:00:00Z', meta: { repo: 'acme/web', number: '3', type: 'pr', login: 'dev' }, text: '**Third PR**' }])
+  commit('chore(lore): sync')
+  assert.equal(loadFreshness(root, snapshot), 'stale')
+})
+
 test('a failed rebuild preserves the last complete snapshot', () => {
   const root = fixture()
   rebuildLoad(root)

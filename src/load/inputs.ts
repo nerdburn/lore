@@ -5,6 +5,13 @@ import { join, relative } from 'node:path'
 
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 export const LOAD_INPUT_PATHS = ['lore.json', 'state.json', 'context/streams', 'context/work/lore']
+/**
+ * Paths whose change makes a built projection out of date. state.json is an
+ * input only for per-source sync health in coverage, and every sync rewrites
+ * its cursors and timestamps, so it would mark every projection stale minutes
+ * after the host built it.
+ */
+export const LOAD_FRESHNESS_PATHS = LOAD_INPUT_PATHS.filter(path => path !== 'state.json')
 const paths = LOAD_INPUT_PATHS
 export interface LoadInputs { files: Map<string, string>; revision?: string }
 

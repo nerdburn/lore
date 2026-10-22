@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_sync_now, lore_source_list, lore_remember, lore_sow_add, lore_doc_add, lore_source_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to add a GitHub repo, Slack channel, Granola folder, Notion page, Figma file, Jira board, or mailbox to lore ("sync X too"), or which sources are synced; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_load, lore_load_all, lore_sync_now, lore_source_list, lore_remember, lore_sow_add, lore_doc_add, lore_source_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to add a GitHub repo, Slack channel, Granola folder, Notion page, Figma file, Jira board, or mailbox to lore ("sync X too"), or which sources are synced; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked for activity counts or a load report for one or all projects; when asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -16,14 +16,14 @@ https://github.com/nerdburn/lore
 In a repo that carries a `lore.json` pointer (or is itself a context repo):
 
 ```sh
-claude mcp add lore -- lore mcp
+claude mcp add lore -- lore mcp --portfolio
 ```
 
 From anywhere, pinned to one project:
 
 ```sh
-claude mcp add lore -- lore mcp -p <project>          # name from ~/.lore/registry.json
-claude mcp add lore -- lore mcp --context lore-<project>   # explicit repo: a bare name (self-hosted) or owner/repo (GitHub)
+claude mcp add lore -- lore mcp --portfolio -p <project>       # name from ~/.lore/registry.json
+claude mcp add lore -- lore mcp --portfolio --context lore-<project>   # explicit repo: a bare name (self-hosted) or owner/repo (GitHub)
 ```
 
 On an agent VM that reaches the lore host through its peer integration, the
@@ -162,6 +162,14 @@ look for that in Slack or a pin before stating it as settled.
   are not established goals. Pins win over derived goal interpretations.
 - **"What do we know / what was decided"**: `lore_recall` (no category, or
   `decisions`). Check `pins` first, then `derived`.
+- **Load / activity questions** ("how busy was Jointly in October", "how
+  many PRs did we open", "load report across all projects"): `lore_load` for
+  this project, `lore_load_all` (with `from`/`to`) for every project at once —
+  both read prebuilt counts, no rebuild. These are observed activities, never
+  hours or effort. Report each project's freshness, unavailable sources and
+  pending semantic chunks next to its numbers. In `lore_load_all`, a repo or
+  mailbox several projects sync counts in each project's row but once in the
+  totals; name the `shared` overlap rather than adding rows up yourself.
 - **What is synced** ("which repos does lore follow", "is #acme-dev in
   memory", "why is GitHub failing"): `lore_source_list` — every source with
   its scope in its own terms, whether it is disabled, and its last success /

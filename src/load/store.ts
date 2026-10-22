@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { tryLock } from '../lock.js'
 import { buildLoad } from './build.js'
 import type { LoadSnapshot } from './schema.js'
-import { LOAD_INPUT_PATHS } from './inputs.js'
+import { LOAD_FRESHNESS_PATHS } from './inputs.js'
 
 export const LOAD_FILE = 'context/derived/load.json'
 const cache = new Map<string, { signature: string; snapshot: LoadSnapshot }>()
@@ -59,7 +59,7 @@ export function loadFreshness(root: string, snapshot: LoadSnapshot): 'current' |
   if (snapshot.extractor !== 3) return 'stale'
   if (!snapshot.input_revision) return 'unknown'
   try {
-    const changed = execFileSync('git', ['-C', root, 'diff', '--name-only', snapshot.input_revision, '--', ...LOAD_INPUT_PATHS], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+    const changed = execFileSync('git', ['-C', root, 'diff', '--name-only', snapshot.input_revision, '--', ...LOAD_FRESHNESS_PATHS], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
     // Includes working-tree edits; the projection records the committed input.
     return changed.trim() ? 'stale' : 'current'
   } catch { return 'unknown' }

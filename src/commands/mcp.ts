@@ -21,6 +21,8 @@ import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 import type { WriteGateOptions } from '../write.js'
 import { queryLoad, loadQuerySchema } from '../load/query.js'
 import { readLoad, loadFreshness } from '../load/store.js'
+import { portfolioLoad, portfolioQuerySchema } from '../load/portfolio.js'
+import { portfolioEntries } from './load.js'
 
 const PULL_INTERVAL_MS = 60_000
 
@@ -54,9 +56,21 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones, put in-flight or requested tickets in a sprint (explicit only)' },
 ]
 
+/**
+ * Tools that read every registered project, not just this one. Only
+ * `lore mcp --portfolio` serves them (the team plugin passes it): they show
+ * every client's activity, so the hosted per-context endpoint, which client
+ * agents reach, never registers them.
+ */
+export const PORTFOLIO_TOOLS: readonly { name: string; writes: boolean; summary: string }[] = [
+  { name: 'lore_load_all', writes: false, summary: 'activity counts across every registered project, shared evidence counted once' },
+]
+
 export interface McpCommandOptions extends ResolveOptions {
   /** Print the tool table as JSON and exit without resolving a context. */
   listTools?: boolean
+  /** Also register PORTFOLIO_TOOLS. */
+  portfolio?: boolean
 }
 
 /**
@@ -68,12 +82,31 @@ export async function mcp(cwd: string, opts: McpCommandOptions): Promise<void> {
   if (opts.listTools) {
     // No context needed: provisioning scripts call this on a VM whose lore
     // key may not be registered yet, so it must never touch the network.
-    console.log(JSON.stringify(MCP_TOOLS, null, 2))
+    console.log(JSON.stringify(opts.portfolio ? [...MCP_TOOLS, ...PORTFOLIO_TOOLS] : MCP_TOOLS, null, 2))
     return
   }
   const ctx = resolveContext(cwd, opts)
   const server = createServer(ctx, { cwd, opts })
+  if (opts.portfolio) registerPortfolioTools(server, cwd)
   await server.connect(new StdioServerTransport())
+}
+
+/** Register PORTFOLIO_TOOLS. Each project's clone is re-pulled at most once a minute. */
+export function registerPortfolioTools(server: McpServer, cwd: string): void {
+  let lastPull = 0
+  server.registerTool(
+    'lore_load_all',
+    {
+      description: 'Activity counts across every registered project, from each project’s prebuilt Load snapshot: one row per project plus unique totals. These are observed activities, never hours or effort. Events retained by several projects (a shared repo or mailbox) count in each project row but once in totals; report `shared` when it explains a total. Report each project’s freshness, sourcesUnavailable and semanticPending, and any error rows. For one project’s roles, actors or evidence, use lore_load on that project.',
+      inputSchema: portfolioQuerySchema.innerType().shape,
+    },
+    async (args) => {
+      const pull = Date.now() - lastPull >= PULL_INTERVAL_MS
+      if (pull) lastPull = Date.now()
+      const result = portfolioLoad(portfolioEntries(cwd, { pull }), args)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
 }
 
 /** Options the write tools re-resolve with: the context, plus (hosted) the attested actor. */

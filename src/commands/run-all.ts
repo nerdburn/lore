@@ -148,16 +148,7 @@ async function runClient(
       committed = (await withGitLock(locks.git, () => commitAndPush(root, name))) || committed
       // Source counts are independent of --extract and semantic screening.
       // Build from committed inputs and publish one complete projection file.
-      if (config.load?.enabled) {
-        committed = (await withGitLock(locks.git, () => {
-          rebuildLoad(root)
-          git(root, 'add', LOAD_FILE)
-          if (!git(root, 'diff', '--cached', '--name-only', '--', LOAD_FILE)) return false
-          git(root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', 'chore(lore): activity counts', '--', LOAD_FILE)
-          pushWithRebase(root)
-          return true
-        })) || committed
-      }
+      if (config.load?.enabled) committed = (await withGitLock(locks.git, () => publishLoad(root))) || committed
     } finally {
       syncLock.release()
     }
@@ -196,6 +187,15 @@ async function runClient(
         } finally {
           try {
             committed = (await withGitLock(locks.git, () => commitAndPush(root, name))) || committed
+            // The fold moves tickets and the semantic pass was built before
+            // it committed; rebuild so the published counts include both.
+            if (loadConfig(root).load?.enabled) {
+              try {
+                committed = (await withGitLock(locks.git, () => publishLoad(root))) || committed
+              } catch (err) {
+                notes.push(`activity counts not rebuilt after fold: ${err instanceof Error ? err.message : String(err)}`)
+              }
+            }
           } finally {
             foldLock.release()
           }
@@ -244,6 +244,16 @@ function ensureClone(bare: string, root: string, { reset }: { reset: boolean }):
   } catch {
     console.log('clone is behind origin but busy — will reconcile at push')
   }
+}
+
+/** Rebuild activity counts from committed inputs and publish them as one commit. Returns whether they changed. */
+function publishLoad(root: string): boolean {
+  rebuildLoad(root)
+  git(root, 'add', LOAD_FILE)
+  if (!git(root, 'diff', '--cached', '--name-only', '--', LOAD_FILE)) return false
+  git(root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', 'chore(lore): activity counts', '--', LOAD_FILE)
+  pushWithRebase(root)
+  return true
 }
 
 /** Commit sync/extract output and push. Returns whether anything changed. */
