@@ -32,8 +32,8 @@ export type WorkStatus = 'todo' | 'in_progress' | 'blocked' | 'review' | 'done' 
 export const WORK_STATUSES: WorkStatus[] = ['todo', 'in_progress', 'blocked', 'review', 'done', 'archived']
 export type WorkPriority = 'P1' | 'P2' | 'P3'
 export const WORK_PRIORITIES: WorkPriority[] = ['P1', 'P2', 'P3']
-/** The surface a change came through. `web` = the board (`lore www`); `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
-export type WorkVia = 'cli' | 'mcp' | 'web' | 'sync' | 'fold'
+/** The surface a change came through. `web` = the board (`lore www`); `slack` = a team member's 👍/✅ reaction; `sync` = mirrored from a tracker; `fold` = the LLM's inference. */
+export type WorkVia = 'cli' | 'mcp' | 'web' | 'slack' | 'sync' | 'fold'
 export type WorkState = 'open' | 'closed'
 
 export interface ExternalRef {
@@ -52,6 +52,10 @@ export interface ExternalRef {
 }
 
 export interface WorkHistoryEntry {
+  /** Immutable identity for new mutations; legacy history has no ID. */
+  id?: string
+  /** Groups status/rank mutations from the same user action. */
+  operation_id?: string
   /** ISO 8601. */
   at: string
   /** OS user / --by; "lore-sync" for mirroring; "lore-extract" for the fold. */
@@ -122,7 +126,7 @@ export interface WorkItemSummary extends Omit<LoreWorkItem, 'history'> {
   drift?: boolean
 }
 
-export const HUMAN_VIAS: WorkVia[] = ['cli', 'mcp', 'web']
+export const HUMAN_VIAS: WorkVia[] = ['cli', 'mcp', 'web', 'slack']
 
 // ---- prefix / file ----
 
@@ -263,7 +267,7 @@ function mergeItem(b: LoreWorkItem, o: LoreWorkItem, t: LoreWorkItem): LoreWorkI
     if (v !== undefined) out[f] = v
   }
   const history = new Map<string, WorkHistoryEntry>()
-  for (const h of [...t.history, ...o.history]) history.set(JSON.stringify([h.at, h.by, h.via, h.change]), h)
+  for (const h of [...t.history, ...o.history]) history.set(h.id ?? JSON.stringify([h.at, h.by, h.via, h.change]), h)
   out.history = [...history.values()].sort((x, y) => x.at.localeCompare(y.at))
   out.updated = [o.updated, t.updated].sort().at(-1)
   return out as unknown as LoreWorkItem
@@ -427,7 +431,7 @@ interface ExternalIssue {
 }
 
 /** Every issue the external tables currently hold (GitHub issues, not PRs; every Jira issue). */
-export function readExternalIssues(root: string): ExternalIssue[] {
+export function readExternalIssues(root: string, config?: Pick<LoreConfig, 'sources'>): ExternalIssue[] {
   const out: ExternalIssue[] = []
   const ghDir = join(root, 'context/work/github')
   if (existsSync(ghDir)) {
@@ -448,19 +452,31 @@ export function readExternalIssues(root: string): ExternalIssue[] {
     }
   }
   const jiraDir = join(root, 'context/work/jira')
+  const jira = config?.sources.jira
+  const jiraScopes = config ? new Set(jira && !jira.disabled
+    ? [...((jira.projects ?? []) as string[]), ...((jira.boards ?? []) as number[]).map(id => `board-${id}`)] : []) : undefined
   if (existsSync(jiraDir)) {
+    const latest = new Map<string, JiraWorkItem>()
     for (const entry of readdirSync(jiraDir).sort()) {
       if (!/\.ya?ml$/.test(entry)) continue
+      if (jiraScopes && !jiraScopes.has(entry.replace(/\.ya?ml$/, ''))) continue
       for (const i of readJiraTable(readFileSync(join(jiraDir, entry), 'utf8')) as JiraWorkItem[]) {
-        out.push({
-          ref: { system: 'jira', id: `jira:${i.key}`, key: i.key, url: i.url, status: i.status, category: i.category },
-          grouping: (i.hierarchy_level ?? 0) > 0 || i.type?.trim().toLowerCase() === 'epic',
-          title: i.title,
-          labels: i.labels ?? [],
-          assignee: i.assignee,
-          priority: mapPriority(i.priority, i.labels ?? []),
-        })
+        // Project and board scopes can overlap. Apply each issue once, using
+        // its newest Jira revision, never directory order or table sync time.
+        const old = latest.get(i.key)
+        const time = (value: string) => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity
+        if (!old || time(i.updated) > time(old.updated)) latest.set(i.key, i)
       }
+    }
+    for (const i of latest.values()) {
+      out.push({
+        ref: { system: 'jira', id: `jira:${i.key}`, key: i.key, url: i.url, status: i.status, category: i.category },
+        grouping: (i.hierarchy_level ?? 0) > 0 || i.type?.trim().toLowerCase() === 'epic',
+        title: i.title,
+        labels: i.labels ?? [],
+        assignee: i.assignee,
+        priority: mapPriority(i.priority, i.labels ?? []),
+      })
     }
   }
   const linearDir = join(root, 'context/work/linear')
@@ -497,20 +513,20 @@ export interface MirrorResult {
  * a later tracker move is newer evidence). Title, assignee and labels follow
  * the tracker unless a person set them in lore.
  */
-export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' | 'client' | 'work'>, at = new Date().toISOString()): MirrorResult {
+export function mirrorExternal(root: string, config: Pick<LoreConfig, 'project' | 'client' | 'work'> & Partial<Pick<LoreConfig, 'sources'>>, at = new Date().toISOString()): MirrorResult {
   const prefix = workPrefix(config)
-  const issues = readExternalIssues(root)
+  const issues = readExternalIssues(root, config.sources ? { sources: config.sources } : undefined)
   const items = readWorkItems(root, prefix)
   if (issues.length === 0 && items.length === 0) return { prefix, created: 0, updated: 0 }
   const byExternal = new Map(items.filter((i) => i.external).map((i) => [i.external!.id, i]))
   let created = 0
   let updated = 0
   for (const issue of issues) {
-    // Keep epics in the source table, including legacy rows, but never create
-    // or reopen a task for them. Their children are mirrored independently.
-    if (issue.grouping) continue
     const label = `${SYSTEM_NAME[issue.ref.system]} ${issue.ref.key}`
     const known = byExternal.get(issue.ref.id)
+    // Never import or reopen planning containers. Legacy mirrored epics must
+    // still follow a closure in Jira so they cannot remain open indefinitely.
+    if (issue.grouping && (!known || !externalDone(issue.ref) || known.status === 'archived')) continue
     if (!known) {
       if (externalDone(issue.ref)) continue
       const status = mapExternalStatus(issue.ref, issue.labels)

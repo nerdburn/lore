@@ -51,6 +51,51 @@ test('config: LORE_HOME redirects the global config, registry and cache', () => 
   assert.ok(cachePath('lore-acme').startsWith(home))
 })
 
+test('run-all: Load builds and publishes independently of LLM extraction', async () => {
+  const bare = seedBare('lore-load-test', { project: 'load-test', sources: {}, extract: [], load: { enabled: true } })
+  const separate = mkdtempSync(join(tmpdir(), 'lore-load-repos-'))
+  const localWork = mkdtempSync(join(tmpdir(), 'lore-load-work-'))
+  try {
+    execFileSync('git', ['clone', '--bare', '--quiet', bare, join(separate, 'lore-load-test.git')])
+    const { result } = await captureConsole(() => runAll({ repos: separate, work: localWork, extract: false }))
+    assert.equal(result.ok, true)
+    const target = join(separate, 'lore-load-test.git')
+    const snapshot = JSON.parse(g(target, 'show', 'HEAD:context/derived/load.json'))
+    assert.equal(snapshot.project, 'load-test')
+    assert.ok(snapshot.input_revision)
+    assert.deepEqual(snapshot.events, [])
+    assert.equal(snapshot.coverage[0].status, 'unavailable')
+  } finally {
+    rmSync(separate, { recursive: true, force: true })
+    rmSync(localWork, { recursive: true, force: true })
+  }
+})
+
+test('run-all: activity counts are rebuilt after the fold commits, so they include what the fold changed', async () => {
+  const bare = seedBare('lore-load-fold', { project: 'load-fold', sources: {}, extract: [], load: { enabled: true } })
+  const separate = mkdtempSync(join(tmpdir(), 'lore-load-fold-repos-'))
+  const localWork = mkdtempSync(join(tmpdir(), 'lore-load-fold-work-'))
+  const matching = process.env.LORE_PR_MATCHING
+  process.env.LORE_PR_MATCHING = 'off'
+  try {
+    execFileSync('git', ['clone', '--bare', '--quiet', bare, join(separate, 'lore-load-fold.git')])
+    const { result } = await captureConsole(() => runAll({ repos: separate, work: localWork, extract: true }))
+    assert.equal(result.ok, true)
+    const target = join(separate, 'lore-load-fold.git')
+    // The fold's own commit (lastExtract) lands after the sync-phase counts;
+    // the newest commit is a rebuild pinned to it.
+    assert.equal(g(target, 'log', '-1', '--format=%s'), 'chore(lore): activity counts')
+    const snapshot = JSON.parse(g(target, 'show', 'HEAD:context/derived/load.json'))
+    assert.equal(snapshot.input_revision, g(target, 'rev-parse', 'HEAD~1'))
+    assert.match(g(target, 'log', '-1', '--format=%s', 'HEAD~1'), /^chore\(lore\): (heartbeat|sync) /)
+  } finally {
+    if (matching === undefined) delete process.env.LORE_PR_MATCHING
+    else process.env.LORE_PR_MATCHING = matching
+    rmSync(separate, { recursive: true, force: true })
+    rmSync(localWork, { recursive: true, force: true })
+  }
+})
+
 test('context: bare names are repo refs when a remote is configured; owner/repo stays GitHub', () => {
   assert.ok(isRepoRef('lore-acme'))
   assert.ok(isRepoRef('inputlogic/lore-acme'))

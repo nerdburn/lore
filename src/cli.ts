@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { Command } from 'commander'
 import { agentsAllow, agentsList, agentsRevoke } from './commands/agents.js'
 import { boardAdd, boardEnable, boardRemove, boardShow } from './commands/board.js'
+import { loadAll, loadExtract, loadQuery, loadRebuild } from './commands/load.js'
 import { addComment } from './comments.js'
 import { archive } from './commands/archive.js'
 import { auth } from './commands/auth.js'
@@ -25,7 +26,6 @@ import { sowAdd, sowList } from './commands/sow.js'
 import { workAdd, workMove, workSet, projectItemAdd, projectItemMove, projectSync } from './commands/project.js'
 import { docAdd, docList } from './commands/doc.js'
 import { workLabel, workList, workPromote, workRank, workShow } from './commands/work.js'
-import { gateReplay } from './commands/gate.js'
 import { resolveContext } from './context.js'
 import { statusView } from './status.js'
 import { printPush, workPush } from './commands/work-push.js'
@@ -46,6 +46,54 @@ function contextual(cmd: Command): Command {
 
 const program = new Command()
 const root = process.cwd()
+
+function loadOptions(cmd: Command): Command {
+  return contextual(cmd)
+    .option('--from <date>', 'inclusive local date YYYY-MM-DD')
+    .option('--to <date>', 'exclusive local date YYYY-MM-DD')
+    .option('--tz <timezone>', 'IANA timezone (default: project Load timezone, otherwise UTC)')
+    .option('--type <type>', 'activity type, e.g. ticket.completed, pr.created or meeting.held')
+    .option('--role <role>', 'customer, account_manager, client_strategist, technical_lead, software_developer, designer')
+    .option('--actor-kind <kind>', 'human, agent, service, unknown')
+    .option('--actor <id>', 'canonical actor ID')
+    .option('--participation <mode>', 'involved (default), performed, attendee, recipient, assignee, or contributor')
+    .option('--method <method>', 'source or inferred')
+    .option('--status <status>', 'accepted or candidate')
+    .option('--undated', 'inspect events with unknown occurrence dates (cannot combine with --from/--to)')
+    .option('--group-by <field>', 'type, role, actor-kind, actor, day, week (Monday), month')
+    .option('--offset <n>', 'event pagination offset', value => Number(value))
+    .option('--limit <n>', 'event page size (1–200)', value => Number(value))
+    .option('--json', 'machine-readable result including evidence and coverage')
+}
+
+const load = loadOptions(program.command('load').description('evidence-backed activity counts with project roles and coverage'))
+load.action(opts => void loadQuery(root, opts))
+load.command('all').description('one table across every registered project, from prebuilt counts; shared repos and mailboxes counted once')
+  .option('--from <date>', 'inclusive local date YYYY-MM-DD')
+  .option('--to <date>', 'exclusive local date YYYY-MM-DD')
+  .option('--tz <timezone>', 'IANA timezone (default: each project\'s Load timezone)')
+  .option('--type <type>', 'one activity type, e.g. ticket.completed')
+  .option('--method <method>', 'source or inferred')
+  .option('--status <status>', 'accepted or candidate')
+  .option('--no-pull', 'skip pulling each project\'s cache clone')
+  .option('--json', 'machine-readable result')
+  .action(opts => {
+    // `lore load` declares the same flags, so Commander may parse them there.
+    const merged = { ...load.opts(), ...opts }
+    const scoped = ['project', 'context', 'role', 'actor', 'actorKind'].filter(k => merged[k] !== undefined)
+    if (scoped.length) throw new Error(`lore load all: ${scoped.map(k => `--${k.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}`).join(', ')} filter one project's counts; use lore load -p <project>`)
+    loadAll(root, merged)
+  })
+loadOptions(load.command('events').description('drill into the evidence behind activity counts'))
+  .action(opts => void loadQuery(root, { ...load.opts(), ...opts, events: true }))
+loadOptions(load.command('rebuild').description('build counts from retained local evidence; no LLM or source API calls'))
+  .option('--preview', 'analyze without writing to the context repo (also works on archived contexts)')
+  .option('--by <who>', 'who requested the rebuild')
+  .action(opts => void loadRebuild(root, { ...load.opts(), ...opts }))
+loadOptions(load.command('extract').description('extract evidenced decisions, customer requests and human commitments with the configured LLM'))
+  .option('--max-batches <n>', 'bounded batches this run (1–100; default: project setting)', value => Number(value))
+  .option('--by <who>', 'who requested the extraction')
+  .action(async opts => { await loadExtract(root, { ...load.opts(), ...opts }) })
 
 // Load .env from the context repo so tokens don't need exporting per-session.
 // Real env vars win over .env values (Node's loadEnvFile semantics).
@@ -443,18 +491,6 @@ contextual(program.command('status').description("what's outstanding: the fold's
   console.log(statusView(ctx.root, ctx.config))
 })
 
-const gate = program.command('gate').description('the fold gate: Jev (TypeSafe) checks new material before an incremental fold and skips folds with nothing to find (needs TYPESAFE_API_KEY)')
-contextual(
-  gate
-    .command('replay')
-    .description("measure the gate on this client's own history: which past folds it would have skipped, and which of those changed something")
-    .option('--since <when>', 'only commits since, e.g. 2026-09-01 or "2 weeks ago"')
-    .option('--limit <n>', 'replay at most this many folds', (v) => Number(v))
-    .option('--json', 'machine-readable output'),
-).action(async (o) => {
-  await gateReplay(resolveContext(root, o).root, o)
-})
-
 contextual(
   program
     .command('archive')
@@ -480,7 +516,8 @@ contextual(
   program
     .command('mcp')
     .description('serve the query surface as MCP tools over stdio (lore_grep/lore_read/lore_recall/lore_sync_now/lore_remember/lore_sow_add/lore_doc_add/lore_source_list/lore_source_add/lore_work_*/lore_work_push)')
-    .option('--list-tools', 'print the tool table as JSON ({name, writes, summary}) and exit — for provisioning scripts building allow lists; needs no context or network'),
+    .option('--list-tools', 'print the tool table as JSON ({name, writes, summary}) and exit — for provisioning scripts building allow lists; needs no context or network')
+    .option('--portfolio', 'also serve lore_load_all: activity counts across every project in ~/.lore/registry.json — every client\'s counts, visible to this agent'),
 ).action((opts) => mcp(root, opts))
 
 program.parseAsync().catch((err) => {

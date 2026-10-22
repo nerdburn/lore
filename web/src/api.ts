@@ -21,7 +21,7 @@ export const PRIORITIES: Priority[] = ['P1', 'P2', 'P3']
 export interface HistoryEntry {
   at: string
   by: string
-  via: 'cli' | 'mcp' | 'web' | 'sync' | 'fold'
+  via: 'cli' | 'mcp' | 'web' | 'slack' | 'sync' | 'fold'
   change: Record<string, unknown>
   reason: string
   sources?: string[]
@@ -205,7 +205,19 @@ async function call<T>(path: string, init: { method?: string; body?: unknown } =
     credentials: 'same-origin',
   })
   const text = await res.text()
-  const data = text ? (JSON.parse(text) as Record<string, unknown>) : {}
+  let data: Record<string, unknown>
+  try {
+    const parsed: unknown = text ? JSON.parse(text) : {}
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid response')
+    data = parsed as Record<string, unknown>
+  } catch {
+    const message = res.status === 429
+      ? 'Too many requests. Wait a minute, then try again.'
+      : res.status >= 500
+        ? 'Lore is temporarily unavailable. Wait a moment, then try again.'
+        : 'Could not reach Lore. Refresh the page, then try again.'
+    throw new ApiError(res.status, message)
+  }
   if (!res.ok) throw new ApiError(res.status, typeof data.error === 'string' ? data.error : `request failed (${res.status})`)
   return data as T
 }

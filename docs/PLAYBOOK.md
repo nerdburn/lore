@@ -240,6 +240,24 @@ Sync stops, writes are refused, reads are labelled ARCHIVED. The repo stays.
 | `lore check` (in a context repo) | config + per-source health |
 | `lore run-all` (on the host) | what the timer runs |
 
+**Slack reactions approve client requests.** In a synced channel, a team
+member's 👍 opens a ticket only when the original message contains a concrete
+client request. Acknowledgements such as “okay thank you” never create tickets.
+Other messages are checked by Jev (`TYPESAFE_API_KEY`) before title generation;
+only request scores of at least 0.85 qualify. Unclear or non-request messages
+are ignored. Missing credentials or failed checks leave reactions pending for
+a later sync, without creating a ticket. This check is specific to reaction
+approval and independent of Load screening and ordinary artifact extraction.
+
+A ✅ closes a linked ticket; creating one first requires the same request
+check. Reactions apply on the next sync, cover messages from the last 7 days
+(`reaction_window_days`), and reuse a ticket already tracking the message or
+its derived request. Each handled reaction acts once; reopening or archiving a
+ticket afterwards is respected. Full workspace members count as team; guests
+and Slack Connect users are the client side. The first run records existing
+reactions without acting on them. Casual 👍 reactions on chatter are safe.
+
+
 Trust order: pins → work tables (GitHub is authoritative for delivery state) →
 derived (LLM, cited) → reports → raw streams. Meetings are evidence, not decisions.
 

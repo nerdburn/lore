@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
@@ -28,6 +29,7 @@ import {
 } from '../work.js'
 
 export interface WorkWriteOptions extends ResolveOptions {
+  operationId?: string
   /** CLI only: who is doing this. MCP callers can never set it. */
   by?: string
   via?: 'cli' | 'mcp' | 'web'
@@ -85,7 +87,15 @@ function mutate(
   const at = opts.at ?? new Date().toISOString()
   const prefix = workPrefix(ctx.config)
   const items = readWorkItems(ctx.root, prefix)
+  const existingHistory = new Set(items.flatMap(i => i.history))
   const { item, message, source } = fn(items, prefix, actor, at)
+  const operationId = opts.operationId ?? randomUUID()
+  for (const row of items) for (const history of row.history) {
+    if (existingHistory.has(history)) continue
+    history.id ??= randomUUID()
+    history.operation_id ??= operationId
+    if (history.change.created && row.assignee) history.change.assignee ??= [null, row.assignee]
+  }
   const rel = writeWorkItems(ctx.root, prefix, items)
   appendAudit(ctx.root, { at, action: 'work', actor, via, id: item.key, ...(source ? { source } : {}) })
   commitWork(ctx, rel, `lore: work ${message}`)

@@ -28,6 +28,8 @@ import {
 } from '../src/work.js'
 import { ACME, captureConsole, FIXTURE_REQUESTS, makeContextRepo } from './helpers.js'
 
+const MIRROR_CONFIG = { ...ACME, sources: { jira: { projects: ['ACM'] } } }
+
 const AT = '2026-09-15T10:00:00.000Z'
 const me = userInfo().username
 const opts = (root: string, at = AT) => ({ context: root, at })
@@ -103,7 +105,9 @@ test('work add: keys count up per prefix, history records who and why, audit lin
   assert.equal(a.status, 'todo')
   assert.equal(a.state, 'open')
   assert.deepEqual(a.labels, ['email'])
-  assert.deepEqual(a.history, [{ at: AT, by: me, via: 'cli', change: { created: true }, reason: 'added', sources: ['https://slack.com/archives/C1/p1'] }])
+  assert.ok(a.history[0].id)
+  assert.ok(a.history[0].operation_id)
+  assert.deepEqual(a.history.map(({ id, operation_id, ...h }) => h), [{ at: AT, by: me, via: 'cli', change: { created: true }, reason: 'added', sources: ['https://slack.com/archives/C1/p1'] }])
   assert.match(out, /add ACM-1: Onboarding email sequence/)
 
   const b = await captureConsole(() => workAdd(root, { title: 'Second', reason: 'client asked in the call' }, opts(root)))
@@ -156,7 +160,11 @@ test('work move / set / rank: every change needs a reason and lands in history; 
   )
   assert.equal(moved.status, 'in_progress')
   assert.equal(moved.updated, '2026-09-16')
-  assert.deepEqual(moved.history[1], { at: later, by: 'shawn', via: 'cli', change: { status: ['todo', 'in_progress'] }, reason: 'Cory started on it', sources: ['https://slack.com/archives/C1/p2'] })
+  const { id, operation_id, ...moveHistory } = moved.history[1]
+  assert.ok(id)
+  assert.ok(operation_id)
+  assert.notEqual(id, moved.history[0].id)
+  assert.deepEqual(moveHistory, { at: later, by: 'shawn', via: 'cli', change: { status: ['todo', 'in_progress'] }, reason: 'Cory started on it', sources: ['https://slack.com/archives/C1/p2'] })
   assert.deepEqual(moved.sources, ['https://slack.com/archives/C1/p2'], 'evidence given with a move is kept on the item')
   assert.match(out, /move ACM-1 todo → in_progress \(Cory started on it\)/)
   await assert.rejects(captureConsole(() => workMove(root, 'ACM-1', 'in_progress', { reason: 'again' }, opts(root))), /already in_progress/)
@@ -216,7 +224,7 @@ test('work mirror: open Jira/GitHub issues become lore items; PRs and never-trac
     'context/work/github/acme__web.yaml': GITHUB_TABLE,
     'context/work/jira/ACM.yaml': jiraTable('In Review', 'In Progress'),
   })
-  const m = mirrorExternal(root, ACME, AT)
+  const m = mirrorExternal(root, MIRROR_CONFIG, AT)
   assert.equal(m.created, 2)
   assert.equal(m.updated, 0)
   assert.equal(m.file, 'context/work/lore/ACM.yaml')
@@ -237,7 +245,7 @@ test('work mirror: open Jira/GitHub issues become lore items; PRs and never-trac
 
   // Same tables again: nothing to do, table untouched.
   const before = readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8')
-  const again = mirrorExternal(root, ACME, '2026-09-15T11:00:00.000Z')
+  const again = mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T11:00:00.000Z')
   assert.deepEqual([again.created, again.updated], [0, 0])
   assert.equal(readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8'), before)
 })
@@ -245,18 +253,18 @@ test('work mirror: open Jira/GitHub issues become lore items; PRs and never-trac
 test('work mirror: Jira epics and higher planning containers stay source-only; child tasks still mirror', async () => {
   for (const type of ['Epic', ' epic ', 'Initiative']) {
     const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('In Progress', 'In Progress') })
-    mirrorExternal(root, ACME, AT)
+    mirrorExternal(root, MIRROR_CONFIG, AT)
     await captureConsole(() => workMove(root, 'ACM-1', 'done', { reason: 'removed planning container' }, opts(root)))
     const before = readWorkItems(root, 'ACM')[0]
     const group = jiraTable('To Do', 'To Do').replace('type: Story', `type: "${type}"${type === 'Initiative' ? '\n  hierarchy_level: 2' : ''}`)
     const child = jiraTable('To Do', 'To Do').replaceAll('ACM-7', 'ACM-8').replace('type: Story', 'type: Sub-task\n  hierarchy_level: -1\n  parent: ACM-7')
     writeFileSync(join(root, 'context/work/jira/ACM.yaml'), group + child)
-    const result = mirrorExternal(root, ACME, AT)
+    const result = mirrorExternal(root, MIRROR_CONFIG, AT)
     assert.equal(result.created, 1)
     assert.equal(result.updated, 0)
     assert.deepEqual(readWorkItems(root, 'ACM')[0], before, 'existing completed epic is never reopened')
     const fresh = makeContextRepo({ 'context/work/jira/ACM.yaml': group + child })
-    assert.equal(mirrorExternal(fresh, ACME, AT).created, 1)
+    assert.equal(mirrorExternal(fresh, MIRROR_CONFIG, AT).created, 1)
     assert.equal(readWorkItems(fresh, 'ACM')[0].external?.key, 'ACM-8')
     assert.match(readFileSync(join(fresh, 'context/work/jira/ACM.yaml'), 'utf8'), /ACM-7/, 'epic evidence remains available')
   }
@@ -274,7 +282,7 @@ test('work fold: cannot recreate archived work or turn a planning container into
 
 test('work mirror: a tracker move is one history event that moves lore once; fold and human decisions stand until the tracker itself moves', async () => {
   const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('In Review', 'In Progress') })
-  mirrorExternal(root, ACME, AT)
+  mirrorExternal(root, MIRROR_CONFIG, AT)
 
   // The fold decides it shipped before Jira caught up.
   const items = readWorkItems(root, 'ACM')
@@ -284,14 +292,14 @@ test('work mirror: a tracker move is one history event that moves lore once; fol
   assert.equal(summarizeForRecall(items[0]).drift, true, 'lore says done, Jira says In Progress')
 
   // Jira unchanged → lore's done stands.
-  const same = mirrorExternal(root, ACME, '2026-09-15T13:00:00.000Z')
+  const same = mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T13:00:00.000Z')
   assert.equal(same.updated, 0)
   assert.equal(readWorkItems(root, 'ACM')[0].status, 'done')
 
   // A human renames it in lore, then Jira renames + moves it: the human title survives, the tracker move is recorded and followed.
   await captureConsole(() => workSet(root, 'ACM-1', { title: 'Agreement builder v2 (clause library)' }, { reason: 'clearer' }, opts(root, '2026-09-16T09:00:00.000Z')))
   writeFileSync(join(root, 'context/work/jira/ACM.yaml'), jiraTable('Selected for Development', 'To Do').replace('Agreement builder v2', 'Renamed in Jira'))
-  const moved = mirrorExternal(root, ACME, '2026-09-16T10:00:00.000Z')
+  const moved = mirrorExternal(root, MIRROR_CONFIG, '2026-09-16T10:00:00.000Z')
   assert.equal(moved.updated, 1)
   const item = readWorkItems(root, 'ACM')[0]
   assert.equal(item.title, 'Agreement builder v2 (clause library)')
@@ -306,7 +314,7 @@ test('work mirror: a tracker move is one history event that moves lore once; fol
   // Archived in lore: a tracker move is recorded but never un-archives.
   await captureConsole(() => workMove(root, 'ACM-1', 'archived', { reason: 'out of scope' }, opts(root, '2026-09-17T09:00:00.000Z')))
   writeFileSync(join(root, 'context/work/jira/ACM.yaml'), jiraTable('Done', 'Done'))
-  mirrorExternal(root, ACME, '2026-09-17T10:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-17T10:00:00.000Z')
   const archived = readWorkItems(root, 'ACM')[0]
   assert.equal(archived.status, 'archived')
   assert.deepEqual(archived.history.at(-1)!.change, { external_status: ['Selected for Development', 'Done'] })
@@ -314,13 +322,13 @@ test('work mirror: a tracker move is one history event that moves lore once; fol
 
 test('work mirror: a status named Blocked maps to blocked; a ticket only sync has touched follows a corrected mapping without a tracker move', () => {
   const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('Blocked', 'In Progress') })
-  mirrorExternal(root, ACME, AT)
+  mirrorExternal(root, MIRROR_CONFIG, AT)
   assert.equal(readWorkItems(root, 'ACM')[0].status, 'blocked')
   // Simulate a ticket mirrored by an older build that recorded in_progress: same tracker state, no human/fold history.
   const items = readWorkItems(root, 'ACM')
   items[0].status = 'in_progress'
   writeWorkItems(root, 'ACM', items)
-  const m = mirrorExternal(root, ACME, '2026-09-15T11:00:00.000Z')
+  const m = mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T11:00:00.000Z')
   assert.equal(m.updated, 1)
   const fixed = readWorkItems(root, 'ACM')[0]
   assert.equal(fixed.status, 'blocked')
@@ -332,7 +340,7 @@ test('work mirror: a status named Blocked maps to blocked; a ticket only sync ha
   again[0].status = 'in_progress'
   again[0].history.push({ at: '2026-09-15T12:00:00.000Z', by: 'shawn', via: 'cli', change: { status: ['blocked', 'in_progress'] }, reason: 'unblocked in the call' })
   writeWorkItems(root, 'ACM', again)
-  assert.equal(mirrorExternal(root, ACME, '2026-09-15T13:00:00.000Z').updated, 0)
+  assert.equal(mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T13:00:00.000Z').updated, 0)
   assert.equal(readWorkItems(root, 'ACM')[0].status, 'in_progress')
 })
 
@@ -388,7 +396,7 @@ test('work fold: guardrails — high confidence with a source only, never archiv
 
 test('work recall: the lore table comes first, items carry `last` and no history, counts follow state', async () => {
   const root = makeContextRepo({ 'context/work/github/acme__web.yaml': GITHUB_TABLE })
-  mirrorExternal(root, ACME, AT)
+  mirrorExternal(root, MIRROR_CONFIG, AT)
   await captureConsole(() => workAdd(root, { title: 'Manual', reason: 'Priya asked' }, opts(root, '2026-09-15T11:00:00.000Z')))
   await captureConsole(() => workMove(root, 'ACM-2', 'done', { reason: 'shipped' }, opts(root, '2026-09-15T12:00:00.000Z')))
   const r = recallData(root, ACME)
@@ -567,13 +575,13 @@ test('work label mcp: lore_work_label labels a batch via mcp; lore_recall { labe
 
 test('work mirror: project labels added in lore survive every sync; the tracker still owns its own labels', async () => {
   const root = makeContextRepo({ 'context/work/github/acme__web.yaml': GITHUB_TABLE })
-  mirrorExternal(root, ACME, AT)
+  mirrorExternal(root, MIRROR_CONFIG, AT)
   await captureConsole(() => workLabel(root, ['ACM-1'], { add: ['stripe integration'] }, { reason: 'theme' }, opts(root)))
   assert.deepEqual(readWorkItems(root, 'ACM')[0].labels, ['bug', 'P1', 'stripe integration'])
 
   // The tracker drops "bug" and adds "checkout": lore follows, and keeps its own label.
   writeFileSync(join(root, 'context/work/github/acme__web.yaml'), GITHUB_TABLE.replace('labels: [bug, P1]', 'labels: [P1, checkout]'))
-  mirrorExternal(root, ACME, '2026-09-15T12:00:00.000Z')
+  mirrorExternal(root, MIRROR_CONFIG, '2026-09-15T12:00:00.000Z')
   const item = readWorkItems(root, 'ACM')[0]
   assert.deepEqual(item.labels, ['P1', 'checkout', 'stripe integration'])
   assert.deepEqual(item.external?.labels, ['P1', 'checkout'])
@@ -628,4 +636,46 @@ test('work merge: one-sided edits pass through, and upstream re-ranking wins ove
   assert.deepEqual(rekeyed, {})
   assert.deepEqual(items.map((i) => i.key), ['MOM-2', 'MOM-1', 'MOM-3'])
   assert.equal(items[0].priority, 'P2')
+})
+
+test('Jira mirror ignores removed or disabled scopes, even if their snapshots are newer', () => {
+  const root = makeContextRepo({
+    'context/work/jira/ACM.yaml': jiraTable('To Do', 'To Do'),
+    'context/work/jira/board-20.yaml': jiraTable('In Review', 'In Progress').replace('2026-09-10T09:00:00Z', '2026-09-12T09:00:00Z'),
+  })
+  mirrorExternal(root, MIRROR_CONFIG, AT)
+  assert.equal(readWorkItems(root, 'ACM')[0].external!.status, 'To Do')
+  const before = readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8')
+  for (const cfg of [MIRROR_CONFIG, { ...ACME, sources: {} }, { ...ACME, sources: { jira: { projects: ['ACM'], disabled: true } } }]) {
+    assert.equal(mirrorExternal(root, cfg, AT).updated, 0)
+    assert.equal(readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8'), before)
+  }
+})
+
+test('overlapping active Jira scopes apply the newest issue revision once and replay without history churn', () => {
+  for (const newer of ['ACM', 'board-20']) {
+    const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('To Do', 'To Do') })
+    const cfg = { ...ACME, sources: { jira: { projects: ['ACM'], boards: [20] } } }
+    mirrorExternal(root, cfg, AT)
+    for (const scope of ['ACM', 'board-20']) writeFileSync(join(root, `context/work/jira/${scope}.yaml`), scope === newer
+      ? jiraTable('Done', 'Done').replace('2026-09-10T09:00:00Z', '2026-09-12T09:00:00Z') : jiraTable('To Do', 'To Do'))
+    assert.equal(mirrorExternal(root, cfg, AT).updated, 1)
+    const item = readWorkItems(root, 'ACM')[0]
+    assert.equal(item.status, 'done')
+    assert.equal(item.history.length, 2)
+    for (let n = 0; n < 3; n++) assert.equal(mirrorExternal(root, cfg, AT).updated, 0)
+    assert.deepEqual(readWorkItems(root, 'ACM')[0], item)
+  }
+})
+
+test('Jira mirror closes legacy epic tickets but never imports or reopens planning containers', () => {
+  const root = makeContextRepo({ 'context/work/jira/ACM.yaml': jiraTable('In Progress', 'In Progress') })
+  mirrorExternal(root, MIRROR_CONFIG, AT)
+  writeFileSync(join(root, 'context/work/jira/ACM.yaml'), jiraTable('Done', 'Done').replace('type: Story', 'type: Epic'))
+  assert.equal(mirrorExternal(root, MIRROR_CONFIG, AT).updated, 1)
+  assert.equal(readWorkItems(root, 'ACM')[0].status, 'done')
+  assert.equal(mirrorExternal(root, MIRROR_CONFIG, AT).updated, 0)
+  writeFileSync(join(root, 'context/work/jira/ACM.yaml'), jiraTable('In Progress', 'In Progress').replace('type: Story', 'type: Epic'))
+  assert.equal(mirrorExternal(root, MIRROR_CONFIG, AT).updated, 0)
+  assert.equal(readWorkItems(root, 'ACM')[0].status, 'done')
 })

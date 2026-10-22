@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { gitShow } from '../bare.js'
+import { cachedBoardFile } from './cache.js'
 import { configSchema, type LoreConfig } from '../config.js'
 import { parseWorkItems, workFile, workPrefix, type LoreWorkItem } from '../work.js'
 
@@ -52,7 +52,7 @@ export function bareProject(reposDir: string, context: string): BareProject | un
   const dir = join(reposDir, `${context}.git`)
   if (!existsSync(dir)) return undefined
   try {
-    return { context, config: configSchema.parse(JSON.parse(gitShow(dir, 'lore.json'))) }
+    return { context, config: cachedBoardFile(dir, 'lore.json', text => configSchema.parse(JSON.parse(text))) }
   } catch {
     return undefined
   }
@@ -118,5 +118,9 @@ export function assigneeResolver(config: LoreConfig, profiles: Record<string, { 
 /** The tracker table at HEAD of the bare repo — always current, no clone involved. */
 export function bareWorkItems(reposDir: string, p: BareProject): { prefix: string; items: LoreWorkItem[] } {
   const prefix = workPrefix(p.config)
-  return { prefix, items: parseWorkItems(gitShow(join(reposDir, `${p.context}.git`), workFile(prefix), true)) }
+  try {
+    return { prefix, items: cachedBoardFile(join(reposDir, `${p.context}.git`), workFile(prefix), parseWorkItems) }
+  } catch {
+    return { prefix, items: [] }
+  }
 }
