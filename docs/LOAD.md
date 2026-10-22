@@ -60,10 +60,34 @@ lore load events --type pr.created --limit 20 --json
 ```
 
 `load.enabled` opts into the self-hosted `run-all` stage after committed sync,
-independently of `--extract` and the chatter gate. Manual rebuild/preview also
+independently of `--extract` and the chatter gate, and again after the fold
+commits, so the published counts include tickets the fold moved and the
+semantic pass. Manual rebuild/preview also
 works before enabling it. Rebuild replaces only the derived projection; it
 does not replay ticket creation or change requests/decisions. Queries read the
 prebuilt projection and report freshness; they do not rebuild on demand.
+Freshness compares `lore.json`, streams and the tracker with the projection's
+input revision. `state.json` is ignored there: every sync rewrites its cursors
+and timestamps, and Load reads only per-source health from it.
+
+### Across projects
+
+```sh
+lore load all --from 2026-10-01 --to 2026-11-01          # one table, every project in ~/.lore/registry.json
+lore load all --type ticket.completed --json
+lore mcp --portfolio                                      # adds the lore_load_all tool (the team plugin passes it)
+```
+
+`lore load all` reads each registered project's prebuilt snapshot (pulling each
+clone unless `--no-pull`) and prints one row per project with unique totals.
+Event IDs come from the native entity, so a repo or mailbox that several
+projects sync (the white-label brands share one repo) counts in each project's
+row but once in the total; `shared` names those overlaps. Archived projects are
+listed, not counted; a project without a snapshot is an error row. Role and
+actor filters stay per project. `lore_load_all` shows every client's counts, so
+only `lore mcp --portfolio` registers it (the team's Claude Code plugin does);
+the hosted per-context endpoint never does, and an enso agent a client can talk
+to should not pass the flag.
 
 The v1 projection is one atomically replaced `context/derived/load.json`
 envelope containing events, SHA-256 input digests, input Git revision, coverage,

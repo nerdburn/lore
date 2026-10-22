@@ -17,8 +17,8 @@ const involved = (e: LoadEvent, participation: NonNullable<LoadQuery['participat
   ...e.participants.filter(p => participation === 'involved' || p.role === participation).map(p => p.actor),
 ].map(a => [a.id, a])).values()]
 
-/** Pure shared CLI/MCP query. Dates are local calendar boundaries, [from,to). */
-export function queryLoad(snapshot: LoadSnapshot, input: LoadQuery = {}) {
+/** The events a query matches, before grouping. Dates are local calendar boundaries, [from,to). */
+export function selectLoadEvents(snapshot: LoadSnapshot, input: LoadQuery = {}) {
   const q = loadQuerySchema.parse(input)
   const timezone = q.tz ?? snapshot.timezone
   const eventDay = (e: LoadEvent) => e.occurred_on ?? (e.occurred_at ? localDay(e.occurred_at, timezone) : undefined)
@@ -33,6 +33,12 @@ export function queryLoad(snapshot: LoadSnapshot, input: LoadQuery = {}) {
     if (!day) return false
     return (!q.from || day >= q.from) && (!q.to || day < q.to)
   })
+  return { q, timezone, eventDay, qualifyingActors, undated, events }
+}
+
+/** Pure shared CLI/MCP query. Dates are local calendar boundaries, [from,to). */
+export function queryLoad(snapshot: LoadSnapshot, input: LoadQuery = {}) {
+  const { q, timezone, eventDay, qualifyingActors, undated, events } = selectLoadEvents(snapshot, input)
   const groups = new Map<string, { key: string; accepted: number; candidates: number }>()
   for (const e of events) {
     const actors = qualifyingActors(e)
