@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, reportExcerpt, streamFiles, withRetry } from '../src/commands/extract.js'
+import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, reportArtifacts, reportExcerpt, reportMaterial, streamFiles, withRetry } from '../src/commands/extract.js'
 import { makeContextRepo } from './helpers.js'
 
 const VALID = { requests: [], decisions: [{ id: 'dec-0001' }], roadmap: [], contradictions: [] }
@@ -159,4 +159,36 @@ test('extract: withRetry does not retry deterministic failures', async () => {
   calls = 0
   await assert.rejects(withRetry(async () => { calls++; throw new Error('extract: output truncated — lower BATCH_CHARS') }, 3, () => {}, async () => {}), /truncated/)
   assert.equal(calls, 1)
+})
+
+test('extract: the weekly report leaves out delivery evidence, keeps small files whole and trims the largest to fit', () => {
+  const file = (path: string, size: number) => ({ path, day: '2026-10-22', text: path.slice(-1).repeat(size) })
+  const week = [
+    file('context/streams/slack/#acme/2026-10-22.md', 100),
+    file('context/streams/github/acme_web/2026-10-22.md', 5000),
+    file('context/streams/gmail/acme_com/2026-10-23.md', 3000),
+    file('context/streams/delivery/ACM/2026-10-22.md', 9000),
+  ]
+  assert.doesNotMatch(reportMaterial(week, 1_000_000), /delivery/)
+  assert.equal(reportMaterial(week, 1_000_000).length, 100 + 5000 + 3000 + 4)
+  // Fit well below the floor: test the trimming itself through the floor's arithmetic.
+  const parts = reportMaterial(week.map(f => ({ ...f, text: f.text.repeat(100) })), 0).split('\n\n')
+  const total = parts.reduce((n, p) => n + p.length, 0)
+  assert.ok(total <= 200_000, `fits the floor (${total})`)
+  assert.equal(parts[0].length, 10_000, 'the small file stays whole')
+  assert.match(parts.join('\n\n'), /\[… trimmed for the report: [\d,]+ more characters in context\/streams\/github\/acme_web\/2026-10-22\.md\]/)
+})
+
+test('extract: the weekly report sees open and this week\'s requests, the last month of decisions, and the whole roadmap', () => {
+  const requests = [
+    { id: 'req-1', status: 'done', date: '2026-07-01' },
+    { id: 'req-2', status: 'stale', date: '2026-09-01' },
+    { id: 'req-3', status: 'open', date: '2026-06-01' },
+    { id: 'req-4', status: 'done', date: '2026-10-20' },
+    { id: 'req-5', status: 'in_progress', date: '2026-08-01' },
+  ]
+  assert.deepEqual(reportArtifacts('requests', requests, '2026-10-16').map((r) => (r as { id: string }).id), ['req-3', 'req-4', 'req-5'])
+  const decisions = [{ id: 'dec-1', date: '2026-09-22' }, { id: 'dec-2', date: '2026-09-23' }, { id: 'dec-3', date: '2026-10-22' }]
+  assert.deepEqual(reportArtifacts('decisions', decisions, '2026-10-16').map((d) => (d as { id: string }).id), ['dec-2', 'dec-3'])
+  assert.equal(reportArtifacts('roadmap', [{ id: 'goal-1' }], '2026-10-16').length, 1)
 })

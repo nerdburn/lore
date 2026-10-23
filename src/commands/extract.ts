@@ -64,6 +64,14 @@ const INCREMENTAL_MAX_CHARS = 60_000
 const BATCH_CHARS = 300_000
 /** A document (or a day of design frames) in the weekly report is evidence that it arrived, not material to summarise in full — this much of it is plenty. */
 const REPORT_DOC_CHARS = 12_000
+/**
+ * Ceiling on the whole weekly report prompt. Stream text runs about 2.5
+ * chars per token, so this stays under the API's 1M-token request limit;
+ * Jointly's and Momday's untrimmed reports were 1.9M and 1.4M tokens.
+ */
+const REPORT_PROMPT_CHARS = 2_000_000
+/** Leave at least this much room for the week's material, however large the context. */
+const REPORT_MIN_MATERIAL_CHARS = 200_000
 const ARTIFACTS = ['requests', 'decisions', 'roadmap'] as const
 
 const ITEM_SCHEMAS: Record<string, object> = {
@@ -227,8 +235,12 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   const today = new Date().toISOString().slice(0, 10)
 
   const wantArtifacts = ARTIFACTS.filter((a) => config.extract.includes(a))
+  // Once per report day: the timer folds every 15 minutes, and without the
+  // existing-file check each run rewrote every client's report (607 reports
+  // on 2026-10-16, each a whole-week prompt). --report always writes one.
   const reportDue =
-    config.extract.includes('weekly-report') && (opts.report || isToday(config.report?.day ?? 'friday'))
+    config.extract.includes('weekly-report') &&
+    (opts.report || (isToday(config.report?.day ?? 'friday') && !existsSync(join(root, `context/derived/reports/${today}.md`))))
 
   // New material = any stream file whose content changed since it was last
   // folded. Day-files only ever grow (append-only streams), so length is a
@@ -251,7 +263,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     const batches = review ? [{ text: '(no new material — review the current artifacts and tracked work under the rules)', files: [] as { path: string; length: number }[] }] : pack(newFiles, BATCH_CHARS)
     const newChars = newFiles.reduce((n, f) => n + f.text.length, 0)
     const model = review ? (process.env.LORE_MODEL ?? MODEL) : pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0), process.env, newChars)
-    console.log(review ? `review fold over current artifacts [${llm}:${model}]…` : `extracting from ${newFiles.length} stream file(s), ${newChars.toLocaleString()} new chars, in ${batches.length} batch(es) [${llm}:${model}]…`)
+    console.log(review ? `review fold over current artifacts [${backendLabel(llm)}:${model}]…` : `extracting from ${newFiles.length} stream file(s), ${newChars.toLocaleString()} new chars, in ${batches.length} batch(es) [${backendLabel(llm)}:${model}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
     /** Everything this fold changed, for the status summary. */
@@ -358,7 +370,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         const input = statusSummaryInput(root, config, today, foldChanges.slice(0, 60))
         const summary = await onBackend(() => cliCall(summaryModel, STATUS_SUMMARY_SYSTEM, input), () => sdkText(summaryModel, STATUS_SUMMARY_SYSTEM, input))
         writeStatus(root, config, { summary: summary.trim(), summaryAt: new Date().toISOString() })
-        console.log(`status: summary written [${llm}:${summaryModel}]`)
+        console.log(`status: summary written [${backendLabel(llm)}:${summaryModel}]`)
       } catch (err) {
         console.warn(`  ⚠ status summary failed (${err instanceof Error ? err.message : err}) — kept the previous one`)
       }
@@ -380,15 +392,17 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     if (week.length === 0) {
       console.log('weekly report: no material this week')
     } else {
-      const artifactContext = ARTIFACTS.map((n) => `## ${n}\n${readRaw(root, `context/derived/${n}.yaml`)}`).join('\n')
+      const artifactContext = ARTIFACTS.map((n) => {
+        const items = readYamlList(root, `context/derived/${n}.yaml`)
+        return `## ${n}\n${items.length ? stringify(reportArtifacts(n, items, weekAgo)) : '(none yet)'}`
+      }).join('\n')
       const sowNote = commitmentsNote(root)
       const reportItems = readWorkItems(root, workPrefix(config))
       const workNote = reportItems.length
         ? `\n\n# Tracked work (lore tracker — the tracker of record; open items and recent closes)\n${describeWorkForPrompt(reportItems, today)}\n\n## Work moved this week\n${describeWorkHistory(reportItems, weekAgo) || '(nothing moved)'}`
         : ''
-      const user = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}${workNote}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
-        .map((f) => reportExcerpt(f))
-        .join('\n\n')}`
+      const context = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}${workNote}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n`
+      const user = context + reportMaterial(week, REPORT_PROMPT_CHARS - context.length)
       const report = await onBackend(() => cliCall(MODEL, REPORT_SYSTEM, user), () => sdkText(MODEL, REPORT_SYSTEM, user))
       mkdirSync(join(root, 'context/derived/reports'), { recursive: true })
       writeFileSync(join(root, `context/derived/reports/${today}.md`), report.trim() + '\n')
@@ -405,6 +419,9 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
  * resolution error names the options). LORE_LLM overrides. */
+/** The backend for log lines: the CLI reads as the API once a limit switched this process to the fallback key. */
+const backendLabel = (llm: Backend) => (llm === 'cli' && fallbackApiKey() ? 'api-fallback' : llm)
+
 /** Run on the configured backend; on the CLI, a subscription limit switches to the fallback API key (llm-fallback). */
 function onBackend<T>(cli: () => T, sdk: () => Promise<T>): Promise<T> {
   return pickBackend() === 'sdk' ? sdk() : withCliFallback(cli, sdk)
@@ -766,9 +783,47 @@ function readYamlList(root: string, rel: string): unknown[] {
   return (parse(readFileSync(path, 'utf8')) as unknown[] | null) ?? []
 }
 
-function readRaw(root: string, rel: string): string {
-  const path = join(root, rel)
-  return existsSync(path) ? readFileSync(path, 'utf8') : '(none yet)'
+/**
+ * The artifact items a weekly report needs: requests still open or dated this
+ * week, decisions from the last 30 days, and the whole roadmap. Closed and
+ * stale history is the bulk of a long project's artifacts (Jointly: 1.8M chars)
+ * and says nothing about this week.
+ */
+export function reportArtifacts(name: string, items: unknown[], weekAgo: string): unknown[] {
+  const monthAgo = new Date(Date.parse(weekAgo) - 23 * 86_400_000).toISOString().slice(0, 10)
+  const field = (item: unknown, key: string) => String((item as Record<string, unknown> | null)?.[key] ?? '')
+  if (name === 'requests') return items.filter((i) => !['done', 'stale'].includes(field(i, 'status')) || field(i, 'date') >= weekAgo)
+  if (name === 'decisions') return items.filter((i) => field(i, 'date') >= monthAgo)
+  return items
+}
+
+/**
+ * The week's stream text for the report, within `budget` chars. The delivery
+ * stream is left out: it is lore's own PR-matching evidence, and the report
+ * already gets what moved from the tracker's history. When the rest is still
+ * too long, the largest files are cut to a common length, so a busy GitHub or
+ * delivery day cannot crowd out the week's conversations; each cut says what
+ * it left out.
+ */
+export function reportMaterial(week: StreamFile[], budget: number): string {
+  const texts = week.filter((f) => !f.path.startsWith('context/streams/delivery/')).map((f) => ({ f, text: reportExcerpt(f) }))
+  const room = Math.max(budget, REPORT_MIN_MATERIAL_CHARS) - texts.length * 2
+  const total = texts.reduce((n, t) => n + t.text.length, 0)
+  if (total <= room) return texts.map((t) => t.text).join('\n\n')
+  // The largest per-file length that fits: shorter files stay whole.
+  const lengths = texts.map((t) => t.text.length).sort((a, b) => a - b)
+  let cap = 0
+  let used = 0
+  for (let i = 0; i < lengths.length; i++) {
+    const fits = Math.floor((room - used) / (lengths.length - i))
+    if (lengths[i] > fits) { cap = fits; break }
+    used += lengths[i]
+  }
+  return texts.map(({ f, text }) => {
+    if (text.length <= cap) return text
+    const note = `\n\n[… trimmed for the report: ${(text.length - cap).toLocaleString()} more characters in ${f.path}]`
+    return text.slice(0, Math.max(0, cap - note.length)) + note
+  }).join('\n\n')
 }
 
 function isToday(day: string): boolean {
