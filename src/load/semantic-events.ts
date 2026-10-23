@@ -121,21 +121,42 @@ export function semanticPrompt(config: LoreConfig, batch: SemanticChunk[], state
   }) }
 }
 
-/** Validate the entire batch before advancing any checkpoint. */
-export function acceptSemantic(state: SemanticState, batch: SemanticChunk[], value: unknown, model: string, catalog: SemanticClaim[] = state.records): SemanticState {
+/** What a lenient acceptance left out: proposals dropped, chunks kept pending because of them, and chunks given up on. */
+export interface SemanticRejections { dropped: { reason: string; chunks: string[] }[]; held: string[]; gaveUp?: string[] }
+
+/** A chunk whose proposals keep failing validation is checkpointed after this many runs, so it cannot be retried forever. */
+export const SEMANTIC_HOLD_RUNS = 3
+
+/**
+ * Validate the batch before advancing any checkpoint. Strict (the default),
+ * any unsupported proposal rejects the whole batch. With `rejections`, after
+ * the model's corrected retry still fails, unsupported proposals are dropped
+ * instead and the chunks they cited stay pending, so a hallucinated quote
+ * never consumes a checkpoint and the rest of the batch is still kept.
+ */
+export function acceptSemantic(state: SemanticState, batch: SemanticChunk[], value: unknown, model: string, catalog: SemanticClaim[] = state.records, rejections?: SemanticRejections): SemanticState {
   const proposals = proposalsSchema.parse(value)
   const next = structuredClone(state)
   const allowedIds = new Set(catalog.map(r => r.id))
   const chunks = new Map(batch.map(c => [c.key, c]))
+  const reject = (p: typeof proposals.events[number], reason: string) => {
+    if (!rejections) throw new Error(reason)
+    const cited = [...new Set(p.evidence.map(e => e.chunk).filter(key => chunks.has(key)))]
+    rejections.dropped.push({ reason, chunks: cited })
+    rejections.held.push(...cited.filter(key => !rejections.held.includes(key)))
+  }
   for (const p of proposals.events) {
+    if (p.evidence.some(e => { const chunk = chunks.get(e.chunk); return !chunk || !containsQuote(chunk.text, e.quote) })) {
+      reject(p, 'load: semantic evidence quote does not match its supplied source chunk')
+      continue
+    }
     const refs = p.evidence.map(e => {
-      const chunk = chunks.get(e.chunk)
-      if (!chunk || !containsQuote(chunk.text, e.quote)) throw new Error('load: semantic evidence quote does not match its supplied source chunk')
+      const chunk = chunks.get(e.chunk)!
       return { path: chunk.path, doc_id: chunk.doc.fields.id, quote: normalized(e.quote) }
     })
-    if (p.related.some(id => !allowedIds.has(id))) throw new Error('load: semantic relation references an unknown event')
+    if (p.related.some(id => !allowedIds.has(id))) { reject(p, 'load: semantic relation references an unknown event'); continue }
     let old = p.existing_id ? next.records.find(r => r.id === p.existing_id && allowedIds.has(r.id)) : undefined
-    if (p.existing_id && (!old || old.type !== p.type)) throw new Error('load: invalid semantic duplicate target')
+    if (p.existing_id && (!old || old.type !== p.type)) { reject(p, 'load: invalid semantic duplicate target'); continue }
     // Exact anchor replay/overlap cannot create a second event, even if the model omits its ID.
     old ??= next.records.find(r => r.type === p.type && r.evidence.some(a => refs.some(b => a.doc_id === b.doc_id && a.quote === b.quote)))
     if (old) {
@@ -148,12 +169,22 @@ export function acceptSemantic(state: SemanticState, batch: SemanticChunk[], val
     } else {
       const first = refs[0]
       const id = `load-sem-${digest(JSON.stringify([p.type, first.doc_id, first.quote])).slice(0, 32)}`
-      if (next.records.some(r => r.id === id)) throw new Error('load: conflicting classifications for the same semantic anchor')
+      if (next.records.some(r => r.id === id)) { reject(p, 'load: conflicting classifications for the same semantic anchor'); continue }
       next.records.push({ id, type: p.type, summary: p.summary, actor_keys: [...new Set(p.actor_keys)], occurred_on: p.occurred_on ?? undefined,
         confidence: p.confidence, evidence: refs, related: p.related, model, extracted_at: new Date().toISOString() })
     }
   }
-  for (const c of batch) next.checkpoints[c.key] = c.hash
+  for (const c of batch) {
+    if (rejections?.held.includes(c.key)) {
+      const prior = next.held?.[c.key]
+      const runs = prior?.hash === c.hash ? prior.runs + 1 : 1
+      if (runs < SEMANTIC_HOLD_RUNS) { (next.held ??= {})[c.key] = { hash: c.hash, runs }; continue }
+      ;(rejections.gaveUp ??= []).push(c.key)
+    }
+    next.checkpoints[c.key] = c.hash
+    if (next.held) delete next.held[c.key]
+  }
+  if (next.held && !Object.keys(next.held).length) delete next.held
   next.lastSuccess = new Date().toISOString()
   delete next.error
   return next
