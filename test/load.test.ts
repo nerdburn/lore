@@ -80,7 +80,9 @@ test('timezone boundaries and Monday weeks use local calendar dates through dayl
   const snapshot = buildLoad(fixture())
   const example = snapshot.events[0]
   snapshot.events = ['2026-11-01T06:59:59Z', '2026-11-01T07:00:00Z', '2026-11-02T07:59:59Z', '2026-11-02T08:00:00Z'].map((at, i) => ({ ...example, id: String(i), occurred_at: at }))
-  const q = queryLoad(snapshot, { from: '2026-11-01', to: '2026-11-02', groupBy: 'week' })
+  // Los Angeles, not the fixture's Vancouver: tzdata 2026c keeps British
+  // Columbia on daylight time from November 2026, so its fall-back is gone.
+  const q = queryLoad(snapshot, { from: '2026-11-01', to: '2026-11-02', groupBy: 'week', tz: 'America/Los_Angeles' })
   assert.equal(q.matchedEvents, 2)
   assert.equal(q.groups[0].key, '2026-10-26')
   assert.throws(() => queryLoad(snapshot, { from: '2026-02-30' }))
