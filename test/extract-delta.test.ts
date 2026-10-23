@@ -91,3 +91,30 @@ test('fold delta: a timer fold after new messages sends only those messages, and
     }
   }
 })
+
+test('weekly report: written once on report day, not on every timer fold; --report still forces one', async () => {
+  const day = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date().getUTCDay()]
+  const root = makeContextRepo({}, { project: 'acme', sources: {}, extract: ['weekly-report'], report: { day, post_to: '#acme' } })
+  const bin = mkdtempSync(join(tmpdir(), 'lore-fake-claude-'))
+  const calls = join(bin, 'calls.log')
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncat > /dev/null\necho call >> "${calls}"\nprintf '%s' '{"result":"# Weekly report"}'\n`)
+  chmodSync(join(bin, 'claude'), 0o755)
+  const env = { PATH: process.env.PATH, LORE_LLM: process.env.LORE_LLM, LORE_PR_MATCHING: process.env.LORE_PR_MATCHING }
+  process.env.PATH = `${bin}:${process.env.PATH}`
+  process.env.LORE_LLM = 'cli'
+  process.env.LORE_PR_MATCHING = 'off'
+  const count = () => readFileSync(calls, 'utf8').trim().split('\n').length
+  try {
+    writeDocs(root, [message('slack-1', new Date().toISOString(), 'This week: launch moved to Friday.')])
+    await captureConsole(() => extract(root))
+    await captureConsole(() => extract(root))
+    assert.equal(count(), 1, 'the second timer fold on report day does not rewrite the report')
+    await captureConsole(() => extract(root, { report: true }))
+    assert.equal(count(), 2)
+  } finally {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
