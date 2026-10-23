@@ -66,4 +66,6 @@ export interface SemanticClaim {
 }
 export interface SemanticState {
   version: 1; checkpoints: Record<string, string>; records: SemanticClaim[]; lastSuccess?: string; error?: string
+  /** Chunks left pending because their proposals failed validation: consecutive runs at this chunk revision. */
+  held?: Record<string, { hash: string; runs: number }>
 }

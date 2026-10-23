@@ -7,7 +7,7 @@ import { acquireLock, tryLock } from '../lock.js'
 import { readLoadInputs } from './inputs.js'
 import { buildLoad } from './build.js'
 import { optionalLoad, saveLoad } from './store.js'
-import { acceptSemantic, emptySemantic, semanticChunks, semanticPrompt, SEMANTIC_OUTPUT_SCHEMA, SEMANTIC_SYSTEM } from './semantic-events.js'
+import { acceptSemantic, SEMANTIC_HOLD_RUNS, type SemanticRejections, emptySemantic, semanticChunks, semanticPrompt, SEMANTIC_OUTPUT_SCHEMA, SEMANTIC_SYSTEM } from './semantic-events.js'
 import type { SemanticState } from './schema.js'
 import { checkpointMatches, irrelevant, screenChunks, skippedCheckpoint, type ScreenOptions } from './gate.js'
 
@@ -64,7 +64,16 @@ export async function extractSemanticLoad(root: string, opts: SemanticExtractOpt
           ? `\nYour previous response failed validation: ${validationFailure}. Return a corrected complete batch. Copy evidence quotes exactly from their stated chunks; omit unsupported proposals.` : ''), SEMANTIC_OUTPUT_SCHEMA)
         if (response.usage) { usageReported++; inputTokens += response.usage.inputTokens; outputTokens += response.usage.outputTokens; cacheReadTokens += response.usage.cacheReadTokens; cacheWriteTokens += response.usage.cacheWriteTokens }
         try {
-          next = acceptSemantic(state, kept, response.value, response.model, prompt.catalog)
+          if (attempt === 0) next = acceptSemantic(state, kept, response.value, response.model, prompt.catalog)
+          else {
+            // The corrected retry still has unsupported proposals: keep the
+            // rest of the batch and leave the chunks they cited pending,
+            // rather than failing the project and redoing the whole batch.
+            const rejections: SemanticRejections = { dropped: [], held: [] }
+            next = acceptSemantic(state, kept, response.value, response.model, prompt.catalog, rejections)
+            if (rejections.dropped.length) log(`load: dropped ${rejections.dropped.length} unsupported proposal(s) (${[...new Set(rejections.dropped.map(d => d.reason.replace(/^load: /, '')))].join('; ')}); ${rejections.held.length - (rejections.gaveUp?.length ?? 0)} chunk(s) left pending for a later run`)
+            if (rejections.gaveUp?.length) log(`load: gave up on ${rejections.gaveUp.join(', ')} after ${SEMANTIC_HOLD_RUNS} runs of unsupported proposals; checkpointed without them`)
+          }
           const proposals = response.value as { events: Array<{ evidence: Array<{ chunk: string }> }> }
           shadowMisses = proposals.events.filter(e => e.evidence.every(ref => wouldSkipKeys.has(ref.chunk))).length
           break

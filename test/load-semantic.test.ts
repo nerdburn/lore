@@ -8,7 +8,7 @@ import { makeContextRepo } from './helpers.js'
 import { readLoadInputs } from '../src/load/inputs.js'
 import { buildLoad } from '../src/load/build.js'
 import { queryLoad } from '../src/load/query.js'
-import { acceptSemantic, emptySemantic, mergeSemantic, semanticChunks, semanticPrompt } from '../src/load/semantic-events.js'
+import { acceptSemantic, emptySemantic, mergeSemantic, SEMANTIC_HOLD_RUNS, semanticChunks, semanticPrompt, type SemanticRejections } from '../src/load/semantic-events.js'
 import { extractSemanticLoad } from '../src/load/semantic-extract.js'
 import { LOAD_FILE, readLoad, rebuildLoad, saveLoad } from '../src/load/store.js'
 
@@ -177,6 +177,45 @@ test('invalid model quotation is retried once; only the corrected batch is publi
   assert.equal(calls, 2)
   assert.equal(readLoad(root).semantic!.records.length, 1)
   assert.equal(readLoad(root).semanticCoverage!.pending, 0)
+})
+
+test('a retry that still misquotes keeps the valid proposals and leaves only the misquoted chunk pending', async () => {
+  const root = fixture(), chunks = semanticChunks(readLoadInputs(root), config)
+  const slack = chunks.find(c => c.source === 'slack')!, email = chunks.find(c => c.source === 'gmail')!
+  const request = { ...propose(email.key, 'Please add a CSV export for the monthly report.'), type: 'client.requested', summary: 'CSV export', actor_keys: ['name:Customer'] }
+  const logs: string[] = []
+  let calls = 0
+  await extractSemanticLoad(root, { log: m => logs.push(m), complete: async () => {
+    calls++
+    return { value: { events: [propose(slack.key, 'This sentence does not exist.'), request] }, model: 'test' }
+  } })
+  assert.equal(calls, 2, 'retried once, then accepted leniently instead of failing')
+  const snapshot = readLoad(root)
+  assert.deepEqual(snapshot.semantic!.records.map(r => r.type), ['client.requested'])
+  assert.equal(snapshot.semanticCoverage!.pending, 1, 'the misquoted chunk is not checkpointed')
+  assert.ok(!(slack.key in snapshot.semantic!.checkpoints))
+  assert.ok(email.key in snapshot.semantic!.checkpoints)
+  assert.equal(snapshot.semanticCoverage!.error, undefined)
+  assert.ok(logs.some(l => /dropped 1 unsupported proposal\(s\) \(semantic evidence quote does not match its supplied source chunk\); 1 chunk\(s\) left pending/.test(l)))
+})
+
+test('a chunk whose proposals keep failing is checkpointed after the hold limit, so it is not retried forever', () => {
+  const chunks = semanticChunks(readLoadInputs(fixture()), config), c = chunks.find(c => c.source === 'slack')!
+  const bad = { events: [propose(c.key, 'This sentence does not exist.')] }
+  let state = emptySemantic()
+  for (let run = 1; run < SEMANTIC_HOLD_RUNS; run++) {
+    const rejections: SemanticRejections = { dropped: [], held: [] }
+    state = acceptSemantic(state, [c], bad, 'test', state.records, rejections)
+    assert.deepEqual(rejections.held, [c.key])
+    assert.equal(state.held?.[c.key].runs, run)
+    assert.ok(!(c.key in state.checkpoints))
+  }
+  const rejections: SemanticRejections = { dropped: [], held: [] }
+  state = acceptSemantic(state, [c], bad, 'test', state.records, rejections)
+  assert.deepEqual(rejections.gaveUp, [c.key])
+  assert.equal(state.checkpoints[c.key], c.hash)
+  assert.equal(state.held, undefined)
+  assert.equal(state.records.length, 0, 'the unsupported proposal is never recorded')
 })
 
 test('source changes during model processing remain pending in the published coherent snapshot', async () => {
