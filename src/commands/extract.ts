@@ -12,6 +12,7 @@ import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
 import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readExternalIssues, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
+import { fallbackApiKey, withCliFallback } from '../llm-fallback.js'
 import { STATUS_SUMMARY_SYSTEM, statusSummaryInput, writeStatus } from '../status.js'
 import type { Pin } from '../types.js'
 
@@ -274,7 +275,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       const user = `Today is ${today}.${clientNote}${commitments}${workNote}${groupNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         .map(([name, items]) => `## ${name}\n${stringify(items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
-      const result = await withRetry(() => (llm === 'sdk' ? sdkFold(model, user) : Promise.resolve(cliFold(model, user))), 2, (attempt, err) =>
+      const result = await withRetry(() => onBackend(() => cliFold(model, user), () => sdkFold(model, user)), 2, (attempt, err) =>
         console.warn(`  ⚠ batch ${i + 1} attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`),
       )
       const changes: string[] = []
@@ -355,7 +356,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       const summaryModel = process.env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
       try {
         const input = statusSummaryInput(root, config, today, foldChanges.slice(0, 60))
-        const summary = llm === 'sdk' ? await sdkText(summaryModel, STATUS_SUMMARY_SYSTEM, input) : cliCall(summaryModel, STATUS_SUMMARY_SYSTEM, input)
+        const summary = await onBackend(() => cliCall(summaryModel, STATUS_SUMMARY_SYSTEM, input), () => sdkText(summaryModel, STATUS_SUMMARY_SYSTEM, input))
         writeStatus(root, config, { summary: summary.trim(), summaryAt: new Date().toISOString() })
         console.log(`status: summary written [${llm}:${summaryModel}]`)
       } catch (err) {
@@ -388,7 +389,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       const user = `Today is ${today}.${sowNote ? `\n\n# Commitments (statements of work)\n${sowNote}` : ''}${workNote}\n\n# Tracked artifacts\n${artifactContext}\n\n# This week's raw material\n${week
         .map((f) => reportExcerpt(f))
         .join('\n\n')}`
-      const report = llm === 'sdk' ? await sdkText(MODEL, REPORT_SYSTEM, user) : cliCall(MODEL, REPORT_SYSTEM, user)
+      const report = await onBackend(() => cliCall(MODEL, REPORT_SYSTEM, user), () => sdkText(MODEL, REPORT_SYSTEM, user))
       mkdirSync(join(root, 'context/derived/reports'), { recursive: true })
       writeFileSync(join(root, `context/derived/reports/${today}.md`), report.trim() + '\n')
       console.log(`wrote derived/reports/${today}.md`)
@@ -404,6 +405,11 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
  * resolution error names the options). LORE_LLM overrides. */
+/** Run on the configured backend; on the CLI, a subscription limit switches to the fallback API key (llm-fallback). */
+function onBackend<T>(cli: () => T, sdk: () => Promise<T>): Promise<T> {
+  return pickBackend() === 'sdk' ? sdk() : withCliFallback(cli, sdk)
+}
+
 function pickBackend(): Backend {
   if (process.env.LORE_LLM === 'cli' || process.env.LORE_LLM === 'sdk') return process.env.LORE_LLM
   if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return 'sdk'
@@ -455,9 +461,10 @@ function completionUsage(raw: Record<string, unknown> = {}): CompletionUsage {
 export async function structuredCompletion(system: string, user: string, schema: Record<string, unknown>): Promise<{ value: unknown; model: string; usage?: CompletionUsage }> {
   const model = process.env.LORE_LOAD_MODEL ?? process.env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
   let usage: CompletionUsage | undefined
-  const output = pickBackend() === 'sdk'
-    ? await sdkText(model, system, user, schema, raw => { usage = completionUsage(raw) })
-    : cliStructuredCompletion(model, system + '\nReturn only JSON matching this schema:\n' + JSON.stringify(schema), user, raw => { usage = completionUsage(raw) })
+  const output = await onBackend(
+    () => cliStructuredCompletion(model, system + '\nReturn only JSON matching this schema:\n' + JSON.stringify(schema), user, raw => { usage = completionUsage(raw) }),
+    () => sdkText(model, system, user, schema, raw => { usage = completionUsage(raw) }),
+  )
   const start = output.indexOf('{'), end = output.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error('load: no JSON in semantic output')
   return { value: JSON.parse(output.slice(start, end + 1)), model, usage }
@@ -483,7 +490,8 @@ function cliStructuredCompletion(model: string, system: string, user: string, on
 }
 
 async function sdkText(model: string, system: string, user: string, schema?: Record<string, unknown>, onUsage?: (raw: Record<string, unknown>) => void): Promise<string> {
-  const client = new Anthropic()
+  const apiKey = fallbackApiKey()
+  const client = new Anthropic(apiKey ? { apiKey } : undefined)
   const stream = client.messages.stream({
     model,
     max_tokens: 64000,
@@ -605,7 +613,7 @@ export function parseFoldOutput(text: string): FoldResult {
 export async function shortText(system: string, user: string): Promise<string | undefined> {
   if (!process.env.LORE_LLM && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) return undefined
   const model = MODEL_INCREMENTAL
-  return pickBackend() === 'sdk' ? sdkText(model, system, user) : cliCall(model, system, user)
+  return onBackend(() => cliCall(model, system, user), () => sdkText(model, system, user))
 }
 
 function cliCall(model: string, system: string, user: string): string {
