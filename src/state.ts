@@ -39,6 +39,11 @@ export interface LoreState {
    * older dates). Replaces the old day-window, which missed all of those.
    */
   extracted?: Record<string, number>
+  /**
+   * SHA-256 of each file's text up to its `extracted` length, so the next
+   * fold can trust that prefix and read only what was appended after it.
+   */
+  extractedHead?: Record<string, string>
 }
 
 export function loadState(root: string): LoreState {
@@ -56,7 +61,7 @@ export function saveState(root: string, state: LoreState): void {
 /**
  * Write only the keys this caller owns, re-reading the file first so a
  * concurrent writer's keys survive. sync owns cursors/sources/lastSync and
- * extract owns extracted/lastExtract; run-all lets a sync-now run overlap an
+ * extract owns extracted/extractedHead/lastExtract; run-all lets a sync-now run overlap an
  * in-flight fold on the same clone, and this is what keeps them from
  * clobbering each other's half of state.json. A short lock serialises the
  * read-modify-write itself. Returns the merged state.
