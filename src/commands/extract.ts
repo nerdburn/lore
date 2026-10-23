@@ -2,6 +2,7 @@ import { reconcileProjects } from '../projects.js'
 import { reconcileDelivery } from '../delivery.js'
 import { importSlackAttachments } from '../attachments.js'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
@@ -17,8 +18,9 @@ import type { Pin } from '../types.js'
 /**
  * LLM extraction fold: streams/ + derived/ → updated derived/. (SPEC §5)
  *
- * - Input: current artifacts + only stream files whose content changed since
- *   they were last folded (state.extracted tracks path → length)
+ * - Input: current artifacts + only the entries appended to stream files
+ *   since they were last folded (state.extracted tracks path → length,
+ *   state.extractedHead a digest of that prefix; see foldMaterial)
  * - Update, don't rewrite: item ids and wording are preserved unless
  *   evidence changes them
  * - Every new/changed item cites source permalinks
@@ -231,7 +233,10 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   // folded. Day-files only ever grow (append-only streams), so length is a
   // sufficient fingerprint and cheap to keep in state.json.
   state.extracted ??= {}
-  const newFiles = streamFiles(root).filter((f) => state.extracted![f.path] !== f.text.length)
+  state.extractedHead ??= {}
+  const changedFiles = streamFiles(root).filter((f) => state.extracted![f.path] !== f.text.length)
+  const fullText = new Map(changedFiles.map((f) => [f.path, f.text]))
+  const newFiles = changedFiles.map((f) => foldMaterial(f, state.extracted![f.path], state.extractedHead![f.path]))
   // --review: one fold pass with no new material, so the model reviews the
   // current artifacts and tracker under the current rules (after a rule
   // change, or to open tickets for work already committed in memory).
@@ -245,7 +250,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     const batches = review ? [{ text: '(no new material — review the current artifacts and tracked work under the rules)', files: [] as { path: string; length: number }[] }] : pack(newFiles, BATCH_CHARS)
     const newChars = newFiles.reduce((n, f) => n + f.text.length, 0)
     const model = review ? (process.env.LORE_MODEL ?? MODEL) : pickModel(batches.length, Object.values(artifacts).reduce((n, a) => n + a.length, 0), process.env, newChars)
-    console.log(review ? `review fold over current artifacts [${llm}:${model}]…` : `extracting from ${newFiles.length} stream file(s) in ${batches.length} batch(es) [${llm}:${model}]…`)
+    console.log(review ? `review fold over current artifacts [${llm}:${model}]…` : `extracting from ${newFiles.length} stream file(s), ${newChars.toLocaleString()} new chars, in ${batches.length} batch(es) [${llm}:${model}]…`)
 
     let contradictions: FoldResult['contradictions'] = []
     /** Everything this fold changed, for the status summary. */
@@ -333,8 +338,12 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
           `# Derived by \`lore extract\` — regenerable; do not hand-edit.\n` + stringify(artifacts[name]),
         )
       }
-      for (const f of batches[i].files) state.extracted[f.path] = f.length
-      updateState(root, { extracted: state.extracted })
+      for (const f of batches[i].files) {
+        state.extracted[f.path] = f.length
+        const text = fullText.get(f.path)
+        if (text !== undefined) state.extractedHead[f.path] = digestText(text.slice(0, f.length))
+      }
+      updateState(root, { extracted: state.extracted, extractedHead: state.extractedHead })
       console.log(
         `  batch ${i + 1}/${batches.length}: ${wantArtifacts.map((n) => `${artifacts[n].length} ${n}`).join(', ')}${changes.length ? ` (${changes.join(', ')})` : ' (no changes)'}`,
       )
@@ -390,7 +399,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   // The list half of status.md follows whatever the fold (or anything since) did to the tracker and artifacts.
   if (wantArtifacts.length > 0) writeStatus(root, config)
 
-  updateState(root, { extracted: state.extracted, lastExtract: new Date().toISOString() })
+  updateState(root, { extracted: state.extracted, extractedHead: state.extractedHead, lastExtract: new Date().toISOString() })
 }
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
@@ -639,6 +648,37 @@ export function streamFiles(root: string): StreamFile[] {
   return files.sort((a, b) => a.day.localeCompare(b.day) || a.path.localeCompare(b.path))
 }
 
+/** Sources whose entries writeDocs replaces in place, so text before the folded length can change: always folded whole. */
+const REWRITTEN_SOURCES = ['github-projects']
+
+const digestText = (text: string) => createHash('sha256').update(text).digest('hex')
+
+/** A changed day-file as the fold reads it; `length` is the full file length to record once folded. */
+export interface FoldFile extends StreamFile {
+  length: number
+}
+
+/**
+ * What the fold reads of a changed day-file: only the entries appended since
+ * it was last folded. Streams are append-only, so the text before the
+ * recorded length was already folded, and resending it made every timer fold
+ * re-read the whole day (Jointly, 2026-10-22: 1.26M chars sent for ~450k new).
+ * The file goes whole when the prefix can't be trusted: never folded, shorter
+ * than before, a source rewritten in place, a prefix whose digest no longer
+ * matches, or a cut that doesn't land on an entry boundary. The front matter
+ * is kept so the model still knows the source, channel and day.
+ */
+export function foldMaterial(f: StreamFile, folded?: number, head?: string): FoldFile {
+  const whole = { ...f, length: f.text.length }
+  if (!folded || folded >= f.text.length) return whole
+  if (REWRITTEN_SOURCES.some((source) => f.path.startsWith(`context/streams/${source}/`))) return whole
+  if (head && head !== digestText(f.text.slice(0, folded))) return whole
+  const rest = f.text.slice(folded)
+  if (!/^\n*### /.test(rest)) return whole
+  const front = /^---\n[\s\S]*?\n---\n/.exec(f.text)?.[0] ?? ''
+  return { ...f, length: f.text.length, text: `${front}(continues ${f.path}; the entries before this point were folded earlier)\n${rest}` }
+}
+
 export interface Batch {
   text: string
   lastDay: string
@@ -653,7 +693,7 @@ export interface Batch {
  * knows who sent it and what to cite. The file is recorded as consumed only
  * in the batch holding its last part, so a fold killed midway refolds it.
  */
-export function pack(files: Pick<StreamFile, 'day' | 'text'>[] & Partial<StreamFile>[], budget: number): Batch[] {
+export function pack(files: (Pick<StreamFile, 'day' | 'text'> & Partial<FoldFile>)[], budget: number): Batch[] {
   const batches: Batch[] = []
   let current = ''
   let lastDay = ''
@@ -668,14 +708,14 @@ export function pack(files: Pick<StreamFile, 'day' | 'text'>[] & Partial<StreamF
       flush()
       const parts = splitDoc(f.text, budget)
       for (let i = 0; i < parts.length; i++) {
-        batches.push({ text: parts[i] + '\n\n', lastDay: f.day, files: i === parts.length - 1 ? [{ path: f.path ?? '', length: f.text.length }] : [] })
+        batches.push({ text: parts[i] + '\n\n', lastDay: f.day, files: i === parts.length - 1 ? [{ path: f.path ?? '', length: f.length ?? f.text.length }] : [] })
       }
       continue
     }
     if (current && current.length + f.text.length > budget) flush()
     current += f.text + '\n\n'
     lastDay = f.day
-    members.push({ path: f.path ?? '', length: f.text.length })
+    members.push({ path: f.path ?? '', length: f.length ?? f.text.length })
   }
   flush()
   return batches

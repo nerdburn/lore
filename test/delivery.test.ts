@@ -254,3 +254,18 @@ if (prompt.includes('# New material')) {
     }
   }
 })
+
+test('delivery: a PR description enters the stream once, when the PR is first linked, not on every later change', async () => {
+  const body = 'Closes ACM-1. Adds the reset endpoint, email and screen.'
+  const { root, config } = fixture([ticket()], [pr(42, { body })])
+  await reconcileDelivery(root, config, { at: AT })
+  writeFileSync(join(root, 'context/work/github/acme__web.yaml'), stringify([pr(42, { body, state: 'closed', draft: false, merged: true, merged_at: '2026-10-02T10:00:00Z', updated_at: '2026-10-02T10:00:00Z' })]))
+  await reconcileDelivery(root, config, { at: '2026-10-02T12:00:00.000Z' })
+  const stream = streamFiles(root).filter(f => f.path.startsWith('context/streams/delivery/')).map(f => f.text).join('\n')
+  const entries = stream.split(/^### /m).slice(1)
+  assert.equal(entries.length, 2)
+  assert.match(entries[0], /PR descriptions \(newly linked\):\nhttps:\/\/github.com\/acme\/web\/pull\/42\nCloses ACM-1/)
+  assert.match(entries[1], /merged/)
+  assert.doesNotMatch(entries[1], /Adds the reset endpoint/)
+  assert.match(entries[1], /No newly linked PRs/)
+})

@@ -172,13 +172,21 @@ export async function reconcileDelivery(root: string, config: LoreConfig, opts: 
     applyChange(item, {}, { at, by: 'lore-delivery', via: opts.apiKey ? 'fold' : 'sync', reason: 'Updated related pull request evidence', sources },
       { related_prs: [before, after] })
     // Persist evidence as a fresh event so the fold cannot miss a historical
-    // match just because the original PR event was already consumed.
-    writeDocs(root, [{ id: `delivery-${item.key}-${digest([after, item.history.length])}`, source: 'delivery', channel: prefix,
-      author: 'lore-delivery', timestamp: at, permalink: sources[0] ?? after[0].url,
-      text: `${item.key}: ${item.title}\n${describeDelivery(item)}\n\nPR descriptions:\n${after.map(link => {
+    // match just because the original PR event was already consumed. Only a
+    // newly linked PR's description is new to the fold: a link whose status
+    // or relevance moved was described by an earlier entry, and repeating
+    // every description on each change made this stream the largest the
+    // fold read (Jointly, 2026-10-22: 205 copies of 31 descriptions).
+    const fresh = after.filter(link => !before.some(old => old.url === link.url))
+    const descriptions = fresh.length
+      ? `PR descriptions (newly linked):\n${fresh.map(link => {
         const pr = prs.find(p => p.url === link.url)
         return `${link.url}\n${pr?.body?.slice(0, 12000) || '(no description available)'}`
-      }).join('\n\n')}\n\nThese are delivery observations. Assess the complete ticket scope before changing its status.`,
+      }).join('\n\n')}`
+      : 'No newly linked PRs; descriptions of the PRs above are in earlier delivery entries for this ticket and the GitHub stream.'
+    writeDocs(root, [{ id: `delivery-${item.key}-${digest([after, item.history.length])}`, source: 'delivery', channel: prefix,
+      author: 'lore-delivery', timestamp: at, permalink: sources[0] ?? after[0].url,
+      text: `${item.key}: ${item.title}\n${describeDelivery(item)}\n\n${descriptions}\n\nThese are delivery observations. Assess the complete ticket scope before changing its status.`,
     }])
     changed++
   }
