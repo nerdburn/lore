@@ -125,10 +125,13 @@ export function resolveContext(cwd: string, opts: ResolveOptions = {}): Resolved
     return fromCache(repo, opts)
   }
 
-  throw new Error(
+  throw new NoContextError(
     `no ${CONFIG_FILE} found from ${cwd} upward — run \`lore init\` (context repo), \`lore link owner/repo\` (project repo), or pass --context/--project`,
   )
 }
+
+/** Nothing names a context: no flag, no lore.json up the tree, no LORE_CONTEXT/LORE_PROJECT. */
+export class NoContextError extends Error {}
 
 /** Walk up from cwd looking for lore.json (stops at filesystem root). */
 function findLoreJson(from: string): string | null {
