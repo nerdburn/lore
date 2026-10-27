@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { userInfo } from 'node:os'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { readAudit } from '../src/audit.js'
-import { createServer, MCP_TOOLS } from '../src/commands/mcp.js'
-import { resolveContext } from '../src/context.js'
+import { createServer, createUnlinkedServer, MCP_TOOLS } from '../src/commands/mcp.js'
+import { NoContextError, resolveContext } from '../src/context.js'
 import { recallData } from '../src/recall.js'
 import { rebuildLoad } from '../src/load/store.js'
 import { queryLoad } from '../src/load/query.js'
@@ -163,4 +163,35 @@ test('mcp: lore_remember is refused when write.allow excludes the actor', async 
   assert.equal(readFileSync(join(root, 'context/facts.yaml'), 'utf8').trim().endsWith('[]'), true)
   assert.deepEqual(readAudit(root), [])
   await s.close()
+})
+
+test('mcp: an unlinked folder gets a server that explains itself instead of exiting', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'lore-home-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'lore-unlinked-'))
+  writeFileSync(join(home, 'registry.json'), JSON.stringify({ acme: 'acme/lore-acme' }))
+  const saved = { home: process.env.LORE_HOME, ctx: process.env.LORE_CONTEXT, proj: process.env.LORE_PROJECT }
+  process.env.LORE_HOME = home
+  delete process.env.LORE_CONTEXT
+  delete process.env.LORE_PROJECT
+  try {
+    let reason = ''
+    assert.throws(() => resolveContext(cwd), (err) => err instanceof NoContextError && ((reason = err.message), true))
+    const server = createUnlinkedServer(cwd, reason)
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair()
+    await server.connect(serverT)
+    const client = new Client({ name: 'test', version: '0' })
+    await client.connect(clientT)
+    const tools = (await client.listTools()).tools.map((t) => t.name).sort()
+    assert.deepEqual(tools, ['lore_load_all', 'lore_status'])
+    const res = await client.callTool({ name: 'lore_status', arguments: {} })
+    const out = (res.content as { text: string }[])[0].text
+    assert.match(out, /no lore\.json found/)
+    assert.match(out, /Registered projects: acme\./)
+    await Promise.all([client.close(), server.close()])
+  } finally {
+    for (const [k, v] of [['LORE_HOME', saved.home], ['LORE_CONTEXT', saved.ctx], ['LORE_PROJECT', saved.proj]] as const) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
 })

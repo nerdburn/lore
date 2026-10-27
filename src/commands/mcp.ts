@@ -3,7 +3,7 @@ import { join, normalize } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
+import { git, NoContextError, readRegistry, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { recallData, roadmapAnswer } from '../recall.js'
 import { statusView } from '../status.js'
 import { grepContext } from '../search.js'
@@ -85,10 +85,44 @@ export async function mcp(cwd: string, opts: McpCommandOptions): Promise<void> {
     console.log(JSON.stringify(opts.portfolio ? [...MCP_TOOLS, ...PORTFOLIO_TOOLS] : MCP_TOOLS, null, 2))
     return
   }
-  const ctx = resolveContext(cwd, opts)
-  const server = createServer(ctx, { cwd, opts })
+  let server: McpServer
+  try {
+    server = createServer(resolveContext(cwd, opts), { cwd, opts })
+  } catch (err) {
+    // A plugin starts this in whatever folder the agent opened. Exiting
+    // there reads as a broken connection; serve the explanation instead.
+    if (!(err instanceof NoContextError)) throw err
+    server = createUnlinkedServer(cwd, err.message)
+  }
   if (opts.portfolio) registerPortfolioTools(server, cwd)
   await server.connect(new StdioServerTransport())
+}
+
+/**
+ * The server for a folder that isn't linked to any project: lore_status says
+ * so and lists the registered projects, and lore_load_all still works,
+ * since it reads the registry rather than this folder.
+ */
+export function createUnlinkedServer(cwd: string, reason: string): McpServer {
+  const server = new McpServer({ name: 'lore', version: '0.5.5' })
+  server.registerTool(
+    'lore_status',
+    {
+      description: 'This folder is not linked to a lore project, so project memory tools are unavailable here. Call this to learn why and which projects exist, then tell the user how to link the folder or where to open the agent instead.',
+      inputSchema: {},
+    },
+    async () => {
+      const projects = Object.keys(readRegistry()).sort()
+      const lines = [
+        `Not linked to a lore project: ${reason}.`,
+        'Open the agent in a project repo that has a lore.json, or set LORE_PROJECT / LORE_CONTEXT in the MCP server config.',
+        projects.length ? `Registered projects: ${projects.join(', ')}.` : 'No projects are registered on this machine yet.',
+      ]
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] }
+    },
+  )
+  registerPortfolioTools(server, cwd)
+  return server
 }
 
 /** Register PORTFOLIO_TOOLS. Each project's clone is re-pulled at most once a minute. */
