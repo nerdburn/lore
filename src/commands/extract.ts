@@ -479,7 +479,7 @@ export async function structuredCompletion(system: string, user: string, schema:
   const model = process.env.LORE_LOAD_MODEL ?? process.env.LORE_MODEL_INCREMENTAL ?? MODEL_INCREMENTAL
   let usage: CompletionUsage | undefined
   const output = await onBackend(
-    () => cliStructuredCompletion(model, system + '\nReturn only JSON matching this schema:\n' + JSON.stringify(schema), user, raw => { usage = completionUsage(raw) }),
+    () => cliStructuredCompletion(model, system + '\nReturn only JSON matching this schema:\n' + JSON.stringify(schema), user, schema, raw => { usage = completionUsage(raw) }),
     () => sdkText(model, system, user, schema, raw => { usage = completionUsage(raw) }),
   )
   const start = output.indexOf('{'), end = output.lastIndexOf('}')
@@ -487,11 +487,18 @@ export async function structuredCompletion(system: string, user: string, schema:
   return { value: JSON.parse(output.slice(start, end + 1)), model, usage }
 }
 
-function cliStructuredCompletion(model: string, system: string, user: string, onUsage?: (raw: Record<string, unknown>) => void): string {
+/**
+ * `--json-schema` makes the CLI enforce the schema (constrained decoding) and
+ * return the parsed object as `structured_output`. Without it the model only
+ * follows the prompt's "return JSON" instruction, and one malformed value
+ * (e.g. an unquoted enum, `"confidence":medium`) failed the whole run.
+ */
+function cliStructuredCompletion(model: string, system: string, user: string, schema: Record<string, unknown>, onUsage?: (raw: Record<string, unknown>) => void): string {
   let output: string
   try {
     output = execFileSync('claude', ['-p', '--output-format', 'json', '--model', cliModelAlias(model),
-      '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--system-prompt', system], {
+      '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--system-prompt', system,
+      '--json-schema', JSON.stringify(schema)], {
       input: user, maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000, stdio: ['pipe', 'pipe', 'pipe'],
     }).toString()
   } catch (err) {
@@ -500,9 +507,16 @@ function cliStructuredCompletion(model: string, system: string, user: string, on
     try { const e = JSON.parse(stdout ?? '{}'); if (e.is_error && typeof e.result === 'string') reason = e.result.slice(0, 300) } catch { /* no model envelope */ }
     throw new Error(`load: ${reason}`)
   }
-  const envelope = JSON.parse(output) as { is_error?: boolean; result?: string; usage?: Record<string, unknown> }
-  if (envelope.is_error || typeof envelope.result !== 'string') throw new Error('load: configured CLI did not return a successful completion')
+  return structuredEnvelopeText(output, onUsage)
+}
+
+/** The JSON text of a `claude -p --output-format json` envelope: `structured_output` when present, else `result`. Exported for tests. */
+export function structuredEnvelopeText(output: string, onUsage?: (raw: Record<string, unknown>) => void): string {
+  const envelope = JSON.parse(output) as { is_error?: boolean; result?: string; structured_output?: unknown; usage?: Record<string, unknown> }
+  if (envelope.is_error) throw new Error('load: configured CLI did not return a successful completion')
   if (envelope.usage) onUsage?.(envelope.usage)
+  if (envelope.structured_output && typeof envelope.structured_output === 'object') return JSON.stringify(envelope.structured_output)
+  if (typeof envelope.result !== 'string') throw new Error('load: configured CLI did not return a successful completion')
   return envelope.result
 }
 

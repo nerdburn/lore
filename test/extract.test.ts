@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, reportArtifacts, reportExcerpt, reportMaterial, streamFiles, withRetry } from '../src/commands/extract.js'
+import { acceptFold, cliModelAlias, pack, parseFoldOutput, pickModel, reportArtifacts, reportExcerpt, reportMaterial, streamFiles, structuredEnvelopeText, withRetry } from '../src/commands/extract.js'
 import { makeContextRepo } from './helpers.js'
 
 const VALID = { requests: [], decisions: [{ id: 'dec-0001' }], roadmap: [], contradictions: [] }
@@ -191,4 +191,17 @@ test('extract: the weekly report sees open and this week\'s requests, the last m
   const decisions = [{ id: 'dec-1', date: '2026-09-22' }, { id: 'dec-2', date: '2026-09-23' }, { id: 'dec-3', date: '2026-10-22' }]
   assert.deepEqual(reportArtifacts('decisions', decisions, '2026-10-16').map((d) => (d as { id: string }).id), ['dec-2', 'dec-3'])
   assert.equal(reportArtifacts('roadmap', [{ id: 'goal-1' }], '2026-10-16').length, 1)
+})
+
+test('structuredEnvelopeText prefers the schema-enforced structured_output over the result text', () => {
+  let usage: Record<string, unknown> | undefined
+  const envelope = JSON.stringify({ is_error: false, result: '{"confidence":medium}', structured_output: { confidence: 'medium' }, usage: { input_tokens: 3 } })
+  assert.deepEqual(JSON.parse(structuredEnvelopeText(envelope, raw => { usage = raw })), { confidence: 'medium' })
+  assert.deepEqual(usage, { input_tokens: 3 })
+})
+
+test('structuredEnvelopeText falls back to result without structured_output, and rejects errors', () => {
+  assert.equal(structuredEnvelopeText(JSON.stringify({ is_error: false, result: '{"a":1}' })), '{"a":1}')
+  assert.throws(() => structuredEnvelopeText(JSON.stringify({ is_error: true, result: 'boom' })), /did not return a successful completion/)
+  assert.throws(() => structuredEnvelopeText(JSON.stringify({ is_error: false })), /did not return a successful completion/)
 })
