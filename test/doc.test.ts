@@ -173,3 +173,43 @@ test('mcp: lore_doc_add adds a document as the OS user, never a caller-supplied 
   assert.equal(entry.actor, userInfo().username)
   await Promise.all([client.close(), server.close()])
 })
+
+test('doc add folder: every document in a Drive folder lands in the docs stream, one commit, re-adding is a no-op', async () => {
+  const { docAddFolder } = await import('../src/commands/doc.js')
+  const root = makeContextRepo({}, { ...ACME, client: { name: 'Merrin', domains: [], contacts: [], owner: 'shawn@inputlogic.ca' } })
+  const FOLDER = 'https://drive.google.com/drive/folders/1FolderIdAbcdefgh'
+  const seen: string[] = []
+  const exportFolder = async (url: string, as: string) => {
+    seen.push(`${as} ${url}`)
+    return {
+      id: '1FolderIdAbcdefgh',
+      name: 'Handoff',
+      url: FOLDER,
+      docs: [
+        { id: DOC_ID, name: 'Merrin Product Spec v1', path: 'Merrin Product Spec v1', url: `https://docs.google.com/document/d/${DOC_ID}`, markdown: SPEC, owner: 'Julie Harsh' },
+        { id: 'brief0000000000000000', name: 'Brief', path: 'Notes/Brief', url: 'https://drive.google.com/file/d/brief0000000000000000', markdown: 'Launch in Canada first.' },
+        { id: 'empty000000000000000', name: 'Blank', path: 'Blank', url: 'https://drive.google.com/file/d/empty000000000000000', markdown: '  ' },
+      ],
+      skipped: ['logo.png: image/png, not a document'],
+    }
+  }
+  const { result, out } = await captureConsole(() => docAddFolder(root, { url: FOLDER, date: '2026-09-14' }, { context: root, exportFolder }))
+  assert.deepEqual(seen, [`shawn@inputlogic.ca ${FOLDER}`])
+  assert.equal(result.folder, 'Handoff')
+  assert.deepEqual(result.documents.map((d) => [d.path, d.file, d.from, d.written]), [
+    ['Merrin Product Spec v1', 'context/streams/docs/merrin-product-spec-v1/2026-09-14.md', 'Julie Harsh', true],
+    ['Notes/Brief', 'context/streams/docs/brief/2026-09-14.md', userInfo().username, true],
+  ])
+  assert.deepEqual(result.skipped, ['logo.png: image/png, not a document', 'Blank: empty'])
+  assert.match(out, /folder Handoff: 2 added, 0 unchanged, 2 skipped/)
+  assert.match(readFileSync(join(root, result.documents[1].file), 'utf8'), /folder: 1FolderIdAbcdefgh[\s\S]*Launch in Canada first\./)
+  assert.equal(readAudit(root).length, 2)
+  assert.equal(readDocIndex(root).length, 2)
+
+  const again = await captureConsole(() => docAddFolder(root, { url: FOLDER, date: '2026-09-15' }, { context: root, exportFolder }))
+  assert.deepEqual(again.result.documents.map((d) => d.written), [false, false])
+  assert.equal(readAudit(root).length, 2)
+
+  await assert.rejects(docAddFolder(root, { url: FOLDER, title: 'x' }, { context: root, exportFolder }), /do not apply to a folder/)
+  await assert.rejects(docAdd(root, { file: FOLDER }, { context: root }), /Drive folder link/)
+})

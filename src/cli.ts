@@ -24,13 +24,13 @@ import { sync } from './commands/sync.js'
 import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
 import { workAdd, workMove, workSet, projectItemAdd, projectItemMove, projectSync } from './commands/project.js'
-import { docAdd, docList } from './commands/doc.js'
+import { docAdd, docAddFolder, docList } from './commands/doc.js'
 import { workLabel, workList, workPromote, workRank, workShow } from './commands/work.js'
 import { resolveContext } from './context.js'
 import { statusView } from './status.js'
 import { printPush, workPush } from './commands/work-push.js'
 import { sourceAdd, sourceList } from './commands/source.js'
-import { exportGoogleDoc } from './gdoc.js'
+import { exportGoogleDoc, exportGoogleFolder, googleFolderId } from './gdoc.js'
 
 function splitList(value: unknown): string[] | undefined {
   return value === undefined ? undefined : String(value).split(/[;,]/).map((s) => s.trim()).filter(Boolean)
@@ -292,11 +292,20 @@ program
   .command('gdoc')
   .description('Google Docs helpers (need the Workspace service account key on this machine)')
   .command('export')
-  .description('export a Google Doc as Markdown via the service account, acting as a teammate')
-  .argument('<url>', 'docs.google.com link')
+  .description('export a Google Doc as Markdown via the service account, acting as a teammate — or, for a Drive folder link, every readable file under it')
+  .argument('<url>', 'docs.google.com / drive.google.com file link, or a drive.google.com/drive/folders/… link')
   .requiredOption('--as <email>', 'the Workspace user to read as')
-  .option('--json', 'emit {id, name, url, markdown} instead of the markdown')
+  .option('--json', 'emit {id, name, url, markdown} (a folder: {id, name, url, docs, skipped}) instead of the markdown')
   .action(async (url: string, o) => {
+    if (googleFolderId(url)) {
+      const folder = await exportGoogleFolder(url, o.as)
+      if (o.json) console.log(JSON.stringify(folder))
+      else {
+        for (const d of folder.docs) console.log(`<!-- ${d.path} — ${d.url} -->\n\n${d.markdown}\n`)
+        for (const sk of folder.skipped) console.error(`skipped ${sk}`)
+      }
+      return
+    }
     const doc = await exportGoogleDoc(url, o.as)
     console.log(o.json ? JSON.stringify(doc) : doc.markdown)
   })
@@ -306,8 +315,8 @@ const doc = program.command('doc').description('documents as a stream — specs,
 contextual(
   doc
     .command('add')
-    .description('add a document to the `docs` stream: a Google Docs/Drive link (Doc, Slides, Sheet, uploaded Word/PowerPoint/Excel, PDF, text — read via the Workspace service account) or a local .md/.txt/.csv/.pdf/.docx/.pptx/.xlsx; commits and pushes')
-    .argument('<file>', 'path to a .md, .txt, .csv, .pdf, .docx, .pptx, or .xlsx — or a docs.google.com / drive.google.com link')
+    .description('add a document to the `docs` stream: a Google Docs/Drive link (Doc, Slides, Sheet, uploaded Word/PowerPoint/Excel, PDF, text — read via the Workspace service account), a Drive folder link (every readable file in it, subfolders included), or a local .md/.txt/.csv/.pdf/.docx/.pptx/.xlsx; commits and pushes')
+    .argument('<file>', 'path to a .md, .txt, .csv, .pdf, .docx, .pptx, or .xlsx — or a docs.google.com / drive.google.com file or folder link')
     .option('--title <title>', 'document title (default: the Google Doc name or the file name); becomes the stream channel')
     .option('--from <who>', 'who sent or authored it (default: the Drive owner, else you)')
     .option('--date <date>', 'YYYY-MM-DD the document belongs to (default today)')
@@ -315,7 +324,8 @@ contextual(
     .option('--as <email>', 'for a Google link: the teammate the service account reads it as (default client.owner)')
     .option('--by <who>', 'who is adding this (defaults to OS username)'),
 ).action(async (file: string, o) => {
-  await docAdd(root, { file, title: o.title, from: o.from, date: o.date, source: o.source, as: o.as }, o)
+  if (googleFolderId(file)) await docAddFolder(root, { url: file, from: o.from, date: o.date, as: o.as, title: o.title, source: o.source }, o)
+  else await docAdd(root, { file, title: o.title, from: o.from, date: o.date, source: o.source, as: o.as }, o)
 })
 contextual(doc.command('list').description('list documents in the `docs` stream').option('--json', 'machine-readable output')).action((o) => void docList(root, o))
 

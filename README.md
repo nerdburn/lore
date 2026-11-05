@@ -248,9 +248,11 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   attaches (PDF, Word, PowerPoint, Excel, text) are read too — Drive as the
   mailbox owner, attachments from Gmail — and filed into the `docs` stream
   dated and attributed like the email, so the content is in memory, not just
-  the link. A link the owner cannot open is logged, never fatal; folders,
-  images and Figma links stay links. `documents: false` on the source opts
-  out. Mailboxes default to the `team`-side contacts
+  the link. A Drive folder — linked in an email, or shared with a teammate
+  (Drive's "shared a folder with you" notice, when the sharer is the client)
+  — is read once per email: every readable file in it and its subfolders.
+  A link the owner cannot open is logged, never fatal; images and Figma
+  links stay links. `documents: false` on the source opts out. Mailboxes default to the `team`-side contacts
   in the `client` block; `users` names them, or `users: "all"` reads every
   active mailbox in the Workspace (listed through the Directory API as
   `admin`, default `client.owner`), so a teammate the client emails for the
@@ -660,6 +662,7 @@ they read) plus the numbers the user or the document states.
 lore doc add "https://docs.google.com/document/d/…"                 # title, author, link from Drive
 lore doc add ~/Downloads/alpha-gtm-brief.pdf --from "Matthew" --date 2026-09-09
 lore doc add "https://docs.google.com/presentation/d/…" --title "Vision deck"
+lore doc add "https://drive.google.com/drive/folders/…"             # every readable file in the folder, subfolders too
 lore doc list
 ```
 

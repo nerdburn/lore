@@ -3,9 +3,10 @@ import { basename, extname, join } from 'node:path'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, gitCommit, readGlobalConfig, resolveContext, type ResolveOptions } from '../context.js'
 import { readDocument } from '../document.js'
-import { googleDocId, resolveGoogleDoc, type GoogleDoc } from '../gdoc.js'
+import { googleDocId, googleFolderId, resolveGoogleDoc, resolveGoogleFolder, type GoogleDoc, type GoogleFolder } from '../gdoc.js'
 import { writeDocs } from '../streams.js'
 import { buildStreamDoc, DOCS_SOURCE } from '../docs-stream.js'
+import type { Doc } from '../types.js'
 import { authorizeWrite } from '../write.js'
 
 /**
@@ -51,6 +52,8 @@ export interface DocAddOptions extends ResolveOptions {
 | 'mcp'
   /** Test seam: how a Google link becomes text. */
   exportDoc?: (url: string, as: string) => Promise<GoogleDoc>
+  /** Test seam: how a Drive folder link becomes its documents. */
+  exportFolder?: (url: string, as: string) => Promise<GoogleFolder>
 }
 
 export interface DocAdded {
@@ -78,9 +81,9 @@ export async function docAdd(cwd: string, input: DocAddInput, opts: DocAddOption
   let source = input.source
   let from = input.from?.trim()
   const meta: Record<string, string> = {}
+  if (body === undefined && input.file && googleFolderId(input.file)) throw new Error('doc: that is a Drive folder link — add it with docAddFolder (`lore doc add <folder link>` does this) to file every document in it')
   if (body === undefined && input.file && googleDocId(input.file)) {
-    const as = input.as ?? ctx.config.client?.owner ?? readGlobalConfig().owner
-    if (!as) throw new Error('doc: a Google link needs --as <teammate email> (or client.owner in lore.json, or owner in ~/.lore/config.json) — the service account reads the document as that person')
+    const as = readAs(ctx, input.as)
     const doc = await (opts.exportDoc ?? resolveGoogleDoc)(input.file, as)
     body = doc.markdown
     title ||= doc.name
@@ -102,36 +105,124 @@ export async function docAdd(cwd: string, input: DocAddInput, opts: DocAddOption
   const { gdoc: gdocId, ...restMeta } = meta
   const { doc, rel, slug, id } = buildStreamDoc({ title, body, from, date, source, gdocId, meta: restMeta, addedBy: actor })
   const text = doc.text
-  const result = writeDocs(ctx.root, [doc])
-  const written = result.written === 1
-  if (written) {
-    appendAudit(ctx.root, {
-      at: new Date().toISOString(),
-      action: 'doc',
-      actor,
-      via,
-      id,
-      ...(source ? { source } : {}),
-    })
-    if (ctx.mode === 'cache') {
-      git(ctx.root, 'add', rel, AUDIT_FILE)
-      gitCommit(ctx.root, '--quiet', '-m', `lore: doc add ${slug} (${Math.round(text.length / 1000)}k chars)`)
-      try {
-        git(ctx.root, 'push', '--quiet')
-      } catch {
-        throw new Error(`wrote ${rel} and committed to the cache, but push to ${ctx.repo} failed — check access, then run \`git -C ${ctx.root} push\``)
-      }
-    }
-  }
-
+  const [{ written, redacted }] = fileDocs(ctx, [{ doc, rel }], actor, via, `lore: doc add ${slug} (${Math.round(text.length / 1000)}k chars)`)
   const summary: DocAdded = { id, title, file: rel, from, date, ...(source ? { source } : {}), chars: text.length, written }
   if (via === 'cli') {
-    const notes = [Object.keys(result.redacted).length ? 'secrets redacted' : ''].filter(Boolean)
+    const notes = [redacted ? 'secrets redacted' : ''].filter(Boolean)
     console.log(
       written
         ? `added ${rel}: ${title} — ${summary.chars.toLocaleString()} chars from ${from}${notes.length ? ` (${notes.join(', ')})` : ''}${ctx.repo ? ` → ${ctx.repo}` : ''}`
         : `unchanged: ${title} is already in ${rel} with this exact content`,
     )
+  }
+  return summary
+}
+
+function readAs(ctx: ReturnType<typeof resolveContext>, as: string | undefined): string {
+  const who = as ?? ctx.config.client?.owner ?? readGlobalConfig().owner
+  if (!who) throw new Error('doc: a Google link needs --as <teammate email> (or client.owner in lore.json, or owner in ~/.lore/config.json) — the service account reads the document as that person')
+  return who
+}
+
+/**
+ * Write stream docs one at a time (so each knows whether it was new), audit
+ * each new one, and — in a cache checkout — commit them together and push.
+ */
+function fileDocs(
+  ctx: ReturnType<typeof resolveContext>,
+  items: { doc: Doc; rel: string }[],
+  actor: string,
+  via: 'cli' | 'mcp',
+  message: string,
+): { written: boolean; redacted: boolean }[] {
+  const results = items.map(({ doc }) => {
+    const r = writeDocs(ctx.root, [doc])
+    const written = r.written === 1
+    if (written) appendAudit(ctx.root, { at: new Date().toISOString(), action: 'doc', actor, via, id: doc.id, ...(doc.permalink ? { source: doc.permalink } : {}) })
+    return { written, redacted: Object.keys(r.redacted).length > 0 }
+  })
+  const rels = [...new Set(items.filter((_, i) => results[i].written).map((it) => it.rel))]
+  if (rels.length && ctx.mode === 'cache') {
+    git(ctx.root, 'add', ...rels, AUDIT_FILE)
+    gitCommit(ctx.root, '--quiet', '-m', message)
+    try {
+      git(ctx.root, 'push', '--quiet')
+    } catch {
+      throw new Error(`wrote ${rels.join(', ')} and committed to the cache, but push to ${ctx.repo} failed — check access, then run \`git -C ${ctx.root} push\``)
+    }
+  }
+  return results
+}
+
+export interface DocFolderInput {
+  /** A drive.google.com/drive/folders/… link. */
+  url: string
+  /** Who sent the folder — every document's author. Defaults to each file's Drive owner, then the actor. */
+  from?: string
+  /** YYYY-MM-DD the documents belong to (default today). */
+  date?: string
+  /** The teammate the service account reads as (default `client.owner`). */
+  as?: string
+  /** Not accepted for a folder — each document keeps its own name and link. Present only to refuse clearly. */
+  title?: string
+  source?: string
+}
+
+export interface DocFolderAdded {
+  folder: string
+  url: string
+  /** One entry per readable file, new or unchanged. */
+  documents: (DocAdded & { path: string })[]
+  /** Files left out — not documents, or unreadable — as `path: reason`. */
+  skipped: string[]
+}
+
+/**
+ * A Drive folder link → every readable document under it (subfolders
+ * included) in the `docs` stream, each exactly as `docAdd` would file that
+ * file's own link: its name as title, its link as permalink, versions
+ * deduped by content. One commit for the lot.
+ */
+export async function docAddFolder(cwd: string, input: DocFolderInput, opts: DocAddOptions = {}): Promise<DocFolderAdded> {
+  const ctx = resolveContext(cwd, opts)
+  const via = opts.via ?? 'cli'
+  const actor = authorizeWrite(ctx, opts, 'doc')
+  if (!googleFolderId(input.url)) throw new Error(`doc: not a Google Drive folder link: ${input.url}`)
+  if (input.title || input.source) throw new Error('doc: --title and --source do not apply to a folder — each document keeps its own name and link')
+  if (input.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new Error(`doc: --date must be an ISO date (YYYY-MM-DD), got "${input.date}"`)
+  const as = readAs(ctx, input.as)
+  const folder = await (opts.exportFolder ?? resolveGoogleFolder)(input.url, as)
+  const date = input.date ?? new Date().toISOString().slice(0, 10)
+
+  const skipped = [...folder.skipped]
+  const built: { doc: Doc; rel: string; summary: DocAdded & { path: string } }[] = []
+  for (const g of folder.docs) {
+    if (!g.markdown.trim()) {
+      skipped.push(`${g.path}: empty`)
+      continue
+    }
+    const from = input.from?.trim() || g.owner || actor
+    const b = buildStreamDoc({
+      title: g.name,
+      body: g.markdown,
+      from,
+      date,
+      source: g.url,
+      gdocId: g.id,
+      meta: { folder: folder.id, ...(g.modified ? { modified: g.modified } : {}), ...(g.mimeType ? { mime: g.mimeType } : {}) },
+      addedBy: actor,
+    })
+    built.push({ doc: b.doc, rel: b.rel, summary: { id: b.id, title: g.name, path: g.path, file: b.rel, from, date, source: g.url, chars: b.doc.text.length, written: false } })
+  }
+  const results = fileDocs(ctx, built, actor, via, `lore: doc add folder ${folder.name} (${built.length} documents)`)
+  const documents = built.map((b, i) => ({ ...b.summary, written: results[i].written }))
+
+  const summary: DocFolderAdded = { folder: folder.name, url: folder.url, documents, skipped }
+  if (via === 'cli') {
+    const added = documents.filter((d) => d.written)
+    console.log(`folder ${folder.name}: ${added.length} added, ${documents.length - added.length} unchanged, ${skipped.length} skipped${added.length && ctx.repo ? ` → ${ctx.repo}` : ''}`)
+    for (const d of documents) console.log(`  ${d.written ? 'added    ' : 'unchanged'} ${d.path} → ${d.file}`)
+    for (const sk of skipped) console.log(`  skipped   ${sk}`)
   }
   return summary
 }

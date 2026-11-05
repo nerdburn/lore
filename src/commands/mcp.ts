@@ -9,7 +9,8 @@ import { statusView } from '../status.js'
 import { grepContext } from '../search.js'
 import { refresh } from './refresh.js'
 import { remember } from './remember.js'
-import { docAdd } from './doc.js'
+import { docAdd, docAddFolder } from './doc.js'
+import { googleFolderId } from '../gdoc.js'
 import { sowAdd } from './sow.js'
 import { workLabel, workPromote, workRank } from './work.js'
 import { workAdd, workMove, workSet, projectItemAdd, projectItemMove } from './project.js'
@@ -348,9 +349,9 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? 'Unavailable: this client is archived and its memory is read-only.'
-        : 'Add a document to project memory as raw material — a spec, brief, deck, handoff package, anything a client sends that is not a statement of work. Give a Google Docs/Drive link (url; lore reads it via the Workspace service account as the client owner — Docs, Slides, Sheets, PDFs, text) or the text itself (text, with a title). It lands in the docs stream like a Slack message or an email: grep-able at once, folded by the next extract into requests/decisions/roadmap citing the link. Nothing in it becomes authoritative; for commitments use lore_sow_add. Use on explicit user instruction. Re-adding identical content is a no-op; changed content adds a new version.',
+        : 'Add a document to project memory as raw material — a spec, brief, deck, handoff package, anything a client sends that is not a statement of work. Give a Google Docs/Drive link (url; lore reads it via the Workspace service account as the client owner — Docs, Slides, Sheets, PDFs, text), a Drive folder link (url; every readable file in it and its subfolders is added, each under its own name and link — the result lists added, unchanged, and skipped files), or the text itself (text, with a title). It lands in the docs stream like a Slack message or an email: grep-able at once, folded by the next extract into requests/decisions/roadmap citing the link. Nothing in it becomes authoritative; for commitments use lore_sow_add. Use on explicit user instruction. Re-adding identical content is a no-op; changed content adds a new version.',
       inputSchema: {
-        url: z.string().optional().describe('docs.google.com or drive.google.com link (or give text)'),
+        url: z.string().optional().describe('docs.google.com or drive.google.com file link, or a drive.google.com/drive/folders/… folder link (or give text)'),
         text: z.string().optional().describe('the document as markdown/plain text (or give url)'),
         title: z.string().optional().describe('title — required with text; defaults to the Google Doc name'),
         from: z.string().optional().describe('who sent or authored it (default: the Drive owner)'),
@@ -359,6 +360,9 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       },
     },
     async ({ url, text: body, title, from, date, source }) => {
+      if (url && body === undefined && googleFolderId(url)) {
+        return text(await docAddFolder(rememberOpts.cwd, { url, from, date, title, source }, { ...rememberOpts.opts, via: 'mcp' }))
+      }
       const d = await docAdd(rememberOpts.cwd, { file: url, text: body, title, from, date, source }, { ...rememberOpts.opts, via: 'mcp' })
       return text(d)
     },

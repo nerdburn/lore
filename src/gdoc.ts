@@ -17,7 +17,8 @@ import { officeKind, officeText } from './office.js'
  *
  * What comes back as text: a Google Doc as Markdown, Slides as plain text,
  * a Sheet as CSV, and a Drive-hosted PDF, Markdown, or text file as-is
- * (PDFs through the same extraction `sow add` uses for local files).
+ * (PDFs through the same extraction `sow add` uses for local files). A
+ * folder link is walked (subfolders too) and each of those files read.
  */
 
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
@@ -61,9 +62,35 @@ export function hasServiceAccountKey(keyFile = defaultKeyFile()): boolean {
   return existsSync(keyFile)
 }
 
-export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = {}): Promise<GoogleDoc> {
-  const id = googleDocId(url)
-  if (!id) throw new Error(`not a Google Doc link: ${url}`)
+/** drive.google.com/drive/folders/<id> (any `/u/N/` or `/my-drive` prefix, any query) → folder id; anything else → undefined. */
+export function googleFolderId(url: string): string | undefined {
+  const m = /^https?:\/\/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([A-Za-z0-9_-]{10,})(?:[/?#]|$)/.exec(url.trim())
+  return m?.[1]
+}
+
+export interface GoogleFolder {
+  id: string
+  name: string
+  url: string
+  /** Every readable file under the folder (subfolders included), each as text. */
+  docs: (GoogleDoc & { path: string })[]
+  /** Files that are not documents (images, video, …) or could not be read — `path: reason`. */
+  skipped: string[]
+}
+
+/** How many files one folder link may pull in; past this, link the subfolders you want instead. */
+export const FOLDER_FILE_LIMIT = 200
+const FOLDER_DEPTH_LIMIT = 8
+const FOLDER_MIME = 'application/vnd.google-apps.folder'
+const SHORTCUT_MIME = 'application/vnd.google-apps.shortcut'
+
+interface DriveSession {
+  as: string
+  fetchFn: typeof fetch
+  headers: Record<string, string>
+}
+
+async function driveSession(as: string, deps: GdocDeps): Promise<DriveSession> {
   const keyFile = deps.keyFile ?? defaultKeyFile()
   if (!existsSync(keyFile)) throw new Error(`no service account key at ${keyFile} — run this where the key lives, or pass the document as a file`)
   const key = JSON.parse(readFileSync(keyFile, 'utf8')) as { client_email: string; private_key: string; token_uri?: string }
@@ -85,8 +112,22 @@ export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = 
       }`,
     )
   }
-  const headers = { Authorization: `Bearer ${token.access_token}` }
+  return { as, fetchFn, headers: { Authorization: `Bearer ${token.access_token}` } }
+}
 
+export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = {}): Promise<GoogleDoc> {
+  const id = googleDocId(url)
+  if (!id) throw new Error(`not a Google Doc link: ${url}`)
+  return exportFile(await driveSession(as, deps), id)
+}
+
+/** Whether a Drive MIME type is one `exportFile` can turn into text. */
+function readableMime(mime: string): boolean {
+  return Boolean(GOOGLE_EXPORTS[mime] || officeKind(mime) || mime === 'application/pdf' || TEXT_MIMES.test(mime))
+}
+
+async function exportFile(s: DriveSession, id: string): Promise<GoogleDoc> {
+  const { fetchFn, headers, as } = s
   const metaRes = await fetchFn(`${DRIVE_API}/files/${id}?fields=name,mimeType,modifiedTime,owners(displayName,emailAddress)&supportsAllDrives=true`, { headers })
   if (!metaRes.ok) throw new Error(await driveError(metaRes, id, as))
   const meta = (await metaRes.json()) as { name: string; mimeType: string; modifiedTime?: string; owners?: { displayName?: string; emailAddress?: string }[] }
@@ -97,6 +138,8 @@ export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = 
     ...(meta.modifiedTime ? { modified: meta.modifiedTime } : {}),
     ...(meta.owners?.[0]?.displayName || meta.owners?.[0]?.emailAddress ? { owner: meta.owners[0].displayName || meta.owners[0].emailAddress } : {}),
   }
+
+  if (meta.mimeType === FOLDER_MIME) throw new Error(`google: ${meta.name} is a Drive folder — pass its drive.google.com/drive/folders/… link to read every file in it`)
 
   const native = GOOGLE_EXPORTS[meta.mimeType]
   if (native) {
@@ -126,6 +169,92 @@ export async function exportGoogleDoc(url: string, as: string, deps: GdocDeps = 
   throw new Error(`google: ${meta.name} is ${meta.mimeType}, not a readable document — download it and pass the file instead (Docs, Slides, Sheets, Word, PowerPoint, Excel, PDF, Markdown, and text are read from Drive directly)`)
 }
 
+interface DriveChild {
+  id: string
+  name: string
+  mimeType: string
+  shortcutDetails?: { targetId?: string; targetMimeType?: string }
+}
+
+async function listChildren(s: DriveSession, folderId: string): Promise<DriveChild[]> {
+  const out: DriveChild[] = []
+  let pageToken: string | undefined
+  do {
+    const params = new URLSearchParams({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: 'nextPageToken,files(id,name,mimeType,shortcutDetails)',
+      pageSize: '1000',
+      orderBy: 'name',
+      supportsAllDrives: 'true',
+      includeItemsFromAllDrives: 'true',
+      ...(pageToken ? { pageToken } : {}),
+    })
+    const res = await s.fetchFn(`${DRIVE_API}/files?${params}`, { headers: s.headers })
+    if (!res.ok) throw new Error(await driveError(res, folderId, s.as))
+    const page = (await res.json()) as { files?: DriveChild[]; nextPageToken?: string }
+    out.push(...(page.files ?? []))
+    pageToken = page.nextPageToken
+  } while (pageToken)
+  return out
+}
+
+/**
+ * A Drive folder link → every readable file under it as text, subfolders
+ * included (shortcuts followed). Files that are not documents are listed in
+ * `skipped` rather than failing the folder; so is a file that fails to read.
+ */
+export async function exportGoogleFolder(url: string, as: string, deps: GdocDeps = {}): Promise<GoogleFolder> {
+  const id = googleFolderId(url)
+  if (!id) throw new Error(`not a Google Drive folder link: ${url}`)
+  const s = await driveSession(as, deps)
+  const metaRes = await s.fetchFn(`${DRIVE_API}/files/${id}?fields=name,mimeType&supportsAllDrives=true`, { headers: s.headers })
+  if (!metaRes.ok) throw new Error(await driveError(metaRes, id, as))
+  const meta = (await metaRes.json()) as { name: string; mimeType: string }
+  if (meta.mimeType !== FOLDER_MIME) throw new Error(`google: ${meta.name} is not a folder (${meta.mimeType})`)
+
+  // Walk first, read after: the file limit is checked before any content is downloaded.
+  const files: { id: string; path: string }[] = []
+  const skipped: string[] = []
+  const seenFolders = new Set([id])
+  const seenFiles = new Set<string>()
+  // A folder's own files before its subfolders', so a file linked in both places keeps its shallower path.
+  const walk = async (folderId: string, prefix: string, depth: number): Promise<void> => {
+    const subfolders: { id: string; path: string }[] = []
+    for (const child of await listChildren(s, folderId)) {
+      const path = prefix ? `${prefix}/${child.name}` : child.name
+      const targetId = child.mimeType === SHORTCUT_MIME ? child.shortcutDetails?.targetId : child.id
+      const mime = child.mimeType === SHORTCUT_MIME ? child.shortcutDetails?.targetMimeType ?? '' : child.mimeType
+      if (!targetId) continue
+      if (mime === FOLDER_MIME) {
+        if (seenFolders.has(targetId)) continue
+        seenFolders.add(targetId)
+        if (depth >= FOLDER_DEPTH_LIMIT) skipped.push(`${path}/: nested deeper than ${FOLDER_DEPTH_LIMIT} folders`)
+        else subfolders.push({ id: targetId, path })
+      } else if (!readableMime(mime)) {
+        skipped.push(`${path}: ${mime || 'unknown type'}, not a document`)
+      } else if (!seenFiles.has(targetId)) {
+        seenFiles.add(targetId)
+        files.push({ id: targetId, path })
+      }
+    }
+    for (const sub of subfolders) await walk(sub.id, sub.path, depth + 1)
+  }
+  await walk(id, '', 1)
+  if (files.length > FOLDER_FILE_LIMIT) {
+    throw new Error(`google: ${meta.name} holds ${files.length} readable files (limit ${FOLDER_FILE_LIMIT}) — add its subfolders, or the files you need, one link at a time`)
+  }
+
+  const docs: GoogleFolder['docs'] = []
+  for (const f of files) {
+    try {
+      docs.push({ ...(await exportFile(s, f.id)), path: f.path })
+    } catch (err) {
+      skipped.push(`${f.path}: ${err instanceof Error ? err.message.split('\n')[0] : err}`)
+    }
+  }
+  return { id, name: meta.name, url: `https://drive.google.com/drive/folders/${id}`, docs, skipped }
+}
+
 /**
  * A Google link → text: locally when this machine holds the service
  * account key, otherwise over SSH on the lore host (which does), the same
@@ -142,6 +271,20 @@ export async function resolveGoogleDoc(url: string, as: string): Promise<GoogleD
     maxBuffer: 16 * 1024 * 1024,
   })
   return JSON.parse(out) as GoogleDoc
+}
+
+/** A Drive folder link → its documents as text: locally with the key, otherwise on the lore host over SSH. */
+export async function resolveGoogleFolder(url: string, as: string): Promise<GoogleFolder> {
+  if (hasServiceAccountKey()) return exportGoogleFolder(url, as)
+  const target = sshTargetFromRemote(readGlobalConfig().remote)
+  if (!target) throw new Error('no service account key here and no SSH lore host configured — download the folder and add its files one by one')
+  const out = execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', target, `lore gdoc export ${JSON.stringify(url)} --as ${JSON.stringify(as)} --json`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10 * 60_000,
+    maxBuffer: 256 * 1024 * 1024,
+  })
+  return JSON.parse(out) as GoogleFolder
 }
 
 async function driveError(res: Response, id: string, as: string): Promise<string> {
