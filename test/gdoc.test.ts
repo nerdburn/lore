@@ -142,3 +142,55 @@ test('gdoc: an uploaded .docx on Drive is downloaded and read as text, keeping t
   assert.match(doc.markdown, /^# Product Spec\nMerrin helps parents\./)
   assert.ok(!calls.some((c) => c.includes('/export')), 'no export call for a non-native file')
 })
+
+test('gdoc: recognises Drive folder links', async () => {
+  const { googleFolderId } = await import('../src/gdoc.js')
+  assert.equal(googleFolderId('https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp?usp=sharing'), '1AbCdEfGhIjKlMnOp')
+  assert.equal(googleFolderId('https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOp'), '1AbCdEfGhIjKlMnOp')
+  assert.equal(googleFolderId(URL), undefined)
+  assert.equal(googleDocId('https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp'), undefined, 'a folder is not a document')
+})
+
+test('gdoc: a folder is walked — subfolders and shortcuts followed, non-documents skipped, each file exported', async () => {
+  const { exportGoogleFolder } = await import('../src/gdoc.js')
+  const ROOT = 'rootFolder0001', SUB = 'subFolder00001'
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  const listed: string[] = []
+  const fetchFn = (async (input: string | URL | Request) => {
+    const url = String(input)
+    if (url === 'https://oauth2.test/token') return json({ access_token: 'tok' })
+    if (url.includes('/files?')) {
+      const q = new globalThis.URL(url).searchParams.get('q')!
+      listed.push(q)
+      if (q.includes(ROOT)) {
+        return json({
+          files: [
+            { id: SUB, name: 'Notes', mimeType: 'application/vnd.google-apps.folder' },
+            { id: 'docA', name: 'Spec', mimeType: 'application/vnd.google-apps.document' },
+            { id: 'img1', name: 'logo.png', mimeType: 'image/png' },
+            { id: 'sc1', name: 'Brief shortcut', mimeType: 'application/vnd.google-apps.shortcut', shortcutDetails: { targetId: 'txtB', targetMimeType: 'text/plain' } },
+          ],
+        })
+      }
+      if (q.includes(SUB)) return json({ files: [{ id: 'docA', name: 'Spec (dup)', mimeType: 'application/vnd.google-apps.document' }, { id: 'loop', name: 'Back up', mimeType: 'application/vnd.google-apps.shortcut', shortcutDetails: { targetId: ROOT, targetMimeType: 'application/vnd.google-apps.folder' } }, { id: 'txtC', name: 'kickoff.md', mimeType: 'text/markdown' }] })
+    }
+    if (url.includes(`/files/${ROOT}?`)) return json({ name: 'Client handoff', mimeType: 'application/vnd.google-apps.folder' })
+    if (url.includes('/files/docA?')) return json({ name: 'Spec', mimeType: 'application/vnd.google-apps.document', owners: [{ displayName: 'Julie' }] })
+    if (url.includes('/files/docA/export')) return new Response('# Spec\n\nOffline mode.', { status: 200 })
+    if (url.includes('/files/txtB?alt=media')) return new Response('brief body', { status: 200 })
+    if (url.includes('/files/txtB?')) return json({ name: 'Brief', mimeType: 'text/plain' })
+    if (url.includes('/files/txtC?')) return json({ error: 'nf' }, 404)
+    return json({ error: 'unexpected ' + url }, 500)
+  }) as typeof fetch
+
+  const folder = await exportGoogleFolder(`https://drive.google.com/drive/folders/${ROOT}`, 'x@y', { fetch: fetchFn, keyFile: fakeKeyFile() })
+  assert.equal(folder.name, 'Client handoff')
+  assert.equal(folder.url, `https://drive.google.com/drive/folders/${ROOT}`)
+  assert.equal(listed.length, 2, 'the shortcut back to the root is not walked again')
+  assert.deepEqual(folder.docs.map((d) => [d.path, d.name, d.markdown, d.url]), [
+    ['Spec', 'Spec', '# Spec\n\nOffline mode.', 'https://docs.google.com/document/d/docA'],
+    ['Brief shortcut', 'Brief', 'brief body', 'https://drive.google.com/file/d/txtB'],
+  ])
+  assert.deepEqual(folder.skipped.map((s) => s.split(':')[0]), ['logo.png', 'Notes/kickoff.md'])
+  assert.match(folder.skipped[1], /not found, or x@y cannot see it/)
+})

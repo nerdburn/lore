@@ -5,7 +5,7 @@ import { loreHome } from '../context.js'
 import type { Connector, ConnectorContext, Doc } from '../types.js'
 import { buildStreamDoc } from '../docs-stream.js'
 import { pdfText } from '../document.js'
-import { exportGoogleDoc, googleDocId, type GoogleDoc } from '../gdoc.js'
+import { exportGoogleDoc, exportGoogleFolder, googleDocId, googleFolderId, type GoogleDoc, type GoogleFolder } from '../gdoc.js'
 import { officeKind, officeText } from '../office.js'
 
 /**
@@ -46,7 +46,13 @@ import { officeKind, officeText } from '../office.js'
 
 interface GmailCursor {
   since?: string
+  /** `<message hash>:<folder id>` already read — a shared folder is pulled once, not on every sync inside the overlap window. */
+  folders?: string[]
 }
+
+/** Google Drive's share notifications ("X shared a folder with you"): From is Google, Reply-To is the person who shared. */
+export const DRIVE_SHARE_SENDERS = ['drive-shares-dm-noreply@google.com', 'drive-shares-noreply@google.com']
+const MAX_REMEMBERED_FOLDERS = 500
 
 interface ServiceAccountKey {
   client_email: string
@@ -74,6 +80,7 @@ export function defaultKeyFile(): string {
 /** Test seam: how a Google link becomes text (the Drive export, as the mailbox owner). */
 export const gmailDeps = {
   exportDoc: (url: string, as: string, keyFile?: string): Promise<GoogleDoc> => exportGoogleDoc(url, as, keyFile ? { keyFile } : {}),
+  exportFolder: (url: string, as: string, keyFile?: string): Promise<GoogleFolder> => exportGoogleFolder(url, as, keyFile ? { keyFile } : {}),
 }
 
 /** Attachments bigger than this stay a name in the email; a deck of screenshots is not text. */
@@ -121,7 +128,10 @@ export const gmail: Connector = {
 
     const prev = ctx.cursor as GmailCursor
     const sinceMs = prev.since ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
-    const query = buildQuery(scopeTerms, sinceMs, ctx.config.query as string | undefined)
+    // Drive share notifications come from Google, not the client: query for
+    // them too, and keep only those whose sharer (Reply-To) is in scope.
+    const query = buildQuery(scopeTerms, sinceMs, ctx.config.query as string | undefined, ctx.config.documents === false ? [] : DRIVE_SHARE_SENDERS)
+    const inScope = (email: string) => contactEmails.includes(email) || domains.some((d) => email.endsWith(`@${d}`) || email.endsWith(`.${d}`))
 
     const byMessageId = new Map<string, { msg: GmailMessage; mailboxes: string[] }>()
     const errors: string[] = []
@@ -135,6 +145,7 @@ export const gmail: Connector = {
           const batch = await Promise.all(ids.slice(i, i + GET_BATCH).map((id) => api.getMessage(user, id)))
           for (const msg of batch) {
             if (!msg) continue
+            if (isDriveShare(msg) && !inScope(senderOf(msg).email)) continue
             const mid = messageIdOf(msg) ?? `${user}/${msg.id}`
             const seen = byMessageId.get(mid)
             if (!seen) byMessageId.set(mid, { msg, mailboxes: [user] })
@@ -161,6 +172,7 @@ export const gmail: Connector = {
     // a filename in the email: read each one (Drive as the mailbox owner, the
     // attachment bytes from Gmail) into the docs stream, dated and attributed
     // like the email. A link the owner cannot open is logged, never fatal.
+    const foldersRead = new Set(prev.folders ?? [])
     if (ctx.config.documents !== false) {
       const keyFile = ctx.config.key_file as string | undefined
       let filed = 0
@@ -168,7 +180,7 @@ export const gmail: Connector = {
       for (const [mid, { msg, mailboxes }] of byMessageId) {
         const ms = Number(msg.internalDate)
         if (!Number.isFinite(ms) || ms < sinceMs) continue
-        const from = parseAddress(headersOf(msg).from ?? '')
+        const from = senderOf(msg)
         const author = from.name || from.email || 'unknown'
         const date = new Date(ms).toISOString().slice(0, 10)
         const owner = mailboxes[0]
@@ -191,6 +203,33 @@ export const gmail: Connector = {
             })
             docs.push(built.doc)
             filed++
+          } catch (err) {
+            unread.push(`${url} (as ${owner}): ${err instanceof Error ? err.message.split('\n')[0] : err}`)
+          }
+        }
+        // A shared or linked Drive folder: every readable document in it, once per email.
+        for (const url of googleFolderLinks(trimQuoted(text))) {
+          const seenKey = `${shortHash(mid)}:${googleFolderId(url)}`
+          if (foldersRead.has(seenKey)) continue
+          try {
+            const folder = await gmailDeps.exportFolder(url, owner, keyFile)
+            for (const g of folder.docs) {
+              if (!g.markdown.trim()) continue
+              const built = buildStreamDoc({
+                title: g.name,
+                body: g.markdown,
+                from: author,
+                date,
+                source: g.url,
+                gdocId: g.id,
+                meta: { ...emailMeta, folder: folder.id, ...(g.modified ? { modified: g.modified } : {}), ...(g.mimeType ? { mime: g.mimeType } : {}) },
+                addedBy: 'lore-sync',
+              })
+              docs.push(built.doc)
+              filed++
+            }
+            if (folder.skipped.length) ctx.log(`gmail: folder ${folder.name}: skipped ${folder.skipped.length} file(s) — ${folder.skipped.slice(0, 5).join('; ')}${folder.skipped.length > 5 ? '; …' : ''}`)
+            foldersRead.add(seenKey)
           } catch (err) {
             unread.push(`${url} (as ${owner}): ${err instanceof Error ? err.message.split('\n')[0] : err}`)
           }
@@ -229,7 +268,10 @@ export const gmail: Connector = {
     }
     return {
       docs,
-      nextCursor: { since: new Date(newest || sinceMs).toISOString() } as Record<string, unknown>,
+      nextCursor: {
+        since: new Date(newest || sinceMs).toISOString(),
+        ...(foldersRead.size ? { folders: [...foldersRead].slice(-MAX_REMEMBERED_FOLDERS) } : {}),
+      } as Record<string, unknown>,
       ...(errors.length ? { errors } : {}),
     }
   },
@@ -260,8 +302,8 @@ function loadKey(config: Record<string, unknown>): ServiceAccountKey {
  * domain (and, generously, subdomains — fine for scoping). `after:` takes epoch
  * seconds. Spam and trash are excluded by default; chats are noise.
  */
-export function buildQuery(terms: string[], sinceMs: number, extra?: string): string {
-  const alts = terms.flatMap((t) => [`from:${t}`, `to:${t}`, `cc:${t}`])
+export function buildQuery(terms: string[], sinceMs: number, extra?: string, alsoFrom: string[] = []): string {
+  const alts = [...terms.flatMap((t) => [`from:${t}`, `to:${t}`, `cc:${t}`]), ...alsoFrom.map((a) => `from:${a}`)]
   const scope = alts.length === 1 ? alts[0] : `{${alts.join(' ')}}`
   return [scope, `after:${Math.floor(sinceMs / 1000)}`, '-label:chats', extra?.trim()].filter(Boolean).join(' ')
 }
@@ -270,7 +312,7 @@ export function buildQuery(terms: string[], sinceMs: number, extra?: string): st
 
 function renderDoc(msg: GmailMessage, mid: string, mailboxes: string[], clientDomains: string[], clientName: string | undefined): Doc {
   const h = headersOf(msg)
-  const from = parseAddress(h.from ?? '')
+  const from = senderOf(msg)
   const to = splitAddresses(h.to ?? '')
   const cc = splitAddresses(h.cc ?? '')
   const subject = (h.subject ?? '').trim() || '(no subject)'
@@ -372,7 +414,36 @@ function formatAddress(a: Address): string {
   return a.name ? `${a.name} <${a.email}>` : a.email
 }
 
-/** Every distinct Google Docs/Sheets/Slides/Drive-file link in an email body, in order. Folders are not documents. */
+/** Whether this is Google Drive's "shared with you" notification. */
+export function isDriveShare(msg: GmailMessage): boolean {
+  return DRIVE_SHARE_SENDERS.includes(lower(parseAddress(headersOf(msg).from ?? '').email))
+}
+
+/** Who sent it: the From address — except a Drive share notification, which is from the person in Reply-To. */
+export function senderOf(msg: GmailMessage): Address {
+  const h = headersOf(msg)
+  const from = parseAddress(h.from ?? '')
+  if (!isDriveShare(msg)) return from
+  const replyTo = parseAddress(h['reply-to'] ?? '')
+  if (!replyTo.email) return from
+  return { ...replyTo, email: lower(replyTo.email), name: replyTo.name || from.name.replace(/\s*\(via Google Drive\)\s*$/i, '') }
+}
+
+/** Every distinct Drive folder link in an email body, in order. */
+export function googleFolderLinks(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const m of text.matchAll(/https?:\/\/drive\.google\.com\/[^\s<>()"'\]]+/g)) {
+    const url = m[0].replace(/[.,;:]+$/, '')
+    const id = googleFolderId(url)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(url)
+  }
+  return out
+}
+
+/** Every distinct Google Docs/Sheets/Slides/Drive-file link in an email body, in order. Folders are read separately — see googleFolderLinks. */
 export function googleLinks(text: string): string[] {
   const out: string[] = []
   const seen = new Set<string>()

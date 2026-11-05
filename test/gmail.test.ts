@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { buildQuery, gmail, gmailDeps, googleLinks, htmlToText, normalizeMessageId, parseAddress, signJwt, splitAddresses, trimQuoted, type GmailMessage } from '../src/connectors/gmail.js'
+import { buildQuery, gmail, gmailDeps, googleFolderLinks, googleLinks, htmlToText, normalizeMessageId, parseAddress, signJwt, splitAddresses, trimQuoted, type GmailMessage } from '../src/connectors/gmail.js'
 import type { GoogleDoc } from '../src/gdoc.js'
 import { DOCX_XML, zipStored } from './helpers.js'
 import type { ConnectorContext } from '../src/types.js'
@@ -196,7 +196,7 @@ test('gmail: reads every team mailbox, scopes by client domain, dedups a thread 
   assert.equal(errors, undefined)
   assert.deepEqual(g.tokensMinted.sort(), ['kaity@inputlogic.ca', 'shawn@inputlogic.ca'], 'one token per mailbox, from the team-side contacts')
   assert.equal(g.tokensMinted.length, 2, 'tokens are cached across list + get calls')
-  for (const q of g.queries) assert.match(q, /\{from:acme\.com to:acme\.com cc:acme\.com\} after:1782864000 -label:chats$/)
+  for (const q of g.queries) assert.match(q, /\{from:acme\.com to:acme\.com cc:acme\.com from:drive-shares-dm-noreply@google\.com from:drive-shares-noreply@google\.com\} after:1782864000 -label:chats$/)
 
   const byId = new Map(docs.map((d) => [d.meta?.message_id, d]))
   assert.equal(docs.length, 3, 'shared thread starter counted once across mailboxes and labels')
@@ -313,7 +313,8 @@ test('gmail: documents the client links or attaches are read into the docs strea
   const SHEET = 'https://docs.google.com/spreadsheets/d/1kxtyIU_3uZwnFpY9j5KvEruPBPU0RPqffwfVLUIFMh4/edit?gid=0#gid=0'
   const QUOTED = 'https://docs.google.com/document/d/1QUOTEDQUOTEDQUOTEDQUOTEDQUOTED/edit'
   const body = `A ton of items below.\n\nZ1 Discovery Insights\n<${DOC}>\n\nBrand Assets\n<${FOLDER}>\n\nCompetitive Landscape\n<${SHEET}>,\nsame doc again ${DOC}\n\nOn Tue, Sep 9, 2026 at 10:00 AM Someone <s@x.com> wrote:\n> earlier link ${QUOTED}\n`
-  assert.deepEqual(googleLinks(body), [DOC, SHEET, QUOTED], 'folders are not documents; a repeated link counts once')
+  assert.deepEqual(googleLinks(body), [DOC, SHEET, QUOTED], 'folders are read separately; a repeated link counts once')
+  assert.deepEqual(googleFolderLinks(body), [FOLDER])
   assert.deepEqual(googleLinks(trimQuoted(body)), [DOC, SHEET], 'the connector reads only what the message itself says')
 
   const m = msg('m1', { from: 'Julie Harsh <julie@acme.com>', subject: 'Merrin Items', text: body, date: '2026-09-09T18:27:50Z' })
@@ -328,6 +329,17 @@ test('gmail: documents the client links or attaches are read into the docs strea
 
   const exported: string[] = []
   const realExport = gmailDeps.exportDoc
+  const realFolder = gmailDeps.exportFolder
+  gmailDeps.exportFolder = async (url, as) => {
+    exported.push(`folder ${as} ${url}`)
+    return {
+      id: '1aEwalIaY37bR9b7i1PPmIqEl7jmn76NP',
+      name: 'Brand Assets',
+      url,
+      docs: [{ id: 'brandGuide000000000000', name: 'Brand Guide', path: 'Brand Guide', url: 'https://docs.google.com/document/d/brandGuide000000000000', markdown: 'Use teal.' }],
+      skipped: ['logo.png: image/png, not a document'],
+    }
+  }
   gmailDeps.exportDoc = async (url, as, keyFile): Promise<GoogleDoc> => {
     exported.push(`${as} ${keyFile ?? ''} ${url}`)
     if (url.includes('spreadsheets')) throw new Error('google: document 1kxtyIU not found, or shawn@inputlogic.ca cannot see it')
@@ -338,7 +350,11 @@ test('gmail: documents the client links or attaches are read into the docs strea
     const r = await gmail.fetch(ctx({ log: (l) => logs.push(l) }))
     const docsStream = r.docs.filter((d) => d.source === 'docs')
     assert.equal(r.docs.filter((d) => d.source === 'gmail').length, 1)
-    assert.deepEqual(docsStream.map((d) => d.channel).sort(), ['merrin-spec', 'metrics', 'z1-discovery-insights'])
+    assert.deepEqual(docsStream.map((d) => d.channel).sort(), ['brand-guide', 'merrin-spec', 'metrics', 'z1-discovery-insights'])
+    const brand = docsStream.find((d) => d.channel === 'brand-guide')!
+    assert.equal(brand.author, 'Julie Harsh')
+    assert.equal(brand.meta?.folder, '1aEwalIaY37bR9b7i1PPmIqEl7jmn76NP')
+    assert.deepEqual((r.nextCursor as { folders?: string[] }).folders?.length, 1, 'the folder is remembered as read for this email')
     const insights = docsStream.find((d) => d.channel === 'z1-discovery-insights')!
     assert.equal(insights.author, 'Julie Harsh')
     assert.equal(insights.timestamp, '2026-09-09T00:00:00.000Z')
@@ -352,8 +368,14 @@ test('gmail: documents the client links or attaches are read into the docs strea
     assert.equal(spec.meta?.attachment, 'Merrin_Spec.docx')
     assert.match(spec.permalink ?? '', /^https:\/\/mail\.google\.com\/mail\/#search\/rfc822msgid:/)
     assert.match(docsStream.find((d) => d.channel === 'metrics')!.text, /weekly actives,500/)
-    assert.deepEqual(exported, [`shawn@inputlogic.ca  ${DOC}`, `shawn@inputlogic.ca  ${SHEET}`], 'read as the mailbox owner, each link once, quoted links never')
-    assert.ok(logs.some((l) => /3 linked\/attached document\(s\) filed to the docs stream; 1 unreadable/.test(l)), logs.join('\n'))
+    assert.deepEqual(exported, [`shawn@inputlogic.ca  ${DOC}`, `shawn@inputlogic.ca  ${SHEET}`, `folder shawn@inputlogic.ca ${FOLDER}`], 'read as the mailbox owner, each link once, quoted links never')
+    assert.ok(logs.some((l) => /folder Brand Assets: skipped 1 file/.test(l)), logs.join('\n'))
+
+    // The next sync, inside the overlap window, does not re-read the folder.
+    exported.length = 0
+    await gmail.fetch(ctx({ cursor: r.nextCursor }))
+    assert.ok(!exported.some((e) => e.startsWith('folder')), exported.join('\n'))
+    assert.ok(logs.some((l) => /4 linked\/attached document\(s\) filed to the docs stream; 1 unreadable/.test(l)), logs.join('\n'))
     assert.ok(logs.some((l) => /could not read https:\/\/docs\.google\.com\/spreadsheets.*cannot see it/.test(l)))
     assert.equal(r.errors, undefined, 'an unreadable link is not a source failure')
 
@@ -364,5 +386,36 @@ test('gmail: documents the client links or attaches are read into the docs strea
     assert.deepEqual(exported, [])
   } finally {
     gmailDeps.exportDoc = realExport
+    gmailDeps.exportFolder = realFolder
+  }
+})
+
+test('gmail: a Drive "shared a folder with you" notification from a client pulls the folder in; one from anyone else is ignored', async () => {
+  const g = fakeGoogle()
+  const FOLDER = 'https://drive.google.com/drive/folders/1SharedFolderIdXyz?usp=sharing_eip_m'
+  const share = (id: string, replyTo: string) => {
+    const m = msg(id, { from: 'Julie Harsh (via Google Drive) <drive-shares-dm-noreply@google.com>', subject: 'Folder shared with you: "Handoff"', text: `Julie Harsh shared a folder\n\nHandoff\n${FOLDER}\n`, date: '2026-09-09T18:00:00Z' })
+    m.payload.headers!.push({ name: 'Reply-To', value: replyTo })
+    return m
+  }
+  g.mailboxes['shawn@inputlogic.ca'] = [share('s1', 'Julie Harsh <julie@acme.com>'), share('s2', 'Mallory <mallory@elsewhere.com>')]
+  const realFolder = gmailDeps.exportFolder
+  const read: string[] = []
+  gmailDeps.exportFolder = async (url, as) => {
+    read.push(`${as} ${url}`)
+    return { id: '1SharedFolderIdXyz', name: 'Handoff', url, docs: [{ id: 'handoffSpec0000000000', name: 'Handoff Spec', path: 'Handoff Spec', url: 'https://docs.google.com/document/d/handoffSpec0000000000', markdown: 'Ship by Friday.' }], skipped: [] }
+  }
+  try {
+    const r = await gmail.fetch(ctx())
+    assert.deepEqual(read, [`shawn@inputlogic.ca ${FOLDER}`], 'only the client-shared folder is read')
+    const mail = r.docs.filter((d) => d.source === 'gmail')
+    assert.equal(mail.length, 1)
+    assert.equal(mail[0].author, 'Julie Harsh', 'the sharer, not Google')
+    assert.equal(mail[0].channel, 'acme.com')
+    const spec = r.docs.find((d) => d.source === 'docs')!
+    assert.equal(spec.author, 'Julie Harsh')
+    assert.match(spec.text, /Ship by Friday\./)
+  } finally {
+    gmailDeps.exportFolder = realFolder
   }
 })
