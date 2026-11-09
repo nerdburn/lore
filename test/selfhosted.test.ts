@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { before, test } from 'node:test'
-import { pushWithRebase, runAll } from '../src/commands/run-all.js'
+import { mergeRecords, pushWithRebase, runAll } from '../src/commands/run-all.js'
 import { buildSources } from '../src/commands/setup.js'
 import { FOLD_UNIT_PRELUDE, hostCommands, refresh, sshTargetFromRemote, START_CMD, STATE_CMD, UNIT_PRELUDE, unitOutcome, WAIT_CMD } from '../src/commands/refresh.js'
 import { configSchema } from '../src/config.js'
@@ -360,6 +360,90 @@ test('run-all: tickets people create while a fold runs survive its push — the 
   )
   assert.deepEqual(readAudit(check).map((e) => `${e.actor} ${e.id}`), ['cory MOM-1', 'cory MOM-2', 'lore-extract MOM-3'])
   assert.equal(g(check, 'log', '-1', '--format=%s'), 'chore(lore): sync lore-tracker')
+})
+
+test('run-all: a rejected push preserves large tracker and audit files plus concurrent human edits', async () => {
+  const root = makeContextRepo()
+  const at = '2026-11-09T15:00:00.000Z'
+  const description = 'Historical delivery context. '.repeat(45_000)
+  const items = [1, 2].map(n => ({
+    key: `BIG-${n}`, title: `Ticket ${n}`, status: 'todo' as const, state: 'open' as const,
+    labels: [], sources: [], created: at, updated: at, history: [],
+    ...(n === 1 ? { description } : {}),
+  }))
+  const path = writeWorkItems(root, 'BIG', items)
+  appendAudit(root, { at, action: 'work', actor: 'person', via: 'web', id: 'BIG-1', source: description })
+  const bare = seedBare('lore-large-tracker', { project: 'large-tracker', sources: {} }, {
+    [path]: readFileSync(join(root, path), 'utf8'),
+    'context/audit.jsonl': readFileSync(join(root, 'context/audit.jsonl'), 'utf8'),
+  })
+  const host = mkdtempSync(join(tmpdir(), 'lore-large-host-'))
+  const laptop = mkdtempSync(join(tmpdir(), 'lore-large-laptop-'))
+  const check = mkdtempSync(join(tmpdir(), 'lore-large-check-'))
+  try {
+    for (const dir of [host, laptop]) {
+      execFileSync('git', ['clone', '--quiet', bare, dir])
+      g(dir, 'config', 'user.email', 't@t')
+      g(dir, 'config', 'user.name', 't')
+    }
+    const syncItems = readWorkItems(host, 'BIG')
+    syncItems[1].title = 'Updated delivery evidence'
+    writeWorkItems(host, 'BIG', syncItems)
+    appendAudit(host, { at, action: 'work', actor: 'lore-extract', via: 'fold', id: 'BIG-2' })
+    g(host, 'add', '-A')
+    g(host, 'commit', '--quiet', '-m', 'sync')
+
+    const humanItems = readWorkItems(laptop, 'BIG')
+    humanItems[0].status = 'done'
+    humanItems[0].history.push({ at, by: 'person', via: 'web', change: { status: ['todo', 'done'] }, reason: 'completed' })
+    writeWorkItems(laptop, 'BIG', humanItems)
+    appendAudit(laptop, { at, action: 'work', actor: 'person', via: 'web', id: 'BIG-1' })
+    g(laptop, 'add', '-A')
+    g(laptop, 'commit', '--quiet', '-m', 'human completion')
+    g(laptop, 'push', '--quiet', 'origin', 'main')
+    assert.ok(readFileSync(join(host, path)).length > 1024 * 1024)
+    assert.ok(readFileSync(join(host, 'context/audit.jsonl')).length > 1024 * 1024)
+
+    pushWithRebase(host)
+    execFileSync('git', ['clone', '--quiet', bare, check])
+    const restored = readWorkItems(check, 'BIG')
+    assert.equal(restored.length, 2, 'a failed Git read must never become an empty tracker')
+    assert.equal(restored[0].status, 'done')
+    assert.deepEqual(restored[0].history, humanItems[0].history)
+    assert.equal(restored[0].description, description)
+    assert.equal(restored[1].title, 'Updated delivery evidence')
+    assert.deepEqual(readAudit(check).map(e => e.actor), ['person', 'person', 'lore-extract'])
+  } finally {
+    for (const dir of [root, host, laptop, check, bare]) rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('run-all: an unreadable record aborts reconciliation before changing any files or commits', () => {
+  const root = makeContextRepo({ 'context/work/lore/BAD.yaml': '[]\n' })
+  try {
+    g(root, 'init', '--quiet', '-b', 'main')
+    g(root, 'config', 'user.email', 't@t')
+    g(root, 'config', 'user.name', 't')
+    g(root, 'add', '-A')
+    g(root, 'commit', '--quiet', '-m', 'base')
+    g(root, 'branch', 'upstream')
+    const path = 'context/work/lore/BAD.yaml'
+    writeFileSync(join(root, path), '- key: BAD-1\n  title: host\n')
+    g(root, 'add', path)
+    g(root, 'commit', '--quiet', '-m', 'host')
+    const oid = g(root, 'rev-parse', `HEAD:${path}`)
+    g(root, 'switch', '--quiet', 'upstream')
+    writeFileSync(join(root, path), '- key: BAD-2\n  title: upstream\n')
+    g(root, 'add', path)
+    g(root, 'commit', '--quiet', '-m', 'upstream')
+    g(root, 'switch', '--quiet', 'main')
+    const head = g(root, 'rev-parse', 'HEAD')
+    const before = readFileSync(join(root, path), 'utf8')
+    rmSync(join(root, '.git/objects', oid.slice(0, 2), oid.slice(2)))
+    assert.throws(() => mergeRecords(root, 'upstream'), /git/)
+    assert.equal(g(root, 'rev-parse', 'HEAD'), head)
+    assert.equal(readFileSync(join(root, path), 'utf8'), before)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('run-all: no-change runs commit a state heartbeat only', async () => {
