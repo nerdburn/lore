@@ -198,7 +198,9 @@ function clone(repo: string, dest: string): void {
 }
 
 export function git(root: string, ...args: string[]): string {
-  return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+  // Tracker histories and audit logs routinely exceed Node's 1 MiB default.
+  // Keep a bound, but let read failures propagate rather than lose records.
+  return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 })
     .toString()
     .trim()
 }

@@ -18,6 +18,7 @@ import {
   mergeTrackerLabels,
   mergeWorkItems,
   mirrorExternal,
+  parseWorkItems,
   readExternalIssues,
   readWorkItems,
   summarizeForRecall,
@@ -84,6 +85,31 @@ const jiraTable = (status: string, category: string) => `# Source-owned by Jira 
   updated: 2026-09-10T09:00:00Z
   url: https://acme.atlassian.net/browse/ACM-7
 `
+
+test('work: malformed tracker records fail closed instead of becoming an empty or partial table', () => {
+  assert.deepEqual(parseWorkItems(''), [], 'a missing historical table is empty')
+  assert.deepEqual(parseWorkItems('[]\n'), [], 'an explicitly empty table is valid')
+  for (const text of ['- key: [broken', 'tickets: []', '# truncated file\n', '- key: ACM-1\n  title: valid\n- key: ACM-2\n', '- key: ACM-1\n  title: one\n- key: ACM-1\n  title: duplicate\n']) {
+    assert.throws(() => parseWorkItems(text), /Invalid work tracker/)
+  }
+  const text = '- key: [broken'
+  const root = makeContextRepo({ 'context/work/lore/ACM.yaml': text })
+  assert.throws(() => mirrorExternal(root, MIRROR_CONFIG), /Invalid work tracker/)
+  assert.equal(readFileSync(join(root, 'context/work/lore/ACM.yaml'), 'utf8'), text, 'sync must leave the unreadable record intact')
+})
+
+test('work: writes cannot drop existing tickets or reuse a key within the table', () => {
+  const root = makeContextRepo({ 'context/work/lore/ACM.yaml': '- key: ACM-1\n  title: Keep my history\n  status: done\n' })
+  const path = join(root, 'context/work/lore/ACM.yaml')
+  const before = readFileSync(path, 'utf8')
+  assert.throws(() => writeWorkItems(root, 'ACM', []), /Refusing to remove 1 ticket/)
+  const items = readWorkItems(root, 'ACM')
+  assert.throws(() => writeWorkItems(root, 'ACM', [items[0], items[0]]), /duplicate ticket keys/)
+  assert.equal(readFileSync(path, 'utf8'), before)
+  items[0].status = 'archived'
+  writeWorkItems(root, 'ACM', items)
+  assert.equal(readWorkItems(root, 'ACM')[0].status, 'archived', 'archiving retains the record')
+})
 
 test('work: prefix derives from the client name, or the project, unless configured', () => {
   assert.equal(deriveWorkPrefix('CareMobi'), 'CAR')

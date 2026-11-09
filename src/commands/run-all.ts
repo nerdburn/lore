@@ -316,11 +316,11 @@ export function mergeRecords(root: string, upstream: string): () => void {
   const ours = changed('HEAD')
   const both = [...changed(upstream)].filter((p) => ours.has(p))
   const show = (rev: string, path: string) => {
-    try {
-      return git(root, 'show', `${rev}:${path}`)
-    } catch {
-      return ''
-    }
+    // A newly added record may not exist in the base. Only that absence is
+    // empty: an unreadable blob (including output overflow) must abort before
+    // the rebase, never turn a complete tracker or audit log into no records.
+    if (!git(root, 'ls-tree', rev, '--', path)) return ''
+    return git(root, 'show', `${rev}:${path}`)
   }
 
   const tables: { prefix: string; items: LoreWorkItem[] }[] = []

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { LoreConfig } from './config.js'
@@ -156,17 +157,25 @@ export function readWorkItems(root: string, prefix: string): LoreWorkItem[] {
   return existsSync(path) ? parseWorkItems(readFileSync(path, 'utf8')) : []
 }
 
-/** A tracker table's text → items, tolerating a missing or malformed file (e.g. read from an old commit). */
+/** A tracker table's text → items. Missing historical files use ''; invalid records must fail closed. */
 export function parseWorkItems(text: string): LoreWorkItem[] {
+  if (text === '') return []
   let parsed: unknown
   try {
     parsed = parse(text.replace(/^(#.*\n)+/, ''))
-  } catch {
-    return []
+  } catch (cause) {
+    throw new Error('Invalid work tracker YAML; refusing to discard ticket records', { cause })
   }
-  if (!Array.isArray(parsed)) return []
+  if (!Array.isArray(parsed)) throw new Error('Invalid work tracker: expected a list of tickets')
+  const keys = new Set<string>()
+  for (const item of parsed) {
+    if (typeof item?.key !== 'string' || typeof item.title !== 'string') {
+      throw new Error('Invalid work tracker: every ticket must have a key and title')
+    }
+    if (keys.has(item.key)) throw new Error(`Invalid work tracker: duplicate key ${item.key}`)
+    keys.add(item.key)
+  }
   return (parsed as Partial<LoreWorkItem>[])
-    .filter((i) => typeof i?.key === 'string' && typeof i.title === 'string')
     .map((i) => {
       const status = (WORK_STATUSES as string[]).includes(String(i.status)) ? (i.status as WorkStatus) : 'todo'
       return {
@@ -186,14 +195,24 @@ export function parseWorkItems(text: string): LoreWorkItem[] {
 
 export function writeWorkItems(root: string, prefix: string, items: LoreWorkItem[]): string {
   const rel = workFile(prefix)
+  const keys = new Set(items.map(i => i.key))
+  const missing = readWorkItems(root, prefix).filter(i => !keys.has(i.key))
+  if (missing.length) throw new Error(`Refusing to remove ${missing.length} ticket records from ${rel}; archive tickets instead`)
+  if (keys.size !== items.length) throw new Error(`Refusing duplicate ticket keys in ${rel}`)
   mkdirSync(join(root, WORK_DIR), { recursive: true })
   for (const i of items) i.state = stateFor(i.status)
-  writeFileSync(
-    join(root, rel),
-    `# Lore work tracker (${prefix}) — the tracker of record. Written by \`lore work\`, by \`lore sync\` (mirroring Jira/GitHub) and by the fold.\n` +
+  const text = `# Lore work tracker (${prefix}) — the tracker of record. Written by \`lore work\`, by \`lore sync\` (mirroring Jira/GitHub) and by the fold.\n` +
       `# Never hand-edit: every change goes through a command so it lands in the item's history. File order is rank.\n` +
-      stringify(items),
-  )
+      stringify(items)
+  // Validate before replacing anything; readers must see the old complete
+  // table or the new complete table, never an in-progress/truncated write.
+  parseWorkItems(text)
+  const path = join(root, rel)
+  const temp = `${path}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temp, text)
+    renameSync(temp, path)
+  } finally { rmSync(temp, { force: true }) }
   return rel
 }
 
