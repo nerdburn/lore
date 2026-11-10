@@ -92,6 +92,8 @@ export const sourceSchemas = {
       transcripts: z.boolean().optional(),
       /** Days re-read on every sync (default 2). */
       overlap_days: z.number().min(0).optional(),
+      /** Days listed on every sync to pick up meetings filed into a folder (or given a client attendee) after the cursor passed them (default 30). */
+      rescan_days: z.number().min(0).optional(),
       /** Hours a meeting must be over before it is synced, so Granola has finished the summary (default 1). */
       settle_hours: z.number().min(0).optional(),
       /** New meetings whose notes are synced per run, oldest first (default 50). */

@@ -282,9 +282,39 @@ test('granola: incremental sync re-lists from cursor minus overlap and dedupes d
   const realNow = Date.now
   Date.now = () => NOW
   try {
-    const { docs } = await s.connector.fetch(ctx({ cursor: { since: '2026-09-08T18:00:00.000Z' }, config: { token: 't', folders: ['Jointly'], transcripts: false, overlap_days: 1 } }))
+    const { docs } = await s.connector.fetch(ctx({ cursor: { since: '2026-09-08T18:00:00.000Z' }, config: { token: 't', folders: ['Jointly'], transcripts: false, overlap_days: 1, rescan_days: 0 } }))
     assert.deepEqual(docs.map((d) => d.id), ['granola-11111111-1111-4111-8111-111111111111'], 'Sep 3 meeting is before the overlap window')
     assert.equal(s.calls.find((c) => c.tool === 'list_meetings')?.args.custom_start, '2026-09-07')
+  } finally {
+    Date.now = realNow
+  }
+})
+
+test('granola: a meeting filed into the folder after the cursor passed it is picked up; synced ones are not re-read', async () => {
+  const realNow = Date.now
+  Date.now = () => NOW
+  const M_OLD = '22222222-2222-4222-8222-222222222222' // Sep 3 — older than cursor minus overlap
+  const cursor = { since: '2026-09-08T18:00:00.000Z' }
+  const config = { token: 't', folders: ['Jointly'], transcripts: false, overlap_days: 1 }
+  try {
+    // Not in the stream yet → filed late → synced, without moving the cursor back.
+    const s = scripted()
+    const late = await s.connector.fetch(ctx({ cursor, config }))
+    assert.deepEqual(late.docs.map((d) => d.id), [`granola-${M_OLD}`, 'granola-11111111-1111-4111-8111-111111111111'])
+    assert.equal(late.docs[0].channel, 'Jointly')
+    assert.equal((late.nextCursor as { since: string }).since, cursor.since)
+    assert.equal(s.calls.find((c) => c.tool === 'list_meetings')?.args.custom_start, '2026-08-10', 'lists the last 30 days')
+
+    // Already in the stream — under the folder, or under `meetings` from an earlier attendee match → skipped.
+    for (const rel of ['context/streams/granola/Jointly/2026-09-03.md', 'context/streams/granola/meetings/2026-09-03.md']) {
+      const again = await scripted().connector.fetch(ctx({ cursor, config, readFile: (r) => (r === rel ? `<!-- id: granola-${M_OLD} -->` : undefined) }))
+      assert.deepEqual(again.docs.map((d) => d.id), ['granola-11111111-1111-4111-8111-111111111111'], rel)
+    }
+
+    // The rescan never reaches before the backfill horizon.
+    const s2 = scripted()
+    await s2.connector.fetch(ctx({ cursor, config, since: Date.parse('2026-09-01T00:00:00Z') }))
+    assert.equal(s2.calls.find((c) => c.tool === 'list_meetings')?.args.custom_start, '2026-09-01')
   } finally {
     Date.now = realNow
   }

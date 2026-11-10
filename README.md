@@ -205,7 +205,10 @@ exactly one client repo. Secrets are always `env:` references (lore loads
   meeting; the union is synced. Each meeting becomes a notes doc (title,
   attendees with emails, private notes, AI summary) plus a threaded
   transcript (`"transcripts": false` to skip). Meetings sync once they are
-  `settle_hours` old (default 1) so the summary exists. Granola allows
+  `settle_hours` old (default 1) so the summary exists. A meeting filed into
+  the folder days later is still picked up: every run lists the last
+  `rescan_days` (default 30) and syncs any in-scope meeting not yet in the
+  stream. Granola allows
   roughly one transcript fetch every two minutes per account, so a run
   syncs notes for every meeting first (cheap; the cursor advances) and then
   spends at most `transcript_seconds` (default 300) on the transcripts it

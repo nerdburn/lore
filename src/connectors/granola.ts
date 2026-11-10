@@ -30,6 +30,12 @@ import type { Connector, ConnectorContext, Doc } from '../types.js'
  * Granola has finished the summary; each sync re-lists `overlap_days`
  * (default 2) and stream dedup absorbs the repeats.
  *
+ * Late filing. A meeting is often moved into a client's folder (or gains a
+ * client attendee) days after it happened — after the cursor has passed it.
+ * So each run also lists the last `rescan_days` (default 30; listing is one
+ * call per 30 days, effectively free) and picks up any older in-scope meeting
+ * whose notes are not yet in the stream. The cursor never moves backwards.
+ *
  * Pacing. Granola rate-limits `get_meeting_transcript` per account on a
  * tight budget — measured at roughly one success every two minutes
  * sustained, with a small burst allowance — while listing and notes calls
@@ -159,6 +165,7 @@ export class RateLimited extends Error {}
 
 const DEFAULT_ENDPOINT = 'https://mcp.granola.ai/mcp'
 const DEFAULT_OVERLAP_DAYS = 2
+const DEFAULT_RESCAN_DAYS = 30
 const DEFAULT_SETTLE_HOURS = 1
 const DAY_MS = 86_400_000
 const LIST_WINDOW_DAYS = 30
@@ -199,6 +206,7 @@ export function makeGranola(
       }
       const withTranscripts = ctx.config.transcripts !== false
       const overlapMs = numberOr(ctx.config.overlap_days, DEFAULT_OVERLAP_DAYS) * DAY_MS
+      const rescanMs = numberOr(ctx.config.rescan_days, DEFAULT_RESCAN_DAYS) * DAY_MS
       const settleMs = numberOr(ctx.config.settle_hours, DEFAULT_SETTLE_HOURS) * 3_600_000
       const perRun = Math.max(1, Math.floor(numberOr(ctx.config.meetings_per_run, DEFAULT_MEETINGS_PER_RUN)))
       const transcriptBudgetMs = numberOr(ctx.config.transcript_seconds, DEFAULT_TRANSCRIPT_SECONDS) * 1000
@@ -207,6 +215,8 @@ export function makeGranola(
       const now = Date.now()
       const startMs = prev.since ? Math.max(new Date(prev.since).getTime() - overlapMs, ctx.since) : ctx.since
       const cutoff = now - settleMs
+      // List back far enough to catch late-filed meetings; never before the backfill horizon.
+      const scanStart = Math.max(Math.min(startMs, now - rescanMs), ctx.since)
 
       const { call: rawCall, close } = await connect(endpoint, tokens)
       const call = paced(rawCall, pacing, ctx.log)
@@ -227,19 +237,24 @@ export function makeGranola(
         // List candidates: per folder, plus everything (for domain matching).
         const candidates = new Map<string, MeetingRef & { folder?: string }>()
         for (const [id, title] of folderIds) {
-          for (const m of await listRange(call, startMs, now, id)) candidates.set(m.id, { ...m, folder: title })
+          for (const m of await listRange(call, scanStart, now, id)) candidates.set(m.id, { ...m, folder: title })
         }
         if (domains.size > 0 || emails.size > 0) {
-          for (const m of await listRange(call, startMs, now)) {
+          for (const m of await listRange(call, scanStart, now)) {
             const matches = m.participants.some((p) => emails.has(p.email) || domains.has(p.email.split('@')[1] ?? ''))
             if (matches && !candidates.has(m.id)) candidates.set(m.id, m)
           }
         }
 
         const prevSince = prev.since ? new Date(prev.since).getTime() : 0
-        const settled = [...candidates.values()].filter((m) => m.dateMs <= cutoff).sort((a, b) => a.dateMs - b.dateMs)
-        // Overlap re-reads (≤ the cursor) always go; the per-run cap applies to
-        // meetings past the cursor, so a run always moves the cursor forward.
+        // Older than the overlap window: only meetings filed late, i.e. not yet in the stream.
+        const settled = [...candidates.values()]
+          .filter((m) => m.dateMs <= cutoff && (m.dateMs >= startMs || !hasNotes(ctx, m)))
+          .sort((a, b) => a.dateMs - b.dateMs)
+        const late = settled.filter((m) => m.dateMs < startMs).length
+        // Overlap re-reads and late-filed meetings (≤ the cursor) always go; the
+        // per-run cap applies to meetings past the cursor, so a run always moves
+        // the cursor forward.
         const overlap = settled.filter((m) => m.dateMs <= prevSince)
         const fresh = settled.filter((m) => m.dateMs > prevSince)
         const ready = [...overlap, ...fresh.slice(0, perRun)]
@@ -303,6 +318,7 @@ export function makeGranola(
         const parts = [`${settled.length} meeting(s) in scope → ${notes} notes, ${fetched} transcript(s)`]
         if (pending.size) parts.push(`${pending.size} transcript(s) pending${limited ? ' (rate limited)' : ''} — next run continues`)
         if (deferred) parts.push(`${deferred} meeting(s) past the per-run cap`)
+        if (late) parts.push(`${late} filed late, picked up from the last ${Math.round(rescanMs / DAY_MS)} day(s)`)
         ctx.log(`granola: ${parts.join('; ')}`)
         const nextCursor: GranolaCursor = {
           since: new Date(newest || startMs).toISOString(),
@@ -394,6 +410,17 @@ function notesDoc(ref: MeetingRef & { folder?: string }, detail: MeetingRef | un
     },
     text: lines.join('\n'),
   }
+}
+
+/** Notes for this meeting already in the stream — under its folder's channel, or under
+ * `meetings` if an earlier run matched it by attendee before it was filed? */
+function hasNotes(ctx: ConnectorContext, ref: MeetingRef & { folder?: string }): boolean {
+  const id = `granola-${ref.id}`
+  const timestamp = new Date(ref.dateMs).toISOString()
+  return [...new Set([ref.folder ?? 'meetings', 'meetings'])].some((channel) => {
+    const file = ctx.readFile(streamRelPath('granola', channel, timestamp))
+    return file !== undefined && hasDoc(file, id)
+  })
 }
 
 /** Transcript already in the stream from an earlier run (overlap re-read)? Then don't spend a rate-limited call on it. */
