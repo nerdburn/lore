@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
+import { pushWithRebase } from '../push.js'
 import { authorizeWrite } from '../write.js'
 import {
   applyChange,
@@ -105,22 +106,19 @@ function mutate(
 
 /**
  * Commit and push a tracker change in cache mode. The host's timer may have
- * pushed a sync commit meanwhile, so a rejected push is rebased once and
- * retried before giving up — a ticket move must not be lost to timing.
+ * pushed a sync commit meanwhile, often one that touched the same ticket, so
+ * a rejected push is merged record by record and retried (pushWithRebase) —
+ * a ticket move must not be lost to timing, nor leave the cache mid-rebase.
  */
 export function commitWork(ctx: ResolvedContext, rel: string | string[], message: string): void {
   if (ctx.mode !== 'cache') return
   git(ctx.root, 'add', ...(Array.isArray(rel) ? rel : [rel]), AUDIT_FILE)
   git(ctx.root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', message)
   try {
-    git(ctx.root, 'push', '--quiet')
-  } catch {
-    try {
-      git(ctx.root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'pull', '--rebase', '--quiet')
-      git(ctx.root, 'push', '--quiet')
-    } catch {
-      throw new Error(`wrote ${rel} and committed to the cache, but push to ${ctx.repo} failed — check access, then run \`git -C ${ctx.root} push\``)
-    }
+    pushWithRebase(ctx.root)
+  } catch (err) {
+    const why = err instanceof Error ? err.message.split('\n')[0] : String(err)
+    throw new Error(`wrote ${rel} and committed to the cache, but push to ${ctx.repo} failed (${why}) — check access, then run \`git -C ${ctx.root} push\``)
   }
 }
 

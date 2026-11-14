@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { before, test } from 'node:test'
 import { mergeRecords, pushWithRebase, runAll } from '../src/commands/run-all.js'
 import { buildSources } from '../src/commands/setup.js'
+import { workMove } from '../src/commands/work.js'
 import { FOLD_UNIT_PRELUDE, hostCommands, refresh, sshTargetFromRemote, START_CMD, STATE_CMD, UNIT_PRELUDE, unitOutcome, WAIT_CMD } from '../src/commands/refresh.js'
 import { configSchema } from '../src/config.js'
 import { cachePath, isRepoRef, readGlobalConfig, remoteUrl, resolveContext, writeGlobalConfig } from '../src/context.js'
@@ -360,6 +361,49 @@ test('run-all: tickets people create while a fold runs survive its push — the 
   )
   assert.deepEqual(readAudit(check).map((e) => `${e.actor} ${e.id}`), ['cory MOM-1', 'cory MOM-2', 'lore-extract MOM-3'])
   assert.equal(g(check, 'log', '-1', '--format=%s'), 'chore(lore): sync lore-tracker')
+})
+
+test('work: a ticket move racing a sync of the same ticket merges both history entries and never leaves the cache mid-rebase', () => {
+  // OWL-45: a person moved a ticket through MCP in the same second the timer
+  // pushed new PR evidence onto it. Both appended to the ticket's history, so
+  // a plain `pull --rebase` conflicted and left the cache clone stuck.
+  const at = '2026-11-13T22:00:00.000Z'
+  const seed = makeContextRepo()
+  const path = writeWorkItems(seed, 'RACE', [{
+    key: 'RACE-1', title: 'Callers act as someone else', status: 'todo', state: 'open',
+    labels: [], sources: [], created: at, updated: at,
+    history: [{ at, by: 'cory', via: 'mcp', change: { created: true }, reason: 'found' }],
+  }])
+  const bare = seedBare('lore-race', { project: 'race', work: { prefix: 'RACE' }, sources: {} }, { [path]: readFileSync(join(seed, path), 'utf8') })
+  const pointer = makeContextRepo({ 'lore.json': JSON.stringify({ context: 'lore-race' }) })
+  const cache = resolveContext(pointer).root
+
+  const host = mkdtempSync(join(tmpdir(), 'lore-race-host-'))
+  execFileSync('git', ['clone', '--quiet', bare, host])
+  g(host, 'config', 'user.email', 't@t')
+  g(host, 'config', 'user.name', 't')
+  const synced = readWorkItems(host, 'RACE')
+  synced[0].sources.push('https://github.com/o/r/pull/60')
+  synced[0].history.push({ at: '2026-11-13T22:41:14.060Z', by: 'lore-delivery', via: 'fold', change: { sources: [[], ['https://github.com/o/r/pull/60']] }, reason: 'Updated related pull request evidence' })
+  writeWorkItems(host, 'RACE', synced)
+  appendAudit(host, { at: '2026-11-13T22:41:14.060Z', action: 'work', actor: 'lore-delivery', via: 'fold', id: 'RACE-1' })
+  g(host, 'add', '-A')
+  g(host, 'commit', '--quiet', '-m', 'chore(lore): sync lore-race')
+  g(host, 'push', '--quiet', 'origin', 'main')
+
+  // The cache hasn't seen the sync: the move's first push is rejected.
+  workMove(pointer, 'RACE-1', 'review', { reason: 'Draft PR #61', sources: ['https://github.com/o/r/pull/61'] }, { pull: false, by: 'jeff' })
+
+  assert.ok(!existsSync(join(cache, '.git', 'rebase-merge')) && !existsSync(join(cache, '.git', 'rebase-apply')), 'cache is not left mid-rebase')
+  assert.equal(g(cache, 'status', '--porcelain'), '')
+  const check = mkdtempSync(join(tmpdir(), 'lore-race-check-'))
+  execFileSync('git', ['clone', '--quiet', bare, check])
+  const [item] = readWorkItems(check, 'RACE')
+  assert.equal(item.status, 'review')
+  assert.deepEqual(item.history.map((h) => h.by), ['cory', 'lore-delivery', 'jeff'])
+  assert.ok(item.sources.includes('https://github.com/o/r/pull/60') && item.sources.includes('https://github.com/o/r/pull/61'))
+  assert.deepEqual(readAudit(check).map((e) => e.actor), ['lore-delivery', 'jeff'])
+  for (const dir of [seed, pointer, host, check]) rmSync(dir, { recursive: true, force: true })
 })
 
 test('run-all: a rejected push preserves large tracker and audit files plus concurrent human edits', async () => {

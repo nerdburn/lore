@@ -282,7 +282,9 @@ function mergeItem(b: LoreWorkItem, o: LoreWorkItem, t: LoreWorkItem): LoreWorkI
   const [bb, oo, tt] = [b, o, t] as unknown as Record<string, unknown>[]
   const out: Record<string, unknown> = {}
   for (const f of new Set([...Object.keys(tt), ...Object.keys(oo)])) {
-    const v = same(tt[f], bb[f]) ? oo[f] : tt[f]
+    const v = SET_FIELDS.has(f) && !same(tt[f], bb[f]) && !same(oo[f], bb[f])
+      ? mergeSet(bb[f] as string[] | undefined, oo[f] as string[] | undefined, tt[f] as string[] | undefined)
+      : same(tt[f], bb[f]) ? oo[f] : tt[f]
     if (v !== undefined) out[f] = v
   }
   const history = new Map<string, WorkHistoryEntry>()
@@ -290,6 +292,19 @@ function mergeItem(b: LoreWorkItem, o: LoreWorkItem, t: LoreWorkItem): LoreWorkI
   out.history = [...history.values()].sort((x, y) => x.at.localeCompare(y.at))
   out.updated = [o.updated, t.updated].sort().at(-1)
   return out as unknown as LoreWorkItem
+}
+
+/**
+ * List fields both sides commonly add to in the same race — a person cites a
+ * PR while the fold records another — so they merge as sets: theirs, plus
+ * what ours added, minus what ours removed. Any other field: theirs wins.
+ */
+const SET_FIELDS = new Set(['sources', 'labels'])
+
+function mergeSet(base: string[] = [], ours: string[] = [], theirs: string[] = []): string[] {
+  const removed = new Set(base.filter((v) => !ours.includes(v)))
+  const added = ours.filter((v) => !base.includes(v) && !theirs.includes(v))
+  return [...theirs.filter((v) => !removed.has(v)), ...added]
 }
 
 function same(a: unknown, b: unknown): boolean {
