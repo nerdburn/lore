@@ -654,6 +654,15 @@ test('work merge: an item both sides edited merges field by field, upstream winn
   assert.deepEqual(m.history.map((h) => h.by), ['me', 'lore-extract', 'cory'])
 })
 
+test('work merge: sources and labels both sides changed merge as sets — additions from each, our removals honoured', () => {
+  const b = ticket('MOM-1', 'Existing', { labels: ['bug', 'stale'], sources: ['https://x/pull/57'] })
+  const o = { ...b, labels: ['bug', 'security'], sources: [...b.sources, 'https://x/pull/61'] }
+  const t = { ...b, labels: [...b.labels, 'backend'], sources: [...b.sources, 'https://x/pull/60'] }
+  const [m] = mergeWorkItems([b], [o], [t], 'MOM').items
+  assert.deepEqual(m.sources, ['https://x/pull/57', 'https://x/pull/60', 'https://x/pull/61'])
+  assert.deepEqual(m.labels, ['bug', 'backend', 'security'], 'ours dropped "stale"; theirs added "backend"')
+})
+
 test('work merge: one-sided edits pass through, and upstream re-ranking wins over our order', () => {
   const base = [ticket('MOM-1', 'A'), ticket('MOM-2', 'B')]
   const ours = [base[0], { ...base[1], priority: 'P2' as const }, ticket('MOM-3', 'New')]
