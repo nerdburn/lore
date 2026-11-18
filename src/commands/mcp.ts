@@ -373,7 +373,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description:
         label +
-        `What ${ctx.config.project}'s memory is synced from: each configured source (slack, github, granola, notion, figma, jira, gmail) with its scope in its own terms (channels, repos, folders, roots, files, projects/boards, mailboxes), whether it is disabled, how the host authenticates, and its last successful sync / last error. Use it to answer "which repos/channels are synced", to check a scope before adding to it, and to explain a source that is failing.`,
+        `What ${ctx.config.project}'s memory is synced from: each configured source (slack, github, granola, notion, figma, jira, linear, gmail) with its scope in its own terms (channels, repos, folders, roots, files, projects/boards, teams, mailboxes), whether it is disabled, how the host authenticates, and its last successful sync / last error. Use it to answer "which repos/channels are synced", to check a scope before adding to it, and to explain a source that is failing.`,
       inputSchema: {},
     },
     async () => {
@@ -387,12 +387,12 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? 'Unavailable: this client is archived and its memory is read-only.'
-        : 'Add a source to project memory, or widen one: a GitHub repo, a Slack channel, a Granola folder, a Notion page, a Figma design file, a Jira project/board, or Gmail mailboxes. Use ONLY on explicit instruction from a teammate ("add the mobile repo to lore", "sync #acme-dev too"), with the identifiers exactly as given — never guess a repo name, channel, or folder, and never add a scope you merely saw mentioned. Credentials are never part of this: the config records identifiers only, and the host authenticates through its proxies. The result lists what was added, what was already there, and `next`: the steps only a person can do (invite the bot to the channel, attach the GitHub integration, share the Notion page) — relay those verbatim, because the host cannot read the new scope until they are done. The new scope backfills automatically on the host\'s next sync (or lore_sync_now). Scope is never removed here; that is a human edit.',
+        : 'Add a source to project memory, or widen one: a GitHub repo, a Slack channel, a Granola folder, a Notion page, a Figma design file, a Jira project/board, a Linear team, or Gmail mailboxes. Use ONLY on explicit instruction from a teammate ("add the mobile repo to lore", "sync #acme-dev too"), with the identifiers exactly as given — never guess a repo name, channel, or folder, and never add a scope you merely saw mentioned. Credentials are never part of this: the config records identifiers only, and the host authenticates through its proxies. The result lists what was added, what was already there, and `next`: the steps only a person can do (invite the bot to the channel, attach the GitHub integration, share the Notion page) — relay those verbatim, because the host cannot read the new scope until they are done. The new scope backfills automatically on the host\'s next sync (or lore_sync_now). Scope is never removed here; that is a human edit.',
       inputSchema: {
-        kind: z.enum(KNOWN_SOURCES as [string, ...string[]]).describe('slack | github | granola | notion | figma | jira | gmail'),
+        kind: z.enum(KNOWN_SOURCES as [string, ...string[]]).describe('slack | github | granola | notion | figma | jira | linear | gmail'),
         scope: z
           .array(z.string().min(1))
-          .describe('in the source\'s own terms: "#channel"; "owner/repo"; a Granola folder title; a Notion page/database URL or id; a Figma file URL or key (not a Slides deck); a Jira project key (ACM) or "board:293"; mailboxes as emails, or "all" for every Workspace mailbox (gmail: an empty list means the team-side contacts\' inboxes)'),
+          .describe('in the source\'s own terms: "#channel"; "owner/repo"; a Granola folder title; a Notion page/database URL or id; a Figma file URL or key (not a Slides deck); a Jira project key (ACM) or "board:293"; a Linear team key (PRP — the prefix on its issue ids; widening only when the client has no Linear source yet on a self-hosted install, since each client needs its own key proxy); mailboxes as emails, or "all" for every Workspace mailbox (gmail: an empty list means the team-side contacts\' inboxes)'),
         site: z.string().optional().describe('jira only: https://<site>.atlassian.net, for permalinks'),
       },
     },

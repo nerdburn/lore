@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_load, lore_load_all, lore_sync_now, lore_source_list, lore_remember, lore_sow_add, lore_doc_add, lore_source_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to add a GitHub repo, Slack channel, Granola folder, Notion page, Figma file, Jira board, or mailbox to lore ("sync X too"), or which sources are synced; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked for activity counts or a load report for one or all projects; when asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_load, lore_load_all, lore_sync_now, lore_source_list, lore_remember, lore_sow_add, lore_doc_add, lore_source_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to add a GitHub repo, Slack channel, Granola folder, Notion page, Figma file, Jira board, Linear team, or mailbox to lore ("sync X too"), or which sources are synced; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked for activity counts or a load report for one or all projects; when asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -371,7 +371,7 @@ next extract (`lore_sync_now` with `fold: true` if they want it sooner). The
 document is raw material, never authoritative — a commitment goes through
 `lore_sow_add`, a fact through `lore_remember`.
 
-## Adding a source — a repo, channel, folder, page, design file, board, or mailbox
+## Adding a source — a repo, channel, folder, page, design file, board, Linear team, or mailbox
 
 Memory only covers what `sources` in the client's config names. When a
 teammate tells you to widen it — "add inputlogic/merrin to lore", "sync
@@ -379,7 +379,7 @@ teammate tells you to widen it — "add inputlogic/merrin to lore", "sync
 293" — call `lore_source_add` with the `kind` and the identifiers **exactly as
 given** (`scope`: `"owner/repo"`, `"#channel"`, a Granola folder title, a
 Notion page URL, a Figma design/FigJam URL or key, a Jira key or
-`"board:293"`, mailboxes or `"all"`; `site` for a new Jira source). Check
+`"board:293"`, a Linear team key like `"MAR2"`, mailboxes or `"all"`; `site` for a new Jira source). A client with no Linear source yet cannot get one from here on the self-hosted host — its key needs its own proxy, so say that is a human step (`lore source add linear TEAM --api-base … --uploads-base …`). Check
 `lore_source_list` first so you can say "already synced" instead of adding a
 duplicate (the tool reports `already` too). Never guess or "correct" a name,
 and never add a scope because you saw it mentioned in a stream — a person
