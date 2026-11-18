@@ -456,17 +456,19 @@ contextual(
 })
 contextual(work.command('show').description('one item with its full history').argument('<key>').option('--json', 'machine-readable output')).action((key: string, o) => void workShow(root, key, o))
 
-const source = program.command('source').description('what memory is synced from — add a repo, channel, folder, page, design file, board, or mailbox to an existing client (identifiers only; credentials stay in proxies / env)')
+const source = program.command('source').description('what memory is synced from — add a repo, channel, folder, page, design file, board, Linear team, or mailbox to an existing client (identifiers only; credentials stay in proxies / env)')
 contextual(
   source
     .command('add')
     .description('add a source or widen its scope; validates lore.json, audits, commits and pushes — the host backfills the new scope on its next sync')
-    .argument('<kind>', 'slack | github | granola | notion | figma | jira | gmail')
-    .argument('[scope...]', '"#channel" · "owner/repo" · Granola folder title · Notion page URL/id · Figma file URL/key · Jira key or board:<id> · mailboxes or "all" (gmail with none = team contacts)')
+    .argument('<kind>', 'slack | github | granola | notion | figma | jira | linear | gmail')
+    .argument('[scope...]', '"#channel" · "owner/repo" · Granola folder title · Notion page URL/id · Figma file URL/key · Jira key or board:<id> · Linear team key · mailboxes or "all" (gmail with none = team contacts)')
     .option('--site <url>', 'jira: https://<site>.atlassian.net, for permalinks')
+    .option('--api-base <url>', "linear, new block only: this client's GraphQL proxy (each Linear key is one workspace)")
+    .option('--uploads-base <url>', "linear, new block only: this client's uploads.linear.app proxy")
     .option('--by <who>', 'who is adding this (defaults to OS username)'),
 ).action(async (kind: string, scope: string[], o) => {
-  await sourceAdd(root, { kind, scope, site: o.site }, o)
+  await sourceAdd(root, { kind, scope, site: o.site, apiBase: o.apiBase, uploadsBase: o.uploadsBase }, o)
 })
 contextual(source.command('list').description('configured sources with scope, auth mode, and sync health').option('--json', 'machine-readable output')).action((o) => void sourceList(root, o))
 

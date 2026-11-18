@@ -121,6 +121,41 @@ test('applyScope: jira merges projects and boards and can set the site later; gm
   assert.deepEqual(covered.block, { users: 'all', admin: 'o@x.com' })
 })
 
+test('applyScope: linear widens teams; a new self-hosted block needs this client\'s own proxies, never a machine-wide one', () => {
+  const marble = { teams: ['MDEV', 'MDES'], api_base: 'https://linear-marble.int.exe.xyz/graphql', uploads_base: 'https://linear-uploads-marble.int.exe.xyz' }
+  const hosted = { remote: 'exedev@lore-host:/srv/lore/repos', proxy: PROXY }
+  const w = applyScope('linear', marble, ['mar2', 'MDEV'], undefined, hosted)
+  assert.deepEqual(w.block, { ...marble, teams: ['MDEV', 'MDES', 'MAR2'] })
+  assert.deepEqual(w.added, ['MAR2'])
+  assert.deepEqual(w.already, ['MDEV'])
+  assert.match(w.next[0], /member of MAR2/)
+  assert.deepEqual(scopeOf('linear', w.block), ['MDEV', 'MDES', 'MAR2'])
+
+  assert.throws(() => applyScope('linear', marble, ['MAR-2'], undefined, hosted), /not a Linear team key/)
+  assert.throws(() => applyScope('linear', marble, [], undefined, hosted), /at least one team key/)
+  assert.throws(() => applyScope('linear', marble, ['MAR2'], undefined, hosted, { apiBase: 'https://linear.int.exe.xyz/graphql' }), /by hand/)
+  // Passing the bases the block already has is harmless.
+  assert.deepEqual(applyScope('linear', marble, ['MAR2'], undefined, hosted, { apiBase: marble.api_base }).added, ['MAR2'])
+
+  assert.throws(() => applyScope('linear', undefined, ['PRP'], undefined, hosted), /--api-base/)
+  const fresh = applyScope('linear', undefined, ['prp'], undefined, hosted, { apiBase: 'https://linear-acme.int.exe.xyz/graphql', uploadsBase: 'https://linear-uploads-acme.int.exe.xyz' })
+  assert.deepEqual(fresh.block, { teams: ['PRP'], api_base: 'https://linear-acme.int.exe.xyz/graphql', uploads_base: 'https://linear-uploads-acme.int.exe.xyz' })
+  assert.match(applyScope('linear', undefined, ['PRP'], undefined, hosted, { apiBase: 'https://l.example/graphql' }).next[0], /--uploads-base/)
+  // Not self-hosted: the env ref, as `lore setup` writes it.
+  assert.deepEqual(applyScope('linear', undefined, ['PRP'], undefined, {}).block, { teams: ['PRP'], token: 'env:LINEAR_API_KEY' })
+})
+
+test('source add: linear end to end — validated against the schema, written, audited', async () => {
+  const root = makeContextRepo()
+  const r = await sourceAdd(root, { kind: 'linear', scope: ['PRP'] }, { context: root })
+  assert.equal(r.created, true)
+  assert.deepEqual(readConfig(root).sources.linear, { teams: ['PRP'], token: 'env:LINEAR_API_KEY' })
+  const r2 = await sourceAdd(root, { kind: 'linear', scope: ['MAR2'] }, { context: root })
+  assert.deepEqual(r2.added, ['MAR2'])
+  assert.deepEqual(readConfig(root).sources.linear.teams, ['PRP', 'MAR2'])
+  assert.deepEqual(readAudit(root).map((a) => a.source), ['PRP', 'MAR2'])
+})
+
 test('source list: every source with its scope, auth mode, and health from state.json', async () => {
   const root = makeContextRepo(
     { 'state.json': JSON.stringify({ cursors: {}, sources: { slack: { lastAttempt: 't', lastSuccess: '2026-09-18T10:00:00Z' }, github: { lastAttempt: 't', lastError: { at: '2026-09-18T10:00:00Z', message: 'repo x/y not found' } } } }) },
