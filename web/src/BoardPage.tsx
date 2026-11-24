@@ -85,6 +85,19 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   )
 
   const visible = useMemo(() => (board ? applyFilters(board.items, filters) : []), [board, filters])
+  // Offer only labels on tickets this view can show: archived tickets keep their labels,
+  // but a label that lives only on them is noise until archived tickets are shown.
+  const labelOptions = useMemo(() => {
+    if (!board) return []
+    const showArchived = route.view === 'kanban' ? filters.archived : filters.closed
+    const seen = new Map<string, string>()
+    for (const live of [true, false]) {
+      if (!live && !showArchived) break
+      for (const i of board.items) if ((i.status !== 'archived') === live) for (const l of i.labels) if (!seen.has(l.toLowerCase())) seen.set(l.toLowerCase(), l)
+    }
+    for (const l of filters.labels) if (!seen.has(l.toLowerCase())) seen.set(l.toLowerCase(), l)
+    return [...seen.values()].sort((a, b) => a.localeCompare(b))
+  }, [board, filters.archived, filters.closed, filters.labels, route.view])
   const canEdit = board?.role === 'member' && !board.archived
   const open = (key?: string) => navigate({ ...route, item: key })
   const openMenu: OpenTicketMenu = (item, e) => setMenu(menuPosition(item, e))
@@ -182,7 +195,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
-        <FilterSelect label="Label" value={filters.labels} options={board.labels} onChange={(labels) => setFilters((f) => ({ ...f, labels }))} />
+        <FilterSelect label="Label" value={filters.labels} options={labelOptions} onChange={(labels) => setFilters((f) => ({ ...f, labels }))} />
         <FilterSelect label="Assignee" value={filters.assignees} options={board.assignees} onChange={(assignees) => setFilters((f) => ({ ...f, assignees }))} withNone />
         {(filters.labels.length > 0 || filters.assignees.length > 0 || filters.q) && (
           <Button size="sm" variant="ghost" onPress={() => setFilters((f) => ({ ...f, q: '', labels: [], assignees: [] }))}>
