@@ -478,6 +478,14 @@ test('work mcp: the four tools write with via mcp and never take an actor; a mov
   const nothing = await call('lore_work_set', { key: 'ACM-2', reason: 'x' })
   assert.equal(nothing.isError, true)
 
+  // A label the project has never used is flagged back to the agent; reusing one, in any capitalisation, is not.
+  const coined = await call('lore_work_label', { keys: ['ACM-1'], add: ['onboarding'], reason: 'theme' })
+  assert.doesNotMatch(coined.text, /new label/, 'the first label has nothing to reuse')
+  const reused = await call('lore_work_label', { keys: ['ACM-2'], add: ['Onboarding'], reason: 'same theme' })
+  assert.doesNotMatch(reused.text, /new label/)
+  const another = await call('lore_work_set', { key: 'ACM-2', labels: ['onboarding', 'signup flow'], reason: 'retheme' })
+  assert.match(another.text, /created a new label \(signup flow\)\. The project already uses: onboarding\./)
+
   const items = readWorkItems(root, 'ACM')
   assert.deepEqual(items.map((i) => i.key), ['ACM-2', 'ACM-1'])
   const one = items.find((i) => i.key === 'ACM-1')!

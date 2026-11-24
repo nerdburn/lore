@@ -694,6 +694,20 @@ export function canonicalLabel(items: (Pick<LoreWorkItem, 'labels'> & Partial<Pi
   return label.trim().replace(/\s+/g, ' ')
 }
 
+/** The labels on tickets that are not archived, most used first — the project's working vocabulary. */
+export function liveLabels(items: Pick<LoreWorkItem, 'labels' | 'status'>[]): string[] {
+  const count = new Map<string, { label: string; n: number }>()
+  for (const i of items) {
+    if (i.status === 'archived') continue
+    for (const l of i.labels) {
+      const c = count.get(labelKey(l)) ?? { label: l, n: 0 }
+      c.n++
+      count.set(labelKey(l), c)
+    }
+  }
+  return [...count.values()].sort((a, b) => b.n - a.n || a.label.localeCompare(b.label)).map((c) => c.label)
+}
+
 /** Every label in the table with how many open and closed items carry it — the project's themes at a glance. */
 export function labelCounts(items: Pick<LoreWorkItem, 'labels' | 'state'>[]): Record<string, { open: number; closed: number }> {
   const out: Record<string, { open: number; closed: number }> = {}
@@ -796,6 +810,8 @@ export interface WorkCreateProposal {
   status?: string
   priority?: string
   assignee?: string
+  /** Themes from the project's existing labels; ones the project does not already use are dropped. */
+  labels?: string[]
   reason: string
   sources: string[]
   confidence: string
@@ -869,6 +885,13 @@ export function applyFoldCreations(items: LoreWorkItem[], prefix: string, propos
     const evidence = /^\d{4}-\d{2}-\d{2}$/.test(p.evidence_date ?? '') ? p.evidence_date : at.slice(0, 10)
     const priority = (WORK_PRIORITIES as string[]).includes(String(p.priority)) ? (p.priority as WorkPriority) : undefined
     const sources = p.sources.map(String).filter(Boolean)
+    // The fold runs unattended, so it may reuse a label but never coin one:
+    // nobody is there to ask, and near-duplicate labels are how a list rots.
+    const labels: string[] = []
+    for (const l of Array.isArray(p.labels) ? p.labels.map(String) : []) {
+      const known = liveLabels(items).find((k) => labelKey(k) === labelKey(l))
+      if (known && !hasLabel(labels, known)) labels.push(known)
+    }
     const item: LoreWorkItem = {
       key: nextKey(items, prefix),
       title,
@@ -876,7 +899,7 @@ export function applyFoldCreations(items: LoreWorkItem[], prefix: string, propos
       state: stateFor(status as WorkStatus),
       ...(priority ? { priority } : {}),
       ...(p.assignee?.trim() ? { assignee: p.assignee.trim() } : {}),
-      labels: [],
+      labels,
       ...(request ? { request } : {}),
       sources,
       created: at.slice(0, 10),
@@ -897,7 +920,7 @@ export function describeWorkForPrompt(items: LoreWorkItem[], today: string): str
     .filter(({ i }) => i.state === 'open' || i.updated >= cutoff)
     .map(
       ({ i, idx }) =>
-        `${i.key} | rank ${idx + 1} | ${i.status}${i.priority ? ` | ${i.priority}` : ''}${i.assignee ? ` | ${i.assignee}` : ''} | ${i.title}${
+        `${i.key} | rank ${idx + 1} | ${i.status}${i.priority ? ` | ${i.priority}` : ''}${i.assignee ? ` | ${i.assignee}` : ''}${i.labels.length ? ` | #${i.labels.join(' #')}` : ''} | ${i.title}${
           i.external ? ` | ${i.external.system} ${i.external.key}: ${i.external.status}` : ''
         }${i.request ? ` | from ${i.request}` : ''}${i.description ? `\n  Description: ${i.description.slice(0, 6000)}` : ''}${describeDelivery(i) ? `\n${describeDelivery(i)}` : ''}`,
     )
