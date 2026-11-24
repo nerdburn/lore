@@ -293,7 +293,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     },
     async ({ trigger, force, fold }) => {
       lastPull = Date.now()
-      const r = refresh(rememberOpts.cwd, { ...rememberOpts.opts, trigger, force, fold })
+      const r = await refresh(rememberOpts.cwd, { ...rememberOpts.opts, trigger, force, fold })
       return text(r)
     },
   )

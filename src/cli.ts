@@ -605,8 +605,8 @@ contextual(
     .option('--trigger', 'run the host sync service now (SSH to the configured remote)')
     .option('--fold', 'with --trigger: run sync + the LLM fold (the timer unit) so derived artifacts update too; a minute or two')
     .option('--force', 're-run even if the host synced (or, with --fold, folded) within 5 minutes'),
-).action((opts) => {
-  const r = refresh(root, opts)
+).action(async (opts) => {
+  const r = await refresh(root, opts)
   console.log(`host: ${r.host}${r.fold ? ' [sync + fold]' : ''}${r.outcome ? ` (${r.outcome})` : ''}${r.note ? ` — ${r.note}` : ''}`)
   console.log(`synced: ${r.before.lastSync ?? 'never'} → ${r.after.lastSync ?? 'never'}; extracted: ${r.before.lastExtract ?? 'never'} → ${r.after.lastExtract ?? 'never'}`)
 })
