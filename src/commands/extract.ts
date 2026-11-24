@@ -419,10 +419,10 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
 
 /** API creds → sdk; else a usable claude CLI → cli; else sdk (its
  * resolution error names the options). LORE_LLM overrides. */
-/** The backend for log lines: the CLI reads as the API once a limit switched this process to the fallback key. */
+/** The backend for log lines: the CLI reads as the API once a limit or lost login switched this process to the fallback key. */
 const backendLabel = (llm: Backend) => (llm === 'cli' && fallbackApiKey() ? 'api-fallback' : llm)
 
-/** Run on the configured backend; on the CLI, a subscription limit switches to the fallback API key (llm-fallback). */
+/** Run on the configured backend; on the CLI, a subscription limit or lost login switches to the fallback API key (llm-fallback). */
 function onBackend<T>(cli: () => T, sdk: () => Promise<T>): Promise<T> {
   return pickBackend() === 'sdk' ? sdk() : withCliFallback(cli, sdk)
 }
