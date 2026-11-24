@@ -267,6 +267,11 @@ test('linear: open issues seed the table and the tracker; comments and state cha
     'open issues only; started → in_progress',
   )
 
+  // A project that has dropped its Linear source keeps the tables as history, but they no longer drive tickets.
+  const dropped = makeContextRepo({ 'context/work/linear/PRP.yaml': r.files!['context/work/linear/PRP.yaml'] }, { project: 'purposely', client: { name: 'Purposely', domains: [] }, sources: {} })
+  mirrorExternal(dropped, { project: 'purposely', client: { name: 'Purposely', domains: [], contacts: [] }, sources: {} })
+  assert.deepEqual(readWorkItems(dropped, 'PUR'), [])
+
   // Next sync: PRP-1 moves to started — one state-change doc.
   state.issues[0] = lin('PRP-1', { state: { name: 'In Progress', type: 'started' }, updatedAt: '2026-09-03T10:00:00.000Z' })
   state.comments = []

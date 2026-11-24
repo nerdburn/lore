@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { workAdd, workArchive, workList, workMove, workUnarchive } from '../src/commands/work.js'
+import { canonicalLabel } from '../src/work.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
 
 async function fixture() {
@@ -47,4 +48,15 @@ test('work archive: keys archive exactly those tickets; a missing key or no sele
     await workUnarchive(root, ['ACM-3'], {}, { reason: 'back', to: 'review' }, o('2026-09-23T09:00:00.000Z'))
     assert.equal(statuses(root)['ACM-3'], 'review')
   })
+})
+
+test('labels: live tickets set the spelling of a label; an archived spelling only counts when nothing live uses it', () => {
+  const items = [
+    { labels: ['Admin Panel'], status: 'archived' as const },
+    { labels: ['admin panel', 'Old Theme'], status: 'todo' as const },
+    { labels: ['Legacy Only'], status: 'archived' as const },
+  ]
+  assert.equal(canonicalLabel(items, 'ADMIN  panel'), 'admin panel')
+  assert.equal(canonicalLabel(items, 'legacy only'), 'Legacy Only')
+  assert.equal(canonicalLabel(items, ' brand  new '), 'brand new')
 })

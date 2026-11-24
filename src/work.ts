@@ -555,7 +555,12 @@ export function readExternalIssues(root: string, config?: Pick<LoreConfig, 'sour
     }
   }
   const linearDir = join(root, 'context/work/linear')
-  if (existsSync(linearDir)) {
+  // A Linear source that was removed or disabled leaves its tables behind as
+  // history; they must stop driving tickets, or stale labels and statuses
+  // would be written back over every later change.
+  const linear = config?.sources.linear as { disabled?: boolean } | undefined
+  const linearLive = !config || (linear !== undefined && !linear.disabled)
+  if (linearLive && existsSync(linearDir)) {
     for (const entry of readdirSync(linearDir).sort()) {
       if (!/\.ya?ml$/.test(entry)) continue
       for (const i of readLinearTable(readFileSync(join(linearDir, entry), 'utf8')) as LinearWorkItem[]) {
@@ -681,9 +686,11 @@ export function hasLabel(labels: string[], label: string): boolean {
 }
 
 /** A label as the project already spells it, or cleaned up if it is new. */
-export function canonicalLabel(items: Pick<LoreWorkItem, 'labels'>[], label: string): string {
+export function canonicalLabel(items: (Pick<LoreWorkItem, 'labels'> & Partial<Pick<LoreWorkItem, 'status'>>)[], label: string): string {
   const k = labelKey(label)
-  for (const i of items) for (const l of i.labels) if (labelKey(l) === k) return l
+  // Live tickets set the spelling; an archived ticket's only counts when nothing live uses the label.
+  for (const live of [true, false])
+    for (const i of items) if ((i.status !== 'archived') === live) for (const l of i.labels) if (labelKey(l) === k) return l
   return label.trim().replace(/\s+/g, ' ')
 }
 
