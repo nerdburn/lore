@@ -18,7 +18,7 @@ import { addComment } from '../comments.js'
 import { workPush } from './work-push.js'
 import { sourceAdd, sourceList } from './source.js'
 import { KNOWN_SOURCES } from '../config.js'
-import { describeClaim, WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
+import { describeClaim, labelKey, liveLabels, readWorkItems, workPrefix, WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 import type { WriteGateOptions } from '../write.js'
 import { queryLoad, loadQuerySchema } from '../load/query.js'
 import { readLoad, loadFreshness } from '../load/store.js'
@@ -408,6 +408,22 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
 
   const unavailable = 'Unavailable: this client is archived and its memory is read-only.'
   const workVia = { ...rememberOpts.opts, via: 'mcp' as const }
+  const LABEL_RULE = ' Labels: reuse a label the project already has (lore_recall shows them with counts); only add a new one when a person asked for it or agreed to it.'
+  /** The project's labels before a write, so the reply can say when the write coined a new one. */
+  const labelsBefore = (): string[] => {
+    try {
+      return liveLabels(readWorkItems(ctx.root, workPrefix(ctx.config)))
+    } catch {
+      return []
+    }
+  }
+  const newLabelNote = (before: string[], wanted: string[] | undefined): string => {
+    const known = new Set(before.map(labelKey))
+    const coined = [...new Set((wanted ?? []).map((l) => l.trim()).filter((l) => l && !known.has(labelKey(l))))]
+    // With no labels yet there is nothing to reuse, so the first ones pass without comment.
+    if (!coined.length || !before.length) return ''
+    return `\nnote: this created ${coined.length === 1 ? 'a new label' : 'new labels'} (${coined.join(', ')}). The project already uses: ${before.join(', ')}. If one of those fits, switch to it; otherwise check with a person that the new label is wanted.`
+  }
   const reasonField = z.string().min(1).describe('why — recorded in the item\'s history with you as the actor; cite what the person said or the evidence')
   const sourcesField = z.array(z.string()).optional().describe('permalinks to the evidence (Slack message, email, PR)')
 
@@ -432,7 +448,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         status: z.enum(WORK_STATUSES as [string, ...string[]]).optional().describe('default todo'),
         priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
         assignee: z.string().optional(),
-        labels: z.array(z.string()).optional(),
+        labels: z.array(z.string()).optional().describe(`themes for the ticket.${LABEL_RULE}`),
         sources: sourcesField,
         external: z.string().optional().describe('"jira:<KEY>", "github:<owner>/<repo>#<n>" or "linear:<KEY>"'),
         reason: reasonField,
@@ -440,8 +456,9 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       },
     },
     async ({ title, description, status, priority, assignee, labels, sources, external, reason, project }) => {
+      const before = labelsBefore()
       const item = await workAdd(rememberOpts.cwd, { title, description, project, status: status as never, priority: priority as never, assignee, labels, sources, external, reason }, workVia)
-      return text(`added ${item.key}: ${item.title} [${item.status}]`)
+      return text(`added ${item.key}: ${item.title} [${item.status}]${newLabelNote(before, labels)}`)
     },
   )
 
@@ -549,7 +566,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
         description: z.string().optional().describe('markdown body; "" clears it'),
         priority: z.enum(WORK_PRIORITIES as [string, ...string[]]).optional(),
         assignee: z.string().optional().describe('"" clears it'),
-        labels: z.array(z.string()).optional().describe('replaces the list'),
+        labels: z.array(z.string()).optional().describe(`replaces the list.${LABEL_RULE}`),
         sources: sourcesField,
         external: z.string().optional().describe('"jira:<KEY>", "github:<owner>/<repo>#<n>" or "linear:<KEY>"'),
         rank_above: z.string().optional().describe('a key, or "top" / "bottom"'),
@@ -559,7 +576,10 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ key, title, description, priority, assignee, labels, sources, external, rank_above, reason }) => {
       const notes: string[] = []
       if (title !== undefined || description !== undefined || priority !== undefined || assignee !== undefined || labels !== undefined || sources !== undefined || external !== undefined) {
+        const before = labelsBefore()
         const item = await workSet(rememberOpts.cwd, key, { title, description, priority: priority as never, assignee, labels, sources, external }, { reason }, workVia)
+        const coined = newLabelNote(before, labels)
+        if (coined) notes.push(coined.trim())
         notes.push(`updated ${item.key}`)
       }
       if (rank_above !== undefined) {
@@ -586,10 +606,11 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       },
     },
     async ({ keys, add, remove, reason }) => {
+      const before = labelsBefore()
       const r = await workLabel(rememberOpts.cwd, keys, { add, remove }, { reason }, workVia)
       const lines = r.labeled.map((l) => `${l.key}: ${l.title} — labels: ${l.labels.join(', ') || '(none)'}`)
       if (r.unchanged.length) lines.push(`unchanged (already so): ${r.unchanged.join(', ')}`)
-      return text(lines.join('\n') || 'nothing changed')
+      return text((lines.join('\n') || 'nothing changed') + newLabelNote(before, add))
     },
   )
 
