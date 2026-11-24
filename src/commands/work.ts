@@ -16,6 +16,7 @@ import {
   rankItem,
   readExternalIssues,
   readWorkItems,
+  shortTitle,
   stateFor,
   summarizeForRecall,
   WORK_PRIORITIES,
@@ -246,7 +247,7 @@ export function workAdd(cwd: string, input: WorkAddInput, opts: WorkWriteOptions
 }
 
 /** Turn a derived request (req-0007) into a tracked item, keeping its evidence. */
-export function workPromote(cwd: string, requestId: string, input: { title?: string; priority?: WorkPriority; reason?: string } = {}, opts: WorkWriteOptions = {}): LoreWorkItem {
+export function workPromote(cwd: string, requestId: string, input: { title?: string; description?: string; priority?: WorkPriority; reason?: string } = {}, opts: WorkWriteOptions = {}): LoreWorkItem {
   const ctx = resolveContext(cwd, opts)
   const path = join(ctx.root, 'context/derived/requests.yaml')
   const requests = existsSync(path) ? ((parse(readFileSync(path, 'utf8')) as Record<string, unknown>[] | null) ?? []) : []
@@ -257,9 +258,14 @@ export function workPromote(cwd: string, requestId: string, input: { title?: str
     const already = items.find((i) => i.request === req.id)
     if (already) throw new Error(`work promote: ${req.id} is already tracked as ${already.key}`)
     const source = typeof req.source === 'string' ? req.source : undefined
+    // A long ask becomes a short title, with the ask itself kept as the ticket's body.
+    const asked = String(req.request ?? req.id).replace(/\s+/g, ' ').trim()
+    const title = input.title?.trim() || shortTitle(asked)
+    const description = input.description?.trim() || (title === asked ? undefined : `${asked}${req.requested_by ? `\n\nAsked by ${req.requested_by}${req.date ? ` on ${String(req.date).slice(0, 10)}` : ''}.` : ''}`)
     const item: LoreWorkItem = {
       key: nextKey(items, prefix),
-      title: input.title?.trim() || String(req.request ?? req.id),
+      title,
+      ...(description ? { description } : {}),
       status: 'todo',
       state: 'open',
       ...(priority ? { priority } : {}),

@@ -87,6 +87,20 @@ export interface BoardPerson {
   role: Role
 }
 
+/** Something the client asked for, as lore recorded it from the conversation. */
+export interface ClientRequest {
+  id: string
+  request: string
+  requested_by?: string
+  date?: string
+  status?: string
+  source?: string
+  /** The ticket made from this request. */
+  ticket?: string
+  /** An open ticket that reads like this request. */
+  similar?: string
+}
+
 export interface Board {
   context: string
   project: string
@@ -250,6 +264,8 @@ export const api = {
   connections: () => call<{ connections: Connection[] }>('/oauth/connections'),
   revokeConnection: (id: string) => call<{ ok: true }>(`/oauth/connections/${enc(id)}/revoke`, { body: {} }),
   board: (context: string) => call<Board>(`/p/${enc(context)}`),
+  requests: (context: string) => call<{ requests: ClientRequest[]; role: Role; archived: boolean }>(`/p/${enc(context)}/requests`),
+  promote: (context: string, id: string) => call<{ item: Item; request?: ClientRequest }>(`/p/${enc(context)}/requests/${enc(id)}/promote`, { body: {} }),
   item: (context: string, key: string) => call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`),
   add: (context: string, fields: Partial<Pick<Item, 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'labels'>>) =>
     call<{ item: Item }>(`/p/${enc(context)}/items`, { body: fields }),

@@ -452,6 +452,59 @@ export function lastHumanChange(item: LoreWorkItem, field: string): string | und
   return at
 }
 
+/** One entry of `context/derived/requests.yaml`: something the client asked for, as the fold recorded it. */
+export interface DerivedRequest {
+  id: string
+  request: string
+  requested_by?: string
+  date?: string
+  status?: string
+  source?: string
+}
+
+export function parseRequests(text: string): DerivedRequest[] {
+  if (!text.trim()) return []
+  const parsed = parse(text.replace(/^(#.*\n)+/, '')) as unknown
+  if (!Array.isArray(parsed)) return []
+  return parsed
+    .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object' && typeof (r as Record<string, unknown>).id === 'string')
+    .map((r) => ({
+      id: String(r.id),
+      request: String(r.request ?? r.id).replace(/\s+/g, ' ').trim(),
+      ...(r.requested_by ? { requested_by: String(r.requested_by) } : {}),
+      ...(r.date ? { date: String(r.date).slice(0, 10) } : {}),
+      ...(r.status ? { status: String(r.status) } : {}),
+      ...(typeof r.source === 'string' ? { source: r.source } : {}),
+    }))
+}
+
+/** A request with the ticket that tracks it, or the open ticket that reads like it. */
+export interface RequestRow extends DerivedRequest {
+  /** The ticket promoted from this request. */
+  ticket?: string
+  /** An open ticket whose title reads like this request — probably the same work under other words. */
+  similar?: string
+}
+
+export function requestRows(requests: DerivedRequest[], items: Pick<LoreWorkItem, 'key' | 'title' | 'request' | 'state'>[]): RequestRow[] {
+  const byRequest = new Map(items.filter((i) => i.request).map((i) => [i.request!, i.key]))
+  return requests.map((r) => {
+    const ticket = byRequest.get(r.id)
+    const similar = ticket ? undefined : items.find((i) => i.state === 'open' && titleSimilarity(i.title, shortTitle(r.request)) >= 0.7)?.key
+    return { ...r, ...(ticket ? { ticket } : {}), ...(similar ? { similar } : {}) }
+  })
+}
+
+/** A ticket title from a longer ask: the whole text when short, else its first sentence, else a cut at a word. */
+export function shortTitle(text: string, max = 90): string {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  if (clean.length <= max) return clean
+  const sentence = /^(.{20,}?[.!?])\s/.exec(clean)?.[1]
+  if (sentence && sentence.length <= max) return sentence.replace(/[.!?]$/, '')
+  const cut = clean.slice(0, max - 1)
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 40)).replace(/[\s,;:(–—-]+$/, '')}…`
+}
+
 export function summarizeForRecall(item: LoreWorkItem): WorkItemSummary {
   const { history: hist, ...rest } = item
   const history = Array.isArray(hist) ? hist : []

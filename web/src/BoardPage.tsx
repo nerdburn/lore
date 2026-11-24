@@ -6,6 +6,7 @@ import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { NewItemModal } from './NewItemModal'
+import { RequestsView } from './RequestsView'
 import { AvatarStack } from './people'
 import { boardRoute, href, navigate, type Filters, type Route } from './router'
 import { menuPosition, TicketMenu, type OpenTicketMenu, type TicketAction, type TicketMenuPosition } from './TicketMenu'
@@ -165,7 +166,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             {board.archived && ' · archived (read-only)'}
           </p>
         </div>
-        <Tabs selectedKey={route.view} onSelectionChange={(k) => navigate({ ...route, view: k as 'list' | 'kanban' }, true)}>
+        <Tabs selectedKey={route.view} onSelectionChange={(k) => navigate({ ...route, view: k as 'list' | 'kanban' | 'requests' }, true)}>
           <Tabs.ListContainer>
             <Tabs.List aria-label="View">
               <Tabs.Tab id="kanban">
@@ -174,6 +175,10 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
               </Tabs.Tab>
               <Tabs.Tab id="list">
                 List
+                <Tabs.Indicator />
+              </Tabs.Tab>
+              <Tabs.Tab id="requests">
+                Requests
                 <Tabs.Indicator />
               </Tabs.Tab>
             </Tabs.List>
@@ -191,12 +196,12 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
         <SearchField aria-label="Search tickets" value={filters.q} onChange={(q) => setFilters((f) => ({ ...f, q }))} className="w-full sm:w-72">
           <SearchField.Group>
             <SearchField.SearchIcon />
-            <SearchField.Input placeholder="Search title, key, description" />
+            <SearchField.Input placeholder={route.view === 'requests' ? 'Search requests' : 'Search title, key, description'} />
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
-        <FilterSelect label="Label" value={filters.labels} options={labelOptions} onChange={(labels) => setFilters((f) => ({ ...f, labels }))} />
-        <FilterSelect label="Assignee" value={filters.assignees} options={board.assignees} onChange={(assignees) => setFilters((f) => ({ ...f, assignees }))} withNone />
+        {route.view !== 'requests' && <FilterSelect label="Label" value={filters.labels} options={labelOptions} onChange={(labels) => setFilters((f) => ({ ...f, labels }))} />}
+        {route.view !== 'requests' && <FilterSelect label="Assignee" value={filters.assignees} options={board.assignees} onChange={(assignees) => setFilters((f) => ({ ...f, assignees }))} withNone />}
         {(filters.labels.length > 0 || filters.assignees.length > 0 || filters.q) && (
           <Button size="sm" variant="ghost" onPress={() => setFilters((f) => ({ ...f, q: '', labels: [], assignees: [] }))}>
             Clear filters
@@ -214,7 +219,9 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
         )}
       </div>
 
-      {route.view === 'kanban' ? (
+      {route.view === 'requests' ? (
+        <RequestsView context={route.context} canEdit={canEdit} q={filters.q} showAll={filters.closed} onShowAll={(closed) => setFilters((f) => ({ ...f, closed }))} onOpen={open} onPromoted={() => void load()} onError={fail} />
+      ) : route.view === 'kanban' ? (
         <KanbanView items={visible} canEdit={canEdit} showArchived={filters.archived} onOpen={open} onMove={moveItem} onMenu={openMenu} />
       ) : (
         <ListView items={visible} onOpen={open} showClosed={filters.closed} onShowClosed={(closed) => setFilters((f) => ({ ...f, closed }))} onMenu={openMenu} />
