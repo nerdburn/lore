@@ -4,6 +4,7 @@ import { DragDropProvider, DragOverlay, useDraggable, useDroppable } from '@dnd-
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BOARD_COLUMNS, STATUS_LABEL, type Item, type Status } from './api'
 import { ClaimBadge, ExternalBadge, Labels, PriorityChip } from './bits'
+import { celebrateTicket } from './celebrate'
 import { PersonAvatar } from './people'
 import { isMenuKey, type OpenTicketMenu } from './TicketMenu'
 
@@ -17,7 +18,7 @@ interface Props {
   onMenu: OpenTicketMenu
   onOpen: (key: string) => void
   /** `order` = the target column's keys after the drop; the neighbour anchors the rank. */
-  onMove: (key: string, status: Status, order: string[], neighbour: { above?: string; below?: string }) => void
+  onMove: (key: string, status: Status, order: string[], neighbour: { above?: string; below?: string }) => Promise<Item | undefined>
 }
 
 const ALL_COLUMNS: Status[] = [...BOARD_COLUMNS, 'archived']
@@ -72,7 +73,8 @@ export function KanbanView({ items, canEdit, showArchived, onOpen, onMove, onMen
         if (from === to && columns[from].join() === order.join()) return
         setColumns({ ...columns, [from]: columns[from].filter((k) => k !== key), [to]: order })
         const neighbour = order[index + 1] ? { above: order[index + 1] } : order[index - 1] ? { below: order[index - 1] } : {}
-        onMove(key, to, order, neighbour)
+        const saving = onMove(key, to, order, neighbour)
+        if (to === 'done' && from !== 'done' && from !== 'archived') void saving.then((saved) => saved && celebrateTicket(key))
       }}
     >
       <div className="grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
@@ -118,6 +120,7 @@ function Card({ item, status, canEdit, isActive, onOpen, onMenu }: { onMenu: Ope
       {drop.isDropTarget && !isActive && <div className="pointer-events-none absolute -top-[5px] right-1 left-1 h-[3px] rounded-full bg-accent" />}
       <div
         ref={drag.ref}
+        data-ticket-key={item.key}
         role="button"
         tabIndex={0}
         aria-haspopup="menu"

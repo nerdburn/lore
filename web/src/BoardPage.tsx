@@ -6,6 +6,7 @@ import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { NewItemModal } from './NewItemModal'
+import { celebrateTicket, ticketElement } from './celebrate'
 import { AvatarStack } from './people'
 import { boardRoute, href, navigate, type Filters, type Route } from './router'
 import { menuPosition, TicketMenu, type OpenTicketMenu, type TicketAction, type TicketMenuPosition } from './TicketMenu'
@@ -118,6 +119,8 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
     }
     if (!canEdit || !board || actionBusy) return
     setActionBusy(true)
+    // A List view that hides closed tickets drops the row before we can celebrate it.
+    const wasAt = ticketElement(item.key)?.getBoundingClientRect()
     try {
       const saved = await write(undefined, () => action === 'assign'
         ? api.update(route.context, item.key, { assignee: board.me_assignee, note: 'assigned to myself from the card menu' })
@@ -131,7 +134,10 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
           timeout: 8000,
           actionProps: { children: 'Undo', onPress: () => { void write(undefined, () => api.move(route.context, item.key, { status: item.status, note: 'undid deletion from the card menu' })) } },
         })
-      } else toast.success(action === 'assign' ? `Assigned ${item.key} to you` : `Marked ${item.key} as done`)
+      } else {
+        toast.success(action === 'assign' ? `Assigned ${item.key} to you` : action === 'restore' ? `Restored ${item.key}` : `Marked ${item.key} as done`)
+        if (action === 'done') celebrateTicket(item.key, wasAt)
+      }
     } finally { setActionBusy(false) }
   }
 
