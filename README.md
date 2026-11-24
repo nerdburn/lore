@@ -778,7 +778,7 @@ Agent VMs keep using the peer integration (§6 of docs/DEPLOY_EXE.md).
 `lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
 `lore_recall`, `lore_sync_now`, `lore_source_list`, `lore_remember`,
 `lore_sow_add`, `lore_doc_add`, `lore_source_add` (widen what is synced — a
-repo, channel, folder, page, design file, board, or mailbox — on explicit
+repo, channel, folder, page, design file, board, Linear team, or mailbox — on explicit
 instruction; identifiers only, credentials stay on the host), and the tracker
 verbs `lore_work_add`, `lore_work_promote`, `lore_work_move`, `lore_work_set`
 (each requires a reason), and `lore_work_push` (write ticket state to Jira,
@@ -869,7 +869,7 @@ cites sources, never pins uninvited); run them with
 | `lore sow list [--json]` | attached SOWs |
 | `lore doc add <file-or-google-link> [--title t] [--from who] [--date d] [--source url] [--as email] [--by who]` | add a document (Google Doc/Slides/Sheet, Drive PDF/text, or local .md/.txt/.pdf) to the `docs` stream — raw material, folded like email; commits + pushes |
 | `lore doc list [--json]` | documents in the `docs` stream |
-| `lore source add <kind> [scope...] [--site url] [--by who]` | add a source or widen its scope on an existing client — `github owner/repo`, `slack "#chan"`, `granola "Folder"`, `notion <url>`, `figma <url>`, `jira KEY\|board:id`, `gmail [emails\|all]`; identifiers only (proxy `api_base` from `~/.lore/config.json` or `env:` refs), validated, audited, commits + pushes; the host backfills the new scope; prints the human steps left |
+| `lore source add <kind> [scope...] [--site url] [--api-base url --uploads-base url] [--by who]` | add a source or widen its scope on an existing client — `github owner/repo`, `slack "#chan"`, `granola "Folder"`, `notion <url>`, `figma <url>`, `jira KEY\|board:id`, `linear TEAM`, `gmail [emails\|all]`; identifiers only (proxy `api_base` from `~/.lore/config.json` or `env:` refs; a new self-hosted `linear` block takes the client's own proxies via `--api-base`/`--uploads-base`, since each Linear key is one workspace), validated, audited, commits + pushes; the host backfills the new scope; prints the human steps left |
 | `lore source list [--json]` | configured sources with scope, auth mode, and freshness (`ok` / `stale <age>` / `never` / `disabled`) with last success and last error |
 | `lore gdoc export <url> --as <email> [--json]` | export a Google Doc (Slides, Sheet, Drive-hosted PDF/text) as text via the service account (used by `sow add` / `doc add` on the host) |
 | `lore mcp` | MCP server over stdio |

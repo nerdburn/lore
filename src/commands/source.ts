@@ -25,12 +25,20 @@ import { authorizeWrite } from '../write.js'
  */
 
 export interface SourceAddInput {
-  /** slack | github | granola | notion | figma | jira | gmail */
+  /** slack | github | granola | notion | figma | jira | linear | gmail */
   kind: string
-  /** Identifiers in the source's own terms: channels, owner/repo, folder titles, Notion page URLs/ids, Figma file URLs/keys, Jira keys / board:<id>, mailboxes ("all"). */
+  /** Identifiers in the source's own terms: channels, owner/repo, folder titles, Notion page URLs/ids, Figma file URLs/keys, Jira keys / board:<id>, Linear team keys, mailboxes ("all"). */
   scope: string[]
   /** Jira only: https://<site>.atlassian.net, for permalinks (and the API when no proxy). */
   site?: string
+  /**
+   * Linear only, when creating the block: the client's GraphQL proxy and its
+   * uploads proxy. Each Linear key belongs to one client's workspace, so there
+   * is no machine-wide proxy to default to (Purposely's is `linear`, Marble's
+   * `linear-marble`); self-hosted, a new Linear block needs these.
+   */
+  apiBase?: string
+  uploadsBase?: string
 }
 
 export interface SourceAddOptions extends ResolveOptions {
@@ -77,6 +85,8 @@ export interface SourceSummary {
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]+$/
+/** Matches the config schema's Linear team key rule. */
+const LINEAR_TEAM_RE = /^[A-Z][A-Z0-9]{0,9}$/
 const FIGMA_URL_RE = /^(?:https?:\/\/)?(?:www\.)?figma\.com\/(design|file|board|deck|slides|proto)\/([A-Za-z0-9]{8,})(?:[/?#]|$)/
 
 /** Sources whose credential is a token the host cannot hold in its environment on a self-hosted install. */
@@ -86,6 +96,8 @@ const NEEDS_PROXY: Record<string, keyof NonNullable<GlobalConfig['proxy']> | und
   notion: 'notion',
   figma: 'figma',
   jira: 'jira',
+  // Per-client keys: a new block takes its proxy from --api-base, not ~/.lore/config.json.
+  linear: undefined,
   granola: undefined,
   gmail: undefined,
 }
@@ -103,7 +115,7 @@ export async function sourceAdd(cwd: string, input: SourceAddInput, opts: Source
   const existing = sources[kind]
   const global = readGlobalConfig()
 
-  const plan = applyScope(kind as SourceName, existing, input.scope, input.site, global)
+  const plan = applyScope(kind as SourceName, existing, input.scope, input.site, global, { apiBase: input.apiBase, uploadsBase: input.uploadsBase })
   if (plan.added.length === 0 && !plan.reenabled && !plan.changed) {
     return {
       source: kind as SourceName,
@@ -179,7 +191,14 @@ interface Plan {
  * Pure: the new source block for `kind` given the existing one (if any) and
  * the scope entries to add. Exported for tests; `sourceAdd` does the I/O.
  */
-export function applyScope(kind: SourceName, existing: Record<string, unknown> | undefined, scope: string[], site: string | undefined, global: GlobalConfig): Plan {
+export function applyScope(
+  kind: SourceName,
+  existing: Record<string, unknown> | undefined,
+  scope: string[],
+  site: string | undefined,
+  global: GlobalConfig,
+  bases: { apiBase?: string; uploadsBase?: string } = {},
+): Plan {
   if (kind === 'github_projects') throw new Error('source: configure sources.github_projects in lore.json with owner, number, and an explicit status_map; see docs/GITHUB_PROJECTS_SOURCE.md')
   const entries = scope.map((s) => s.trim()).filter(Boolean)
   const proxy = global.proxy ?? {}
@@ -297,6 +316,32 @@ export function applyScope(kind: SourceName, existing: Record<string, unknown> |
       if (res.added.length) next.push('the Jira account behind the host\'s credentials must be able to browse the project/board')
       break
     }
+    case 'linear': {
+      const teams = entries.map((t) => t.toUpperCase())
+      if (!teams.length) throw new Error('source: linear needs at least one team key, e.g. PRP')
+      for (const t of teams) if (!LINEAR_TEAM_RE.test(t)) throw new Error(`source: "${t}" is not a Linear team key (uppercase, e.g. PRP — the prefix on its issue ids)`)
+      res = merge('teams', teams)
+      const { apiBase, uploadsBase } = bases
+      if ((apiBase || uploadsBase) && existing) {
+        // Re-pointing a working block at another key is a human edit, not a scope change.
+        if ((apiBase && apiBase !== block.api_base) || (uploadsBase && uploadsBase !== block.uploads_base)) {
+          throw new Error('source: sources.linear already says how it authenticates — change api_base / uploads_base in lore.json by hand')
+        }
+      }
+      if (!existing) {
+        if (apiBase) {
+          block.api_base = apiBase
+          if (uploadsBase) block.uploads_base = uploadsBase
+          else next.push('no --uploads-base: files pasted into issues will not import until sources.linear.uploads_base points at a proxy for uploads.linear.app with the same key')
+        } else if (global.remote) {
+          throw new Error(
+            "source: a Linear key belongs to one client's workspace, so the self-hosted host needs this client's own proxies — create them (`ssh exe.dev integrations add http-proxy --name linear-<client> --target https://api.linear.app --header Authorization:<key> --attach tag:lore`, and the same for https://uploads.linear.app), then pass --api-base https://linear-<client>.int.exe.xyz/graphql --uploads-base https://linear-uploads-<client>.int.exe.xyz",
+          )
+        } else block.token = 'env:LINEAR_API_KEY'
+      }
+      if (res.added.length) next.push(`the Linear user behind the key must be a member of ${res.added.join(', ')} (private teams are invisible otherwise); until then the sync reports the team as not found`)
+      break
+    }
     case 'gmail': {
       const lower = entries.map((e) => e.toLowerCase())
       const all = lower.includes('all')
@@ -384,6 +429,8 @@ export function scopeOf(name: string, c: Record<string, unknown>): string[] {
       return [...list(c.files), ...list(c.projects).map((p) => `project:${p}`)]
     case 'jira':
       return [...list(c.projects), ...list(c.boards).map((b) => `board:${b}`)]
+    case 'linear':
+      return list(c.teams)
     case 'gmail':
       return c.users === 'all' ? ['all mailboxes'] : list(c.users).length ? list(c.users) : ['team contacts']
     default:

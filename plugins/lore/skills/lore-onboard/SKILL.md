@@ -102,13 +102,14 @@ relay the human steps, and verify before declaring success.
 ## Widening an existing client
 
 A client already onboarded gets a new repo, channel, folder, Notion page,
-Figma file, Jira board, or mailbox with one command — no hand edit of
+Figma file, Jira board, Linear team, or mailbox with one command — no hand edit of
 lore.json:
 
 ```sh
 lore source add github inputlogic/merrin -p merrin      # or: slack "#merrin-dev" · granola "Merrin" · notion <page url>
 lore source add figma "https://www.figma.com/design/<key>/…" -p merrin
 lore source add jira board:293 --site https://input-logic.atlassian.net -p jointly
+lore source add linear MAR2 -p marble-collective           # widen; a NEW linear source also needs --api-base/--uploads-base (the client's own key proxies)
 lore source list -p merrin                               # scope, auth mode, last success / last error per source
 ```
 
