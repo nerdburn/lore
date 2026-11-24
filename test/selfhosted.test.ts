@@ -523,16 +523,16 @@ test('refresh: sshTargetFromRemote parses ssh remotes and rejects paths', () => 
   assert.equal(sshTargetFromRemote(undefined), undefined)
 })
 
-test('refresh: with a path remote the host trigger is unavailable but the pull still reports freshness', () => {
+test('refresh: with a path remote the host trigger is unavailable but the pull still reports freshness', async () => {
   seedBare('lore-fresh', { project: 'fresh' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z' }) })
   const calls: string[] = []
-  const r = refresh(tmpdir(), { context: 'lore-fresh', trigger: true }, { ssh: (t, c) => { calls.push(`${t} ${c}`); return '' } })
+  const r = await refresh(tmpdir(), { context: 'lore-fresh', trigger: true }, { ssh: (t, c) => { calls.push(`${t} ${c}`); return '' } })
   assert.equal(r.host, 'unavailable')
   assert.deepEqual(calls, [])
   assert.equal(r.after.lastSync, '2026-09-09T10:00:00Z')
 })
 
-test('refresh: with an ssh remote it checks the unit state, runs the host service unless the last sync is recent, and reports the outcome', () => {
+test('refresh: with an ssh remote it checks the unit state, runs the host service unless the last sync is recent, and reports the outcome', async () => {
   seedBare('lore-ssh', { project: 'ssh' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z' }) })
   // clone first so the cache exists, then swap the global remote to an ssh form for the trigger check
   resolveContext(tmpdir(), { context: 'lore-ssh' })
@@ -550,13 +550,13 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
       throw new Error(`unexpected ssh command: ${c}`)
     }
     const target = 'exedev@lore-host.example'
-    const recent = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:03:00Z') })
+    const recent = await refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:03:00Z') })
     assert.equal(recent.host, 'skipped-recent')
     assert.equal(recent.outcome, undefined)
     assert.deepEqual(calls, [`${target} ${STATE_CMD}`], 'idle + recent: only the state probe, no start')
 
     calls.length = 0
-    const stale = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
+    const stale = await refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
     assert.equal(stale.host, 'ran')
     assert.equal(stale.outcome, 'success')
     assert.deepEqual(calls, [`${target} ${STATE_CMD}`, `${target} ${START_CMD}`])
@@ -565,14 +565,14 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
     assert.match(UNIT_PRELUDE, /lore-sync-now\.service.*\|\| echo lore-sync\.service/, 'prefers the sync-only unit, falls back to the hourly one on an un-upgraded host')
 
     calls.length = 0
-    const forced = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, force: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
+    const forced = await refresh(tmpdir(), { context: 'lore-ssh', trigger: true, force: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
     assert.equal(forced.host, 'ran')
     assert.deepEqual(calls, [`${target} ${STATE_CMD}`, `${target} ${START_CMD}`])
 
     // A run already in flight is waited out, never re-triggered — even when recent/force would otherwise decide.
     calls.length = 0
     state = 'activating'
-    const waited = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
+    const waited = await refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T10:05:00Z') })
     assert.equal(waited.host, 'waited')
     assert.equal(waited.outcome, 'success')
     assert.match(waited.note ?? '', /already running/)
@@ -583,14 +583,14 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
     calls.length = 0
     state = 'failed'
     show = 'Result=exit-code\nExecMainStatus=1\n'
-    const failed = refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
+    const failed = await refresh(tmpdir(), { context: 'lore-ssh', trigger: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T12:00:00Z') })
     assert.equal(failed.host, 'ran')
     assert.equal(failed.outcome, 'failed')
     assert.match(failed.note ?? '', /exit-code, exit 1/)
     assert.equal(calls.length, 2)
 
     calls.length = 0
-    const noTrigger = refresh(tmpdir(), { context: 'lore-ssh', pull: false }, { ssh })
+    const noTrigger = await refresh(tmpdir(), { context: 'lore-ssh', pull: false }, { ssh })
     assert.equal(noTrigger.host, 'not-requested')
     assert.deepEqual(calls, [])
   } finally {
@@ -598,7 +598,25 @@ test('refresh: with an ssh remote it checks the unit state, runs the host servic
   }
 })
 
-test('refresh: --fold targets the timer sync+fold unit and rate-limits on the last fold, not the last sync', () => {
+test('refresh: waiting on the host does not block the process — the board and other MCP sessions share it', async () => {
+  seedBare('lore-wait', { project: 'wait' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z' }) })
+  resolveContext(tmpdir(), { context: 'lore-wait' })
+  const saved = readGlobalConfig()
+  writeGlobalConfig({ ...saved, remote: 'exedev@lore-host.example:/srv/lore/repos' })
+  try {
+    let ticks = 0
+    const timer = setInterval(() => ticks++, 10)
+    const ssh = (_t: string, c: string) => (c === STATE_CMD ? 'active\n' : new Promise<string>((done) => setTimeout(() => done('Result=success\nExecMainStatus=0\n'), 200)))
+    const r = await refresh(tmpdir(), { context: 'lore-wait', trigger: true, pull: false }, { ssh })
+    clearInterval(timer)
+    assert.equal(r.host, 'waited')
+    assert.equal(ticks >= 5, true, `other work ran ${ticks} times during the wait`)
+  } finally {
+    writeGlobalConfig(saved)
+  }
+})
+
+test('refresh: --fold targets the timer sync+fold unit and rate-limits on the last fold, not the last sync', async () => {
   seedBare('lore-fold', { project: 'fold' }, { 'state.json': JSON.stringify({ cursors: {}, lastSync: '2026-09-09T10:00:00Z', lastExtract: '2026-09-09T09:00:00Z' }) })
   resolveContext(tmpdir(), { context: 'lore-fold' })
   const saved = readGlobalConfig()
@@ -618,26 +636,26 @@ test('refresh: --fold targets the timer sync+fold unit and rate-limits on the la
     }
     // Synced 5 min ago but folded an hour ago: a plain trigger would skip; --fold runs.
     const now = () => Date.parse('2026-09-09T10:05:00Z')
-    const ran = refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now })
+    const ran = await refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now })
     assert.equal(ran.host, 'ran')
     assert.equal(ran.fold, true)
     assert.equal(ran.outcome, 'success')
     assert.deepEqual(calls, [fold.state, fold.start])
 
     calls.length = 0
-    const recent = refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T09:03:00Z') })
+    const recent = await refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now: () => Date.parse('2026-09-09T09:03:00Z') })
     assert.equal(recent.host, 'skipped-recent')
     assert.match(recent.note ?? '', /folded 3 min ago/)
     assert.deepEqual(calls, [fold.state])
 
     calls.length = 0
     state = 'activating'
-    const waited = refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now })
+    const waited = await refresh(tmpdir(), { context: 'lore-fold', trigger: true, fold: true, pull: false }, { ssh, now })
     assert.equal(waited.host, 'waited')
     assert.match(waited.note ?? '', /sync \+ fold was already running/)
     assert.deepEqual(calls, [fold.state, fold.wait])
 
-    const plain = refresh(tmpdir(), { context: 'lore-fold', pull: false }, { ssh })
+    const plain = await refresh(tmpdir(), { context: 'lore-fold', pull: false }, { ssh })
     assert.equal(plain.fold, undefined, 'fold is only reported when it was triggered')
   } finally {
     writeGlobalConfig(saved)
