@@ -53,6 +53,25 @@ export function ExternalBadge({ item }: { item: Item }) {
   )
 }
 
+/** Hours without a renewal before a claim reads as stale (matches the server's alert). */
+const CLAIM_STALE_MS = 6 * 3_600_000
+
+/** Who is working the ticket right now, and at which stage; amber when the holder has gone quiet. */
+export function ClaimBadge({ item }: { item: Item }) {
+  const c = item.claim
+  if (!c) return null
+  const stale = item.state === 'open' && Date.now() - Date.parse(c.renewed) > CLAIM_STALE_MS
+  const label = `${c.holder}${c.stage ? ` · ${c.stage}` : ''}`
+  const title = `Held by ${c.holder}${c.ref ? ` (${c.ref})` : ''} , claimed ${ago(c.since)}${stale ? ` — last heard from ${ago(c.renewed)}` : ''}`
+  return (
+    <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-md px-1.5 py-0.5 text-xs ${stale ? 'bg-warning/15 text-warning' : 'bg-accent/10 text-accent'}`} title={title}>
+      <span aria-hidden>●</span>
+      {label}
+      {stale ? ' · quiet' : ''}
+    </span>
+  )
+}
+
 export function initials(who: string): string {
   const name = who.split('@')[0]
   const parts = name.split(/[\s._-]+/).filter(Boolean)

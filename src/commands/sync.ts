@@ -8,6 +8,7 @@ import { totalRedactions } from '../scrub.js'
 import type { Connector } from '../types.js'
 import { reconcileProjects } from '../projects.js'
 import { mirrorExternal } from '../work.js'
+import { alertStaleClaims } from '../claim-alert.js'
 import { reconcileDelivery } from '../delivery.js'
 import { writeStatus } from '../status.js'
 import { importAttachments } from '../attachments.js'
@@ -135,6 +136,12 @@ export async function sync(root: string, registry: Record<string, Connector> = c
   try {
     const m = mirrorExternal(root, config)
     if (m.created || m.updated) console.log(`work: ${m.created} mirrored, ${m.updated} updated → ${m.file}`)
+    try {
+      const quiet = await alertStaleClaims(root, config)
+      if (quiet.length) console.log(`work: stale claim alert sent for ${quiet.join(', ')}`)
+    } catch (err) {
+      console.error(`✗ stale claims: ${err instanceof Error ? err.message : String(err)}`)
+    }
     // 👍/✅ approve client requests; new tickets require a request check.
     if (config.sources.slack && !config.sources.slack.disabled) {
       try {

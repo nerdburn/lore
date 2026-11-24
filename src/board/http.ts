@@ -8,7 +8,7 @@ import { gitShow } from '../bare.js'
 import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
 import { addComment, ticketThread } from '../comments.js'
 import { workAdd, workMove, workSet } from '../commands/project.js'
-import { workRank, type WorkWriteOptions } from '../commands/work.js'
+import { statusBeforeArchive, workRank, type WorkWriteOptions } from '../commands/work.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
 import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
@@ -395,13 +395,15 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         return send(res, 200, { item }), true
       }
       if (key && action === 'move' && method === 'POST') {
-        const status = str(body.status)
+        const current = bareWorkItems(opts.repos, project).items.find((i) => i.key.toUpperCase() === key.toUpperCase())
+        // "Unarchive": back to the status the ticket held before it was archived.
+        const status = body.restore === true && current?.status === 'archived' ? statusBeforeArchive(current) : str(body.status)
         const target = rankTarget(body, bareWorkItems(opts.repos, project).items, key)
         const item = await write(async () => {
           let item: LoreWorkItem | undefined
           if (status) {
             try {
-              item = await workMove(cwd, key, status, { reason: reason ?? `moved to ${status} on the board` }, w)
+              item = await workMove(cwd, key, status, { reason: reason ?? (body.restore === true ? 'unarchived on the board' : `moved to ${status} on the board`) }, w)
             } catch (err) {
               if (!target || !/is already/.test(String(err))) throw err
             }

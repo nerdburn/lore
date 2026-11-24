@@ -12,13 +12,13 @@ import { remember } from './remember.js'
 import { docAdd, docAddFolder } from './doc.js'
 import { googleFolderId } from '../gdoc.js'
 import { sowAdd } from './sow.js'
-import { workLabel, workPromote, workRank } from './work.js'
+import { ClaimHeldError, workClaim, workLabel, workPromote, workRank, workRelease } from './work.js'
 import { workAdd, workMove, workSet, projectItemAdd, projectItemMove } from './project.js'
 import { addComment } from '../comments.js'
 import { workPush } from './work-push.js'
 import { sourceAdd, sourceList } from './source.js'
 import { KNOWN_SOURCES } from '../config.js'
-import { WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
+import { describeClaim, WORK_PRIORITIES, WORK_STATUSES } from '../work.js'
 import type { WriteGateOptions } from '../write.js'
 import { queryLoad, loadQuerySchema } from '../load/query.js'
 import { readLoad, loadFreshness } from '../load/store.js'
@@ -52,6 +52,8 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_work_promote', writes: true, summary: 'turn a derived request into a ticket' },
   { name: 'lore_work_move', writes: true, summary: 'change a ticket status, with a reason' },
   { name: 'lore_work_set', writes: true, summary: 'priority, assignee, labels, title, evidence, rank' },
+  { name: 'lore_work_claim', writes: true, summary: 'take a ticket for a run (one holder at a time), or confirm and update a claim already held' },
+  { name: 'lore_work_release', writes: true, summary: 'let go of a claimed ticket, optionally moving it' },
   { name: 'lore_work_label', writes: true, summary: 'add or remove a project label on several tickets at once' },
   { name: 'lore_work_comment', writes: true, summary: 'comment on a work item (shown on the board with the linked issue\'s comments)' },
   { name: 'lore_work_push', writes: true, summary: 'write ticket state to Jira: transition linked issues, create missing ones, put in-flight or requested tickets in a sprint (explicit only)' },
@@ -93,7 +95,9 @@ export async function mcp(cwd: string, opts: McpCommandOptions): Promise<void> {
     // A plugin starts this in whatever folder the agent opened. Exiting
     // there reads as a broken connection; serve the explanation instead.
     if (!(err instanceof NoContextError)) throw err
-    server = createUnlinkedServer(cwd, err.message)
+    // The unlinked server always carries the portfolio tools.
+    await createUnlinkedServer(cwd, err.message).connect(new StdioServerTransport())
+    return
   }
   if (opts.portfolio) registerPortfolioTools(server, cwd)
   await server.connect(new StdioServerTransport())
@@ -476,6 +480,60 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     async ({ key, status, reason, sources }) => {
       const item = await workMove(rememberOpts.cwd, key, status, { reason, sources }, workVia)
       return text(`moved ${item.key} → ${item.status}: ${item.title}`)
+    },
+  )
+
+  tool(
+    'lore_work_claim',
+    {
+      description: archived
+        ? unavailable
+        : 'Take a ticket for a run before starting work on it, so two agents or two runs never work the same ticket. A ticket has one holder: if someone else holds it — or you hold it under a different ref, meaning a run already exists — the claim is refused and tells you who has it; do not start work then. Calling it again with the same holder and ref confirms the claim and updates the stage, so call it on every handoff (build → review → qa). Only pass force when a person tells you to take the ticket over.',
+      inputSchema: {
+        key: z.string().min(1).describe('e.g. CAR-3'),
+        holder: z.string().optional().describe('who holds it, e.g. "enso:athena"; defaults to you'),
+        ref: z.string().optional().describe('your own id for this run, e.g. an enso task ref'),
+        stage: z.string().optional().describe('where the run is: build, review, qa, deploy…'),
+        url: z.string().optional(),
+        status: z.enum(WORK_STATUSES as [string, ...string[]]).optional().describe('move the ticket in the same write'),
+        force: z.boolean().optional(),
+        reason: z.string().optional().describe('required with force'),
+      },
+    },
+    async ({ key, holder, ref, stage, url, status, force, reason }) => {
+      try {
+        const { item, outcome } = workClaim(rememberOpts.cwd, key, { holder, ref, stage, url, status, force, reason }, workVia)
+        return text(`${outcome} ${item.key}: ${describeClaim(item.claim)} (status ${item.status})`)
+      } catch (err) {
+        if (err instanceof ClaimHeldError) return text(`REFUSED — ${err.message}`)
+        throw err
+      }
+    },
+  )
+
+  tool(
+    'lore_work_release',
+    {
+      description: archived
+        ? unavailable
+        : 'Let go of a ticket you claimed: when the run finishes (pass status done), is cancelled, or hands the ticket back to people. Only the holder can release; force is for a person taking it away from a holder that has gone quiet.',
+      inputSchema: {
+        key: z.string().min(1),
+        holder: z.string().optional().describe('defaults to you'),
+        ref: z.string().optional(),
+        status: z.enum(WORK_STATUSES as [string, ...string[]]).optional().describe('move the ticket in the same write, e.g. done'),
+        force: z.boolean().optional(),
+        reason: reasonField,
+      },
+    },
+    async ({ key, holder, ref, status, force, reason }) => {
+      try {
+        const { item, released } = workRelease(rememberOpts.cwd, key, { holder, ref, status, force, reason }, workVia)
+        return text(released ? `released ${item.key} (status ${item.status})` : `${item.key} was not claimed (status ${item.status})`)
+      } catch (err) {
+        if (err instanceof ClaimHeldError) return text(`REFUSED — ${err.message}`)
+        throw err
+      }
     },
   )
 

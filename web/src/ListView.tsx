@@ -1,7 +1,7 @@
 import { Switch, Table, type SortDescriptor } from '@heroui/react'
 import { useMemo, useState } from 'react'
 import { WORK_ORDER, type Item } from './api'
-import { ago, ExternalBadge, Labels, PriorityChip, StatusChip } from './bits'
+import { ago, ClaimBadge, ExternalBadge, Labels, PriorityChip, StatusChip } from './bits'
 import { PersonAvatar } from './people'
 import { isMenuKey, type OpenTicketMenu } from './TicketMenu'
 
@@ -85,6 +85,7 @@ export function ListView({ items, onOpen, showClosed, onShowClosed, onMenu }: { 
                       <span className="font-medium">{i.title}</span>
                       <Labels labels={i.labels} />
                       <ExternalBadge item={i} />
+                      <ClaimBadge item={i} />
                     </div>
                   </Table.Cell>
                   <Table.Cell>

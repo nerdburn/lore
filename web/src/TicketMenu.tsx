@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type 
 import { createPortal } from 'react-dom'
 import type { Item } from './api'
 
-export type TicketAction = 'copy' | 'assign' | 'done' | 'delete'
+export type TicketAction = 'copy' | 'assign' | 'done' | 'delete' | 'restore'
 export type MenuEvent = MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>
 export type OpenTicketMenu = (item: Item, event: MenuEvent) => void
 export interface TicketMenuPosition { key: string; x: number; y: number; trigger: HTMLElement }
@@ -62,7 +62,9 @@ export function TicketMenu({ position, item, canEdit, me, busy, onClose, onActio
     ...(canEdit ? [
       { id: 'assign' as const, label: 'Assign to me', disabled: busy || item.assignee === me },
       { id: 'done' as const, label: 'Mark as done', disabled: busy || item.status === 'done' || item.status === 'archived' },
-      { id: 'delete' as const, label: 'Delete', disabled: busy || item.status === 'archived' },
+      item.status === 'archived'
+        ? { id: 'restore' as const, label: 'Unarchive', disabled: busy }
+        : { id: 'delete' as const, label: 'Delete', disabled: busy },
     ] : []),
   ]
   return createPortal(

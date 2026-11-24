@@ -46,6 +46,8 @@ export interface Item {
   labels: string[]
   request?: string
   external?: ExternalRef
+  /** The run working this ticket now. */
+  claim?: { holder: string; ref?: string; stage?: string; url?: string; since: string; renewed: string }
   related_prs?: {
     url: string
     repo: string
@@ -280,6 +282,6 @@ export const api = {
       xhr.send(file)
     })
   },
-  move: (context: string, key: string, body: { status?: Status; above?: string; below?: string; note?: string }) =>
+  move: (context: string, key: string, body: { status?: Status; restore?: boolean; above?: string; below?: string; note?: string }) =>
     call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}/move`, { body }),
 }

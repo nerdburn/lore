@@ -9,6 +9,7 @@ import { authorizeWrite } from '../write.js'
 import {
   applyChange,
   canonicalLabel,
+  describeClaim,
   findItem,
   hasLabel,
   nextKey,
@@ -23,6 +24,7 @@ import {
   writeWorkItems,
   type ExternalRef,
   type LoreWorkItem,
+  type WorkClaim,
   type RankTarget,
   type WorkItemSummary,
   type WorkPriority,
@@ -39,6 +41,8 @@ export interface WorkWriteOptions extends ResolveOptions {
 | 'mcp'
   /** Test seam. */
   at?: string
+  /** CLI: the caller prints its own (JSON) result. */
+  quiet?: boolean
 }
 
 export interface WorkAddInput {
@@ -376,6 +380,270 @@ export async function workLabel(
   if ((opts.via ?? 'cli') === 'cli') {
     for (const l of result.labeled) console.log(`${l.key.padEnd(8)} ${l.labels.join(', ') || '(no labels)'}  ${l.title}`)
     if (result.unchanged.length) console.log(`unchanged: ${result.unchanged.join(', ')}`)
+  }
+  return result
+}
+
+/** A ticket someone else is already working: the claim was refused and nothing was written. */
+export class ClaimHeldError extends Error {
+  constructor(public readonly key: string, public readonly claim: WorkClaim, wanted: string) {
+    super(`work claim: ${key} is held by ${describeClaim(claim)} since ${claim.since} — ${wanted} did not get it (release it there first, or take it over with --force and a reason)`)
+    this.name = 'ClaimHeldError'
+  }
+}
+
+export interface WorkClaimInput {
+  /** Who is claiming; defaults to the caller. */
+  holder?: string
+  /** The holder's own id for this run (an enso task ref). A holder's second run on the same ticket is refused. */
+  ref?: string
+  stage?: string
+  url?: string
+  /** Move the ticket in the same write. */
+  status?: string
+  /** Take the ticket from another holder. Needs a reason. */
+  force?: boolean
+  reason?: string
+}
+
+export type ClaimOutcome = 'claimed' | 'updated' | 'renewed' | 'taken'
+
+/**
+ * Tracker writes that must not be merged with a competing write: read the
+ * latest table, decide, write, and push. If the origin moved meanwhile the
+ * push is refused, the local commit is thrown away, and the decision is made
+ * again on the new table — so of two claims racing for a ticket, the one
+ * whose push lands second sees the first and is refused.
+ */
+function decideAndPush<T>(
+  cwd: string,
+  opts: WorkWriteOptions,
+  fn: (items: LoreWorkItem[], actor: string, at: string) => { touched: string[]; message: string; result: T },
+): T {
+  const via = opts.via ?? 'cli'
+  for (let attempt = 0; ; attempt++) {
+    const ctx = resolveContext(cwd, opts)
+    const actor = authorizeWrite(ctx, opts, 'work item change')
+    const at = opts.at ?? new Date().toISOString()
+    const prefix = workPrefix(ctx.config)
+    const items = readWorkItems(ctx.root, prefix)
+    const existing = new Set(items.flatMap((i) => i.history))
+    const { touched, message, result } = fn(items, actor, at)
+    if (touched.length === 0) return result
+    const operationId = opts.operationId ?? randomUUID()
+    for (const row of items) for (const h of row.history) {
+      if (existing.has(h)) continue
+      h.id ??= randomUUID()
+      h.operation_id ??= operationId
+    }
+    const rel = writeWorkItems(ctx.root, prefix, items)
+    for (const key of touched) appendAudit(ctx.root, { at, action: 'work', actor, via, id: key })
+    if (ctx.mode !== 'cache') return result
+    git(ctx.root, 'add', rel, AUDIT_FILE)
+    git(ctx.root, '-c', 'user.name=lore', '-c', 'user.email=lore@localhost', 'commit', '--quiet', '-m', `lore: work ${message}`)
+    try {
+      git(ctx.root, 'push', '--quiet')
+      return result
+    } catch (err) {
+      // Someone else pushed first. Drop our commit and decide again on theirs.
+      try {
+        git(ctx.root, 'fetch', '--quiet')
+        git(ctx.root, 'reset', '--hard', '--quiet', '@{u}')
+      } catch {
+        // Origin unreachable: drop our commit so the cache never shows a claim the origin does not have.
+        git(ctx.root, 'reset', '--hard', '--quiet', 'HEAD~1')
+        throw new Error(`work: could not reach ${ctx.repo} — nothing was recorded`, { cause: err })
+      }
+      if (attempt >= 3) throw new Error(`work: ${ctx.repo} kept changing — gave up after ${attempt + 1} tries, nothing was recorded`, { cause: err })
+    }
+  }
+}
+
+/**
+ * Take a ticket for a run, or confirm a claim already held. One ticket has
+ * one claim: another holder — or the same holder under a different `ref`,
+ * which is a second run of the same ticket — is refused with ClaimHeldError.
+ * The same holder and ref claiming again renews the claim and updates its
+ * stage, so a runner can call this on every stage change.
+ */
+export function workClaim(cwd: string, key: string, input: WorkClaimInput, opts: WorkWriteOptions = {}): { item: LoreWorkItem; outcome: ClaimOutcome } {
+  const status = requireStatus(input.status)
+  const reason = input.reason?.trim()
+  if (input.force && !reason) throw new Error('work claim: --force needs --reason — taking a ticket from its holder is recorded with why')
+  const res = decideAndPush(cwd, opts, (items, actor, at) => {
+    const item = requireItem(items, key)
+    const holder = input.holder?.trim() || actor
+    const held = item.claim
+    const mine = held && held.holder === holder && (!held.ref || !input.ref || held.ref === input.ref)
+    if (held && !mine && !input.force) throw new ClaimHeldError(item.key, held, describeClaim({ holder, ref: input.ref })!)
+    const toStatus = status ?? item.status
+    if (!held && toStatus !== 'todo' && toStatus !== 'in_progress' && toStatus !== 'review' && toStatus !== 'blocked') throw new Error(`work claim: ${item.key} is ${item.status} — only open tickets can be claimed`)
+    const before = describeClaim(held)
+    const claim: WorkClaim = {
+      holder,
+      ...(input.ref?.trim() || (mine && held.ref) ? { ref: input.ref?.trim() || held!.ref } : {}),
+      ...(input.stage?.trim() || (mine && held.stage) ? { stage: input.stage?.trim() || held!.stage } : {}),
+      ...(input.url?.trim() || (mine && held.url) ? { url: input.url?.trim() || held!.url } : {}),
+      since: mine ? held.since : at,
+      renewed: at,
+    }
+    item.claim = claim
+    const after = describeClaim(claim)
+    const outcome: ClaimOutcome = !held ? 'claimed' : !mine ? 'taken' : before !== after || (status && status !== item.status) ? 'updated' : 'renewed'
+    if (outcome !== 'renewed') {
+      const why = reason ?? (outcome === 'claimed' ? `claimed by ${holder}` : outcome === 'taken' ? `taken over by ${holder}` : `${holder} moved it to ${claim.stage ?? toStatus}`)
+      applyChange(item, status ? { status } : {}, { at, by: actor, via: opts.via ?? 'cli', reason: why }, before !== after ? { claim: [before, after] } : {})
+    }
+    return { touched: [item.key], message: `claim ${item.key} ${after}${outcome === 'renewed' ? ' (renewed)' : ''}`, result: { item, outcome } }
+  })
+  if ((opts.via ?? 'cli') === 'cli' && !opts.quiet) console.log(`${res.outcome} ${res.item.key}: ${describeClaim(res.item.claim)}`)
+  return res
+}
+
+export interface WorkReleaseInput {
+  holder?: string
+  /** The run letting go; a release naming a different ref than the claim's is refused. */
+  ref?: string
+  /** Move the ticket in the same write (e.g. done). */
+  status?: string
+  force?: boolean
+  reason: string
+}
+
+/** Let go of a ticket. Only its holder may, unless forced; releasing an unclaimed ticket changes nothing. */
+export function workRelease(cwd: string, key: string, input: WorkReleaseInput, opts: WorkWriteOptions = {}): { item: LoreWorkItem; released: boolean } {
+  const reason = requireReason(input, 'release')
+  const status = requireStatus(input.status)
+  const res = decideAndPush(cwd, opts, (items, actor, at) => {
+    const item = requireItem(items, key)
+    const held = item.claim
+    const holder = input.holder?.trim() || actor
+    if (held && !input.force && (held.holder !== holder || (held.ref && input.ref && held.ref !== input.ref))) {
+      throw new ClaimHeldError(item.key, held, describeClaim({ holder, ref: input.ref })!)
+    }
+    if (held) delete item.claim
+    const change = applyChange(item, status ? { status } : {}, { at, by: actor, via: opts.via ?? 'cli', reason }, held ? { claim: [describeClaim(held), null] } : {})
+    const changed = Object.keys(change).length > 0
+    return { touched: changed ? [item.key] : [], message: `release ${item.key} (${reason})`, result: { item, released: Boolean(held) } }
+  })
+  if ((opts.via ?? 'cli') === 'cli' && !opts.quiet) console.log(res.released ? `released ${res.item.key}` : `${res.item.key} was not claimed`)
+  return res
+}
+
+/** How fresh a claim must already be for `workRenew` to leave it alone, so a frequent heartbeat is not a commit every time. */
+const RENEW_MIN_MS = 15 * 60_000
+
+/** A holder's heartbeat: confirm every claim it holds in one write. Returns the tickets it holds. */
+export function workRenew(cwd: string, input: { holder?: string }, opts: WorkWriteOptions = {}): { held: string[]; renewed: string[] } {
+  const res = decideAndPush(cwd, opts, (items, actor, at) => {
+    const holder = input.holder?.trim() || actor
+    const mine = items.filter((i) => i.claim?.holder === holder)
+    const due = mine.filter((i) => Date.parse(at) - Date.parse(i.claim!.renewed) >= RENEW_MIN_MS || i.claim!.stale_notified)
+    for (const i of due) {
+      i.claim!.renewed = at
+      delete i.claim!.stale_notified
+    }
+    return { touched: due.map((i) => i.key), message: `renew ${due.length} claim${due.length === 1 ? '' : 's'} for ${holder}`, result: { held: mine.map((i) => i.key), renewed: due.map((i) => i.key) } }
+  })
+  if ((opts.via ?? 'cli') === 'cli' && !opts.quiet) console.log(`holding ${res.held.length ? res.held.join(', ') : 'nothing'}${res.renewed.length ? ` (renewed ${res.renewed.length})` : ''}`)
+  return res
+}
+
+export interface WorkArchiveFilter {
+  /** Only tickets mirrored from this tracker ("linear", "jira", "github"), or "lore" for tickets born here. */
+  origin?: string
+  status?: string
+  label?: string
+}
+
+export interface WorkArchiveResult {
+  /** Tickets that changed, with the status they left and the one they now have. */
+  changed: { key: string; title: string; from: WorkStatus; to: WorkStatus }[]
+  unchanged: string[]
+}
+
+const ORIGINS = ['lore', 'jira', 'github', 'linear']
+
+/** The tickets a bulk archive / unarchive covers: the keys given, or every ticket matching the filter. */
+function selectForArchive(items: LoreWorkItem[], keys: string[], filter: WorkArchiveFilter, verb: string): LoreWorkItem[] {
+  const wanted = [...new Set((cleanList(keys) ?? []).map((k) => k.toUpperCase()))]
+  const filtered = filter.origin !== undefined || filter.status !== undefined || filter.label !== undefined
+  if (wanted.length === 0 && !filtered) throw new Error(`work ${verb}: give ticket keys, or a filter (--origin, --status, --label)`)
+  if (filter.origin !== undefined && !ORIGINS.includes(filter.origin)) throw new Error(`work ${verb}: origin must be one of ${ORIGINS.join(', ')}`)
+  const status = requireStatus(filter.status)
+  const missing = wanted.filter((k) => !findItem(items, k))
+  if (missing.length) throw new Error(`work ${verb}: no item ${missing.join(', ')} — nothing changed`)
+  return items.filter((i) => {
+    if (wanted.length && !wanted.includes(i.key.toUpperCase())) return false
+    if (filter.origin !== undefined && (i.external?.system ?? 'lore') !== filter.origin) return false
+    if (status && i.status !== status) return false
+    if (filter.label !== undefined && !hasLabel(i.labels, filter.label)) return false
+    return true
+  })
+}
+
+/** The status a ticket held before it was archived, from its history; `todo` when history doesn't say. */
+export function statusBeforeArchive(item: Pick<LoreWorkItem, 'history'>): WorkStatus {
+  for (let n = item.history.length - 1; n >= 0; n--) {
+    const change = item.history[n].change.status
+    if (Array.isArray(change) && change[1] === 'archived' && (WORK_STATUSES as unknown[]).includes(change[0]) && change[0] !== 'archived') return change[0] as WorkStatus
+  }
+  return 'todo'
+}
+
+/**
+ * Archive several tickets in one change: the keys given, or every OPEN ticket
+ * matching the filter (a filter alone never touches done tickets unless
+ * `--status done` asks for them). One write, one commit, one history entry
+ * per ticket. Nothing is deleted — `workUnarchive` puts each one back.
+ */
+export async function workArchive(cwd: string, keys: string[], filter: WorkArchiveFilter, input: ChangeInput, opts: WorkWriteOptions & { dryRun?: boolean } = {}): Promise<WorkArchiveResult> {
+  const reason = requireReason(input, 'archive')
+  return archiveBatch(cwd, 'archive', keys, filter, opts, (item) => item.status === 'archived' || (!keys.length && filter.status === undefined && item.state !== 'open') ? undefined : 'archived', reason, input)
+}
+
+/** Put archived tickets back where they were (or at `to`): the keys given, or every archived ticket matching the filter. */
+export async function workUnarchive(cwd: string, keys: string[], filter: Omit<WorkArchiveFilter, 'status'>, input: ChangeInput & { to?: string }, opts: WorkWriteOptions & { dryRun?: boolean } = {}): Promise<WorkArchiveResult> {
+  const reason = requireReason(input, 'unarchive')
+  const to = requireStatus(input.to)
+  if (to === 'archived') throw new Error('work unarchive: --to must be a status other than archived')
+  return archiveBatch(cwd, 'unarchive', keys, filter, opts, (item) => item.status !== 'archived' ? undefined : to ?? statusBeforeArchive(item), reason, input)
+}
+
+async function archiveBatch(
+  cwd: string,
+  verb: 'archive' | 'unarchive',
+  keys: string[],
+  filter: WorkArchiveFilter,
+  opts: WorkWriteOptions & { dryRun?: boolean },
+  target: (item: LoreWorkItem) => WorkStatus | undefined,
+  reason: string,
+  input: ChangeInput,
+): Promise<WorkArchiveResult> {
+  const result: WorkArchiveResult = { changed: [], unchanged: [] }
+  const cli = (opts.via ?? 'cli') === 'cli'
+  if (opts.dryRun) {
+    const ctx = resolveContext(cwd, opts)
+    for (const item of selectForArchive(readWorkItems(ctx.root, workPrefix(ctx.config)), keys, filter, verb)) {
+      const to = target(item)
+      if (to) result.changed.push({ key: item.key, title: item.title, from: item.status, to })
+      else result.unchanged.push(item.key)
+    }
+  } else {
+    await mutateBatch(cwd, opts, 'work item change', async (items, _prefix, actor, at) => {
+      for (const item of selectForArchive(items, keys, filter, verb)) {
+        const to = target(item)
+        const from = item.status
+        if (to && Object.keys(applyChange(item, { status: to }, { at, by: actor, via: opts.via ?? 'cli', reason, sources: cleanList(input.sources) })).length) result.changed.push({ key: item.key, title: item.title, from, to })
+        else result.unchanged.push(item.key)
+      }
+      const listed = result.changed.length > 8 ? `${result.changed.length} tickets` : result.changed.map((c) => c.key).join(', ')
+      return { touched: result.changed.map((c) => ({ key: c.key })), message: `${verb} ${listed} (${reason})` }
+    })
+  }
+  if (cli) {
+    for (const c of result.changed) console.log(`${c.key.padEnd(8)} ${c.from} → ${c.to}  ${c.title}`)
+    console.log(`${opts.dryRun ? `would ${verb}` : `${verb}d`} ${result.changed.length} ticket${result.changed.length === 1 ? '' : 's'}${result.unchanged.length && keys.length ? `; unchanged: ${result.unchanged.join(', ')}` : ''}`)
   }
   return result
 }

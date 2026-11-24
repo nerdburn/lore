@@ -482,6 +482,12 @@ lore work rank CAR-3 --top --reason "report is due Friday"
 lore work list --all
 lore status                                     # what's outstanding: the fold's summary + the live open work (what lore_status returns)
 lore work label CAR-2 CAR-5 --add "stripe integration" --reason "group the Stripe work"
+lore work archive --origin linear --reason "starting fresh" --dry-run   # every open ticket mirrored from Linear; drop --dry-run to do it
+lore work unarchive CAR-2 --reason "still wanted"                    # back to the status it had before
+lore work claim CAR-2 --holder enso:athena --ref WEB-12 --stage build --status in_progress --json   # take a ticket for a run; exit 3 if someone holds it
+lore work claim CAR-2 --holder enso:athena --ref WEB-12 --stage review --status review             # same holder + ref: hand it to the next stage
+lore work renew --holder enso:athena            # heartbeat: confirm every claim this holder has
+lore work release CAR-2 --holder enso:athena --ref WEB-12 --status done --reason "deployed"
 lore work list --label "stripe integration"     # one theme's open tickets (recall --label: open and closed)
 lore work show CAR-2                            # the ticket with its full history
 ```

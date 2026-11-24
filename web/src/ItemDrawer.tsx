@@ -2,7 +2,7 @@ import { ArrowUpRightFromSquare } from '@gravity-ui/icons'
 import { Button, Drawer, Input, Label, Spinner, TextArea, TextField } from '@heroui/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, PRIORITIES, STATUS_LABEL, UNASSIGNED, WORK_ORDER, type Board, type HistoryEntry, type Item, type Priority, type Status } from './api'
-import { ago, StatusChip } from './bits'
+import { ago, ClaimBadge, StatusChip } from './bits'
 import { AssignToMe, ChoiceSelect, LabelPicker } from './fields'
 import { renderMarkdown } from './md'
 import { TicketThread } from './TicketThread'
@@ -79,6 +79,7 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                         <ArrowUpRightFromSquare className="size-3" />
                       </a>
                     )}
+                    <ClaimBadge item={item} />
                     {saving && <Spinner size="sm" />}
                   </div>
                   <Drawer.Heading className="sr-only">{item.title}</Drawer.Heading>

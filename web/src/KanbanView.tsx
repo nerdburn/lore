@@ -3,7 +3,7 @@ import { pointerIntersection } from '@dnd-kit/collision'
 import { DragDropProvider, DragOverlay, useDraggable, useDroppable } from '@dnd-kit/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BOARD_COLUMNS, STATUS_LABEL, type Item, type Status } from './api'
-import { ExternalBadge, Labels, PriorityChip } from './bits'
+import { ClaimBadge, ExternalBadge, Labels, PriorityChip } from './bits'
 import { PersonAvatar } from './people'
 import { isMenuKey, type OpenTicketMenu } from './TicketMenu'
 
@@ -12,14 +12,18 @@ type Columns = Record<Status, string[]>
 interface Props {
   items: Item[]
   canEdit: boolean
+  /** Add the Archived column; dragging a card out of it restores the ticket. */
+  showArchived?: boolean
   onMenu: OpenTicketMenu
   onOpen: (key: string) => void
   /** `order` = the target column's keys after the drop; the neighbour anchors the rank. */
   onMove: (key: string, status: Status, order: string[], neighbour: { above?: string; below?: string }) => void
 }
 
+const ALL_COLUMNS: Status[] = [...BOARD_COLUMNS, 'archived']
+
 function columnsOf(items: Item[]): Columns {
-  const cols = Object.fromEntries(BOARD_COLUMNS.map((s) => [s, [] as string[]])) as unknown as Columns
+  const cols = Object.fromEntries(ALL_COLUMNS.map((s) => [s, [] as string[]])) as unknown as Columns
   for (const i of items) if (i.status in cols) cols[i.status].push(i.key)
   return cols
 }
@@ -31,7 +35,8 @@ function columnsOf(items: Item[]): Columns {
  * columns while the pointer moved made the dragged shape drift a column to
  * the right, so a drop on Blocked landed in Done.)
  */
-export function KanbanView({ items, canEdit, onOpen, onMove, onMenu }: Props) {
+export function KanbanView({ items, canEdit, showArchived, onOpen, onMove, onMenu }: Props) {
+  const shown = showArchived ? ALL_COLUMNS : BOARD_COLUMNS
   const byKey = useMemo(() => new Map(items.map((i) => [i.key, i])), [items])
   const [columns, setColumns] = useState<Columns>(() => columnsOf(items))
   const dragging = useRef(false)
@@ -54,11 +59,11 @@ export function KanbanView({ items, canEdit, onOpen, onMove, onMenu }: Props) {
         if (event.canceled) return
         const { source, target } = event.operation
         const key = String(source?.id ?? '')
-        const from = BOARD_COLUMNS.find((s) => columns[s].includes(key))
+        const from = ALL_COLUMNS.find((s) => columns[s].includes(key))
         if (!from || !target) return
         const data = target.data as { column?: Status; card?: Status; key?: string } | undefined
         const to = data?.column ?? data?.card
-        if (!to || !BOARD_COLUMNS.includes(to) || data?.key === key) return
+        if (!to || !shown.includes(to) || data?.key === key) return
         const order = columns[to].filter((k) => k !== key)
         // On a card: in its place (that card moves down). On the column's empty space: at the end.
         let index = data?.key ? order.indexOf(data.key) : order.length
@@ -71,7 +76,7 @@ export function KanbanView({ items, canEdit, onOpen, onMove, onMenu }: Props) {
       }}
     >
       <div className="grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
-        {BOARD_COLUMNS.map((status) => (
+        {shown.map((status) => (
           <Column key={status} status={status} keys={columns[status]} byKey={byKey} canEdit={canEdit} active={active} onOpen={onOpen} onMenu={onMenu} />
         ))}
       </div>
@@ -141,6 +146,11 @@ function CardBody({ item, className = '' }: { item: Item; className?: string }) 
         <span className="flex-1" />
         {item.assignee && <PersonAvatar name={item.assignee} px={24} />}
       </div>
+      {item.claim && (
+        <div className="mt-2">
+          <ClaimBadge item={item} />
+        </div>
+      )}
       {item.labels.length > 0 && (
         <div className="mt-2">
           <Labels labels={item.labels} />
