@@ -1,5 +1,5 @@
 import { Plus } from '@gravity-ui/icons'
-import { Button, Label, ListBox, SearchField, Select, Spinner, Tabs, toast } from '@heroui/react'
+import { Button, Label, ListBox, SearchField, Select, Spinner, Switch, Tabs, toast } from '@heroui/react'
 import { useCallback, useEffect, useMemo, useRef, useState, type Key } from 'react'
 import { api, ApiError, type Board, type Item, type Status } from './api'
 import { ItemDrawer } from './ItemDrawer'
@@ -108,6 +108,8 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
     try {
       const saved = await write(undefined, () => action === 'assign'
         ? api.update(route.context, item.key, { assignee: board.me_assignee, note: 'assigned to myself from the card menu' })
+        : action === 'restore'
+        ? api.move(route.context, item.key, { restore: true, note: 'unarchived from the card menu' })
         : api.move(route.context, item.key, { status: action === 'done' ? 'done' : 'archived', note: action === 'done' ? 'marked as done from the card menu' : 'deleted from the board (archived; history retained)' }))
       if (!saved) return
       if (action === 'delete') {
@@ -187,10 +189,20 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             Clear filters
           </Button>
         )}
+        {route.view === 'kanban' && (
+          <Switch isSelected={filters.archived} onChange={(archived) => setFilters((f) => ({ ...f, archived }))} size="sm" className="ml-auto">
+            <Switch.Content className="flex items-center gap-2 text-sm">
+              <Switch.Control>
+                <Switch.Thumb />
+              </Switch.Control>
+              Show archived
+            </Switch.Content>
+          </Switch>
+        )}
       </div>
 
       {route.view === 'kanban' ? (
-        <KanbanView items={visible} canEdit={canEdit} onOpen={open} onMove={moveItem} onMenu={openMenu} />
+        <KanbanView items={visible} canEdit={canEdit} showArchived={filters.archived} onOpen={open} onMove={moveItem} onMenu={openMenu} />
       ) : (
         <ListView items={visible} onOpen={open} showClosed={filters.closed} onShowClosed={(closed) => setFilters((f) => ({ ...f, closed }))} onMenu={openMenu} />
       )}

@@ -79,6 +79,45 @@ export interface ProjectItemRef {
   last_sync: { status?: WorkStatus; title?: string; body_hash?: string }
 }
 
+/**
+ * Who is working a ticket right now. A ticket has at most one claim, and a
+ * claim never lapses on its own: a silent holder is reported as stale, and
+ * only an explicit release or forced takeover frees the ticket — an
+ * automatic timeout would let two runs work the same ticket at once.
+ */
+export interface WorkClaim {
+  /** The runner or agent holding it, e.g. "enso:athena". */
+  holder: string
+  /** The holder's own id for this run, e.g. an enso task "WEB-12". */
+  ref?: string
+  /** Where the run is in the holder's workflow: "build", "review", "qa"… */
+  stage?: string
+  url?: string
+  /** ISO 8601: when the claim was taken, and when the holder last confirmed it. */
+  since: string
+  renewed: string
+  /** ISO 8601: when a stale-claim alert went out, so it is sent once per silence. */
+  stale_notified?: string
+}
+
+/** Hours without a renewal before a claim is reported as stale. */
+export const CLAIM_STALE_HOURS = 6
+
+export function describeClaim(claim: Pick<WorkClaim, 'holder' | 'ref' | 'stage'> | undefined): string | null {
+  if (!claim) return null
+  return `${claim.holder}${claim.ref ? ` ${claim.ref}` : ''}${claim.stage ? ` @${claim.stage}` : ''}`
+}
+
+export function claimIsStale(claim: Pick<WorkClaim, 'renewed'>, now = Date.now(), hours = CLAIM_STALE_HOURS): boolean {
+  const renewed = Date.parse(claim.renewed)
+  return Number.isFinite(renewed) && now - renewed > hours * 3_600_000
+}
+
+/** Open tickets whose holder has gone quiet. */
+export function staleClaims(items: LoreWorkItem[], now = Date.now(), hours = CLAIM_STALE_HOURS): LoreWorkItem[] {
+  return items.filter((i) => i.claim && i.state === 'open' && claimIsStale(i.claim, now, hours))
+}
+
 export interface LoreWorkItem {
   key: string
   title: string
@@ -92,6 +131,8 @@ export interface LoreWorkItem {
   /** The derived request this was promoted from. */
   request?: string
   external?: ExternalRef
+  /** The run working this ticket now, if any. */
+  claim?: WorkClaim
   /** Project links are additive: legacy external issue links keep their shape. */
   project_items?: ProjectItemRef[]
   /** Delivery evidence, separate from the human/tracker-owned description. */
@@ -687,6 +728,10 @@ export function applyFoldChanges(items: LoreWorkItem[], proposals: WorkChangePro
     }
     if (p.status === 'archived' || item.status === 'archived') {
       skipped.push(`${item.key}: archiving is a human decision`)
+      continue
+    }
+    if (item.claim) {
+      skipped.push(`${item.key}: held by ${describeClaim(item.claim)} — its holder moves it`)
       continue
     }
     if (p.status !== undefined && !(WORK_STATUSES as string[]).includes(p.status)) {

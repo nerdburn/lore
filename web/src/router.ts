@@ -13,9 +13,11 @@ export interface Filters {
   assignees: string[]
   /** List view: include done and archived. */
   closed: boolean
+  /** Board view: show the Archived column. */
+  archived: boolean
 }
 
-export const NO_FILTERS: Filters = { q: '', labels: [], assignees: [], closed: false }
+export const NO_FILTERS: Filters = { q: '', labels: [], assignees: [], closed: false, archived: false }
 
 export type Route =
   | { name: 'projects' }
@@ -41,7 +43,7 @@ export function parseRoute(loc: Location = window.location): Route {
     context: m[1],
     view: q.get('view') === 'list' ? 'list' : 'kanban',
     item: q.get('item') ?? undefined,
-    filters: { q: q.get('q') ?? '', labels: q.getAll('label'), assignees: q.getAll('assignee'), closed: q.get('closed') === '1' },
+    filters: { q: q.get('q') ?? '', labels: q.getAll('label'), assignees: q.getAll('assignee'), closed: q.get('closed') === '1', archived: q.get('archived') === '1' },
   }
 }
 
@@ -59,6 +61,7 @@ export function href(route: Route): string {
   for (const l of f.labels) q.append('label', l)
   for (const a of f.assignees) q.append('assignee', a)
   if (f.closed) q.set('closed', '1')
+  if (f.archived) q.set('archived', '1')
   if (route.item) q.set('item', route.item)
   const qs = q.toString()
   return `${BASE}/p/${route.context}${qs ? `?${qs}` : ''}`

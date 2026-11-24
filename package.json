@@ -11,7 +11,8 @@
     "web/dist",
     "manifests",
     "docs/PLAYBOOK.md",
-    "docs/GITHUB_PROJECTS_SOURCE.md"
+    "docs/GITHUB_PROJECTS_SOURCE.md",
+    "integrations"
   ],
   "scripts": {
     "build": "tsc",

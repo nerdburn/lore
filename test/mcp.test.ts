@@ -46,11 +46,13 @@ test('mcp: exposes the registered tools including read-only Load', async () => {
     'lore_status',
     'lore_sync_now',
     'lore_work_add',
+    'lore_work_claim',
     'lore_work_comment',
     'lore_work_label',
     'lore_work_move',
     'lore_work_promote',
     'lore_work_push',
+    'lore_work_release',
     'lore_work_set',
   ])
   // The static table behind `lore mcp --list-tools` is what provisioning

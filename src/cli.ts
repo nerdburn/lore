@@ -25,7 +25,7 @@ import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
 import { workAdd, workMove, workSet, projectItemAdd, projectItemMove, projectSync } from './commands/project.js'
 import { docAdd, docAddFolder, docList } from './commands/doc.js'
-import { workLabel, workList, workPromote, workRank, workShow } from './commands/work.js'
+import { workLabel, workArchive, workUnarchive, workClaim, workRelease, workRenew, ClaimHeldError, workList, workPromote, workRank, workShow } from './commands/work.js'
 import { resolveContext } from './context.js'
 import { statusView } from './status.js'
 import { printPush, workPush } from './commands/work-push.js'
@@ -439,6 +439,93 @@ contextual(
     .option('--by <who>', 'who is labeling'),
 ).action(async (keys: string[], o) => {
   await workLabel(root, keys, { add: splitList(o.add), remove: splitList(o.remove) }, { reason: o.reason }, o)
+})
+contextual(
+  work
+    .command('claim')
+    .description('take a ticket for a run, or confirm a claim already held; a ticket has one holder, so a second claim exits 3 and writes nothing')
+    .argument('<key>', 'e.g. CAR-3')
+    .option('--holder <who>', 'who holds it, e.g. enso:athena (default: you)')
+    .option('--ref <id>', "the holder's own id for this run, e.g. an enso task ref")
+    .option('--stage <name>', 'where the run is: build, review, qa…')
+    .option('--url <url>', 'a link to the run')
+    .option('--status <s>', 'move the ticket in the same write')
+    .option('--force', 'take it from its current holder (needs --reason)')
+    .option('--reason <why>', 'why — recorded in history')
+    .option('--json', 'machine-readable result')
+    .option('--by <who>', 'who is doing this'),
+).action((key: string, o) => {
+  try {
+    const { item, outcome } = workClaim(root, key, o, { ...o, quiet: o.json })
+    if (o.json) console.log(JSON.stringify({ ok: true, outcome, key: item.key, status: item.status, claim: item.claim }))
+  } catch (err) {
+    if (!(err instanceof ClaimHeldError)) throw err
+    if (o.json) console.log(JSON.stringify({ ok: false, key: err.key, held_by: err.claim }))
+    else console.error(err.message)
+    process.exitCode = 3
+  }
+})
+contextual(
+  work
+    .command('release')
+    .description('let go of a claimed ticket (only its holder, unless --force); releasing an unclaimed ticket changes nothing')
+    .argument('<key>', 'e.g. CAR-3')
+    .option('--holder <who>', 'default: you')
+    .option('--ref <id>', 'the run letting go')
+    .option('--status <s>', 'move the ticket in the same write, e.g. done')
+    .option('--force', 'release a claim someone else holds')
+    .requiredOption('--reason <why>', 'why — recorded in history')
+    .option('--json', 'machine-readable result')
+    .option('--by <who>', 'who is doing this'),
+).action((key: string, o) => {
+  try {
+    const { item, released } = workRelease(root, key, o, { ...o, quiet: o.json })
+    if (o.json) console.log(JSON.stringify({ ok: true, released, key: item.key, status: item.status }))
+  } catch (err) {
+    if (!(err instanceof ClaimHeldError)) throw err
+    if (o.json) console.log(JSON.stringify({ ok: false, key: err.key, held_by: err.claim }))
+    else console.error(err.message)
+    process.exitCode = 3
+  }
+})
+contextual(
+  work
+    .command('renew')
+    .description("a holder's heartbeat: confirm every claim it holds in one write, and list them")
+    .option('--holder <who>', 'default: you')
+    .option('--json', 'machine-readable result')
+    .option('--by <who>', 'who is doing this'),
+).action((o) => {
+  const r = workRenew(root, o, { ...o, quiet: o.json })
+  if (o.json) console.log(JSON.stringify(r))
+})
+contextual(
+  work
+    .command('archive')
+    .description('archive several tickets at once: the keys given, or every open ticket matching a filter; nothing is deleted and `work unarchive` puts them back')
+    .argument('[keys...]', 'ticket keys, e.g. CAR-3 CAR-7 (omit to use a filter)')
+    .option('--origin <system>', 'only tickets mirrored from linear | jira | github, or "lore" for tickets created here')
+    .option('--status <s>', 'only tickets in this status (without it, a filter covers open tickets only)')
+    .option('--label <label>', 'only tickets carrying this label')
+    .option('--dry-run', 'list what would be archived without writing')
+    .requiredOption('--reason <why>', 'why — recorded in history')
+    .option('--by <who>', 'who is archiving'),
+).action(async (keys: string[], o) => {
+  await workArchive(root, keys, { origin: o.origin, status: o.status, label: o.label }, { reason: o.reason }, o)
+})
+contextual(
+  work
+    .command('unarchive')
+    .description('put archived tickets back in the status they had before (or --to): the keys given, or every archived ticket matching a filter')
+    .argument('[keys...]', 'ticket keys (omit to use a filter)')
+    .option('--origin <system>', 'only tickets mirrored from linear | jira | github, or "lore" for tickets created here')
+    .option('--label <label>', 'only tickets carrying this label')
+    .option('--to <status>', 'put them all in this status instead')
+    .option('--dry-run', 'list what would be restored without writing')
+    .requiredOption('--reason <why>', 'why — recorded in history')
+    .option('--by <who>', 'who is restoring'),
+).action(async (keys: string[], o) => {
+  await workUnarchive(root, keys, { origin: o.origin, label: o.label }, { reason: o.reason, to: o.to }, o)
 })
 contextual(
   work.command('list').description('open items in rank order').option('--all', 'include done and archived').option('--label <label>', 'only items carrying this label').option('--json', 'machine-readable output'),
