@@ -468,6 +468,7 @@ export function parseRequests(text: string): DerivedRequest[] {
   if (!Array.isArray(parsed)) return []
   return parsed
     .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object' && typeof (r as Record<string, unknown>).id === 'string')
+    .filter((r) => r.status !== 'deleted')
     .map((r) => ({
       id: String(r.id),
       request: String(r.request ?? r.id).replace(/\s+/g, ' ').trim(),

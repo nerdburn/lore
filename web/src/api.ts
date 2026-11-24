@@ -265,6 +265,8 @@ export const api = {
   revokeConnection: (id: string) => call<{ ok: true }>(`/oauth/connections/${enc(id)}/revoke`, { body: {} }),
   board: (context: string) => call<Board>(`/p/${enc(context)}`),
   requests: (context: string) => call<{ requests: ClientRequest[]; role: Role; archived: boolean }>(`/p/${enc(context)}/requests`),
+  requestsBulk: (context: string, ids: string[], action: 'ticket' | 'archive' | 'delete' | 'restore') =>
+    call<{ tickets: string[]; changed: string[]; skipped: string[]; requests: ClientRequest[] }>(`/p/${enc(context)}/requests-bulk`, { body: { ids, action } }),
   promote: (context: string, id: string) => call<{ item: Item; request?: ClientRequest }>(`/p/${enc(context)}/requests/${enc(id)}/promote`, { body: {} }),
   item: (context: string, key: string) => call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`),
   add: (context: string, fields: Partial<Pick<Item, 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'labels'>>) =>

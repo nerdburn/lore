@@ -10,6 +10,7 @@ import { parse, stringify } from 'yaml'
 import { loadConfig } from '../config.js'
 import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
+import { isHumanClosed, reidAroundClosed } from '../requests.js'
 import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, describeWorkHistory, readExternalIssues, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
 import { loadState, updateState } from '../state.js'
 import { fallbackApiKey, withCliFallback } from '../llm-fallback.js'
@@ -285,14 +286,16 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     for (let i = 0; i < batches.length; i++) {
       const workNote = `\n\n# Tracked work (lore tracker ${prefix}: key | rank | status | priority | assignee | title | external tracker state)\n${workItems.length ? describeWorkForPrompt(workItems, today) : '(no tickets yet)'}`
       const user = `Today is ${today}.${clientNote}${commitments}${workNote}${groupNote}\n\n# Current artifacts\n${Object.entries(artifacts)
-        .map(([name, items]) => `## ${name}\n${stringify(items)}`)
+        // Requests a person archived or deleted are theirs: the fold neither sees nor reopens them.
+        .map(([name, items]) => `## ${name}\n${stringify(name === 'requests' ? items.filter((i) => !isHumanClosed(i)) : items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
       const result = await withRetry(() => onBackend(() => cliFold(model, user), () => sdkFold(model, user)), 2, (attempt, err) =>
         console.warn(`  ⚠ batch ${i + 1} attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`),
       )
       const changes: string[] = []
       for (const name of wantArtifacts) {
-        const merged = acceptFold(name, artifacts[name], (result as unknown as Record<string, unknown[]>)[name])
+        const proposed = (result as unknown as Record<string, unknown[]>)[name]
+        const merged = acceptFold(name, artifacts[name], name === 'requests' ? reidAroundClosed(artifacts[name], proposed) : proposed)
         if (merged.rejected) console.warn(`  ⚠ ${name}: model ${merged.rejected}`)
         if (merged.added || merged.updated) changes.push(`${name} +${merged.added}/~${merged.updated}`)
         for (const item of (result as unknown as Record<string, unknown[]>)[name] ?? []) foldChanges.push(`${name}: ${JSON.stringify(item)}`)
@@ -806,7 +809,7 @@ function readYamlList(root: string, rel: string): unknown[] {
 export function reportArtifacts(name: string, items: unknown[], weekAgo: string): unknown[] {
   const monthAgo = new Date(Date.parse(weekAgo) - 23 * 86_400_000).toISOString().slice(0, 10)
   const field = (item: unknown, key: string) => String((item as Record<string, unknown> | null)?.[key] ?? '')
-  if (name === 'requests') return items.filter((i) => !['done', 'stale'].includes(field(i, 'status')) || field(i, 'date') >= weekAgo)
+  if (name === 'requests') return items.filter((i) => !isHumanClosed(i) && (!['done', 'stale'].includes(field(i, 'status')) || field(i, 'date') >= weekAgo))
   if (name === 'decisions') return items.filter((i) => field(i, 'date') >= monthAgo)
   return items
 }

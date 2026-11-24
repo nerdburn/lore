@@ -290,6 +290,52 @@ export function workPromote(cwd: string, requestId: string, input: { title?: str
   })
 }
 
+/**
+ * Turn several derived requests into tickets in one write. Requests already
+ * tracked are skipped, not errors, so a selection that includes some is fine.
+ */
+export async function workPromoteMany(cwd: string, requestIds: string[], input: { reason?: string } = {}, opts: WorkWriteOptions = {}): Promise<{ created: LoreWorkItem[]; skipped: string[] }> {
+  const wanted = [...new Set(requestIds.map((i) => i.trim()).filter(Boolean))]
+  if (wanted.length === 0) throw new Error('work promote: give at least one request id')
+  const created: LoreWorkItem[] = []
+  const skipped: string[] = []
+  await mutateBatch(cwd, opts, 'work item change', async (items, prefix, actor, at, ctx) => {
+    const path = join(ctx.root, 'context/derived/requests.yaml')
+    const requests = existsSync(path) ? ((parse(readFileSync(path, 'utf8')) as Record<string, unknown>[] | null) ?? []) : []
+    const missing = wanted.filter((id) => !requests.some((r) => r.id === id))
+    if (missing.length) throw new Error(`work promote: no derived request ${missing.join(', ')} — nothing changed`)
+    for (const id of wanted) {
+      const req = requests.find((r) => r.id === id)!
+      const already = items.find((i) => i.request === id)
+      if (already) {
+        skipped.push(`${id} is already ${already.key}`)
+        continue
+      }
+      const source = typeof req.source === 'string' ? req.source : undefined
+      const asked = String(req.request ?? id).replace(/\s+/g, ' ').trim()
+      const title = shortTitle(asked)
+      const description = title === asked ? undefined : `${asked}${req.requested_by ? `\n\nAsked by ${req.requested_by}${req.date ? ` on ${String(req.date).slice(0, 10)}` : ''}.` : ''}`
+      const item: LoreWorkItem = {
+        key: nextKey(items, prefix),
+        title,
+        ...(description ? { description } : {}),
+        status: 'todo',
+        state: 'open',
+        labels: [],
+        request: id,
+        sources: source ? [source] : [],
+        created: at.slice(0, 10),
+        updated: at.slice(0, 10),
+        history: [{ id: randomUUID(), at, by: actor, via: opts.via ?? 'cli', change: { created: true }, reason: input.reason?.trim() || `promoted from ${id}${req.requested_by ? ` (asked by ${req.requested_by}${req.date ? `, ${req.date}` : ''})` : ''}`, ...(source ? { sources: [source] } : {}) }],
+      }
+      items.push(item)
+      created.push(item)
+    }
+    return { touched: created.map((i) => ({ key: i.key })), message: `promote ${created.length > 8 ? `${created.length} requests` : created.map((i) => `${i.request} → ${i.key}`).join(', ')}` }
+  })
+  return { created, skipped }
+}
+
 export function workMove(cwd: string, key: string, status: string, input: ChangeInput, opts: WorkWriteOptions = {}): LoreWorkItem {
   const to = requireStatus(status)!
   const reason = requireReason(input, 'move')

@@ -8,7 +8,8 @@ import { gitShow } from '../bare.js'
 import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
 import { addComment, ticketThread } from '../comments.js'
 import { workAdd, workMove, workSet } from '../commands/project.js'
-import { statusBeforeArchive, workPromote, workRank, type WorkWriteOptions } from '../commands/work.js'
+import { statusBeforeArchive, workPromote, workPromoteMany, workRank, type WorkWriteOptions } from '../commands/work.js'
+import { requestsSet, REQUESTS_FILE } from '../requests.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, parseRequests, requestRows, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
 import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
@@ -293,6 +294,33 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           return send(res, 201, { item, request: rows().find((r) => r.id === id) }), true
         }
         return send(res, 404, { error: 'not found' }), true
+      }
+      // Several requests at once: make tickets, archive, delete, or put back.
+      const bulkRoute = /^\/p\/([\w.-]+)\/requests-bulk$/.exec(route)
+      if (bulkRoute && method === 'POST') {
+        const context = bulkRoute[1]
+        const project = bareProject(opts.repos, context)
+        const role = project ? boardRole(project.config, email, admins) : undefined
+        if (!project || !role) return send(res, 404, { error: 'no such board' }), true
+        if (role !== 'member') return send(res, 403, { error: 'you can view this board but not change it' }), true
+        const body = await readBody(req)
+        const ids = strList(body.ids) ?? []
+        const action = str(body.action)
+        if (ids.length === 0 || ids.length > 500) return send(res, 400, { error: 'select between 1 and 500 requests' }), true
+        const w: WorkWriteOptions = { context, via: 'web', actor: email, operationId: randomUUID() }
+        const done = await serializeFor(context)(async () => {
+          if (action === 'ticket') {
+            const r = await workPromoteMany(cwd, ids, { reason: 'made a ticket from the requests list' }, w)
+            return { tickets: r.created.map((i) => i.key), changed: r.created.map((i) => i.request!), skipped: r.skipped }
+          }
+          if (action === 'archive' || action === 'delete' || action === 'restore') {
+            const r = requestsSet(cwd, ids, action, w)
+            return { tickets: [], changed: r.changed, skipped: r.unchanged }
+          }
+          throw new Error('action must be ticket, archive, delete or restore')
+        })
+        const bare = join(opts.repos, `${context}.git`)
+        return send(res, 200, { ...done, requests: requestRows(parseRequests(gitShow(bare, REQUESTS_FILE, true)), bareWorkItems(opts.repos, project).items) }), true
       }
 
       const fileRoute = /^\/p\/([\w.-]+)\/files\/([a-f0-9]{64})$/.exec(route)

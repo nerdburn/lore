@@ -92,7 +92,9 @@ export function recallData(
       if (!/\.ya?ml$/.test(entry)) continue
       const name = entry.replace(/\.ya?ml$/, '')
       if (category && name !== category) continue
-      derived[name] = parse(readFileSync(join(derivedDir, entry), 'utf8'))
+      const value = parse(readFileSync(join(derivedDir, entry), 'utf8')) as unknown
+      // A request a person deleted is gone for every reader; only its record remains.
+      derived[name] = name === 'requests' && Array.isArray(value) ? value.filter((r) => (r as { status?: unknown } | null)?.status !== 'deleted') : value
     }
   }
 

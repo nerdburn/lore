@@ -612,3 +612,39 @@ test('board requests: lists what the client asked for with its ticket, and a mem
   assert.match(twice.body.error, /already tracked as REQ-3/)
   assert.equal((await api('/p/lore-reqs/requests/req-9999/promote', { cookie: member, body: {} })).status, 400)
 })
+
+test('board requests: several at once — make tickets, archive, delete, and put back', async () => {
+  const req = (n: number, text: string, status = 'open') => `- id: req-000${n}\n  request: ${text}\n  date: 2026-09-0${n}\n  status: ${status}\n`
+  pushContext(
+    'lore-bulk',
+    { project: 'bulk', client: { name: 'Bulk', domains: ['acme.com'] }, sources: {}, board: { enabled: true, members: ['jane@acme.com'], viewers: ['@viewers.io'] } },
+    { 'context/derived/requests.yaml': `# Derived\n${req(1, 'Export members to CSV')}${req(2, 'Dark mode')}${req(3, 'Weekly digest email')}${req(4, 'Referral codes')}${req(5, 'Old idea', 'stale')}` },
+  )
+  const member = await signIn('jane@acme.com')
+  const viewer = await signIn('sam@viewers.io')
+  const bulk = (cookie: string, ids: string[], action: string) => api('/p/lore-bulk/requests-bulk', { cookie, body: { ids, action } })
+  const state = (rows: any[]) => Object.fromEntries(rows.map((r) => [r.id, r.ticket ?? r.status]))
+
+  assert.equal((await bulk(viewer, ['req-0001'], 'archive')).status, 403)
+  assert.equal((await bulk(member, [], 'archive')).status, 400)
+  assert.equal((await bulk(member, ['req-0001'], 'explode')).status, 400)
+  assert.equal((await bulk(member, ['req-0001', 'req-0099'], 'archive')).status, 400, 'an unknown id changes nothing')
+
+  const tickets = await bulk(member, ['req-0001', 'req-0002'], 'ticket')
+  assert.equal(tickets.status, 200, JSON.stringify(tickets.body))
+  assert.deepEqual(tickets.body.tickets, ['BUL-1', 'BUL-2'])
+  const again = await bulk(member, ['req-0002', 'req-0003'], 'ticket')
+  assert.deepEqual([again.body.tickets, again.body.skipped], [['BUL-3'], ['req-0002 is already BUL-2']])
+
+  const archived = await bulk(member, ['req-0004', 'req-0005'], 'archive')
+  assert.deepEqual(archived.body.changed, ['req-0004', 'req-0005'])
+  assert.deepEqual(state(archived.body.requests), { 'req-0001': 'BUL-1', 'req-0002': 'BUL-2', 'req-0003': 'BUL-3', 'req-0004': 'archived', 'req-0005': 'archived' })
+
+  const deleted = await bulk(member, ['req-0005'], 'delete')
+  assert.deepEqual(Object.keys(state(deleted.body.requests)), ['req-0001', 'req-0002', 'req-0003', 'req-0004'], 'a deleted request leaves every list')
+  assert.match(git(join(bares, 'lore-bulk.git'), 'show', 'HEAD:context/derived/requests.yaml'), /id: req-0005\n {2}request: Old idea\n {2}date: 2026-09-05\n {2}status: deleted/, 'its record stays, so the id is never reused')
+
+  const back = await bulk(member, ['req-0004', 'req-0005', 'req-0001'], 'restore')
+  assert.deepEqual([back.body.changed, back.body.skipped], [['req-0004', 'req-0005'], ['req-0001']])
+  assert.equal(state(back.body.requests)['req-0005'], 'open')
+})
