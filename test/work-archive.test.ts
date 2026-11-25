@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { workAdd, workArchive, workList, workMove, workUnarchive } from '../src/commands/work.js'
-import { canonicalLabel } from '../src/work.js'
+import { applyFoldCreations, canonicalLabel, type LoreWorkItem } from '../src/work.js'
 import { captureConsole, makeContextRepo } from './helpers.js'
 
 async function fixture() {
@@ -59,4 +59,17 @@ test('labels: live tickets set the spelling of a label; an archived spelling onl
   assert.equal(canonicalLabel(items, 'ADMIN  panel'), 'admin panel')
   assert.equal(canonicalLabel(items, 'legacy only'), 'Legacy Only')
   assert.equal(canonicalLabel(items, ' brand  new '), 'brand new')
+})
+
+test('fold: a ticket it creates may reuse the labels live tickets carry, in their spelling, and never coins one', () => {
+  const base = { title: 'x', state: 'open' as const, sources: [], created: '', updated: '', history: [] }
+  const items: LoreWorkItem[] = [
+    { ...base, key: 'ACM-1', title: 'Welcome email', status: 'todo', labels: ['onboarding', 'email'] },
+    { ...base, key: 'ACM-2', title: 'Old import', status: 'archived', state: 'closed', labels: ['Legacy Theme'] },
+  ]
+  const r = applyFoldCreations(items, 'ACM', [
+    { title: 'Add a skip button to the profile step', labels: ['Onboarding', 'signup flow', 'Legacy Theme', 'onboarding'], reason: 'agreed on the call', sources: ['s'], confidence: 'high', evidence_date: '2026-09-21' },
+  ], '2026-09-21T10:00:00.000Z')
+  assert.equal(r.created.length, 1)
+  assert.deepEqual(items[2].labels, ['onboarding'])
 })
