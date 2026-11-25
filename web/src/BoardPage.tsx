@@ -87,6 +87,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   )
 
   const visible = useMemo(() => (board ? applyFilters(board.items, filters) : []), [board, filters])
+  const archivedCount = useMemo(() => visible.filter((i) => i.status === 'archived').length, [visible])
   // Offer only labels on tickets this view can show: archived tickets keep their labels,
   // but a label that lives only on them is noise until archived tickets are shown.
   const labelOptions = useMemo(() => {
@@ -219,7 +220,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
               <Switch.Control>
                 <Switch.Thumb />
               </Switch.Control>
-              Show archived
+              Show archived{archivedCount ? ` (${archivedCount})` : ''}
             </Switch.Content>
           </Switch>
         )}
