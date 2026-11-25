@@ -38,6 +38,14 @@ function columnsOf(items: Item[]): Columns {
  */
 export function KanbanView({ items, canEdit, showArchived, onOpen, onMove, onMenu }: Props) {
   const shown = showArchived ? ALL_COLUMNS : BOARD_COLUMNS
+  // The Archived column is added at the far right, past the edge of most
+  // screens: bring it into view when it is switched on, or nothing seems to happen.
+  const scroller = useRef<HTMLDivElement>(null)
+  const wasShown = useRef(showArchived)
+  useEffect(() => {
+    if (showArchived && !wasShown.current) scroller.current?.scrollTo({ left: scroller.current.scrollWidth, behavior: 'smooth' })
+    wasShown.current = showArchived
+  }, [showArchived])
   const byKey = useMemo(() => new Map(items.map((i) => [i.key, i])), [items])
   const [columns, setColumns] = useState<Columns>(() => columnsOf(items))
   const dragging = useRef(false)
@@ -77,7 +85,7 @@ export function KanbanView({ items, canEdit, showArchived, onOpen, onMove, onMen
         if (to === 'done' && from !== 'done' && from !== 'archived') void saving.then((saved) => saved && celebrateTicket(key))
       }}
     >
-      <div className="grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
+      <div ref={scroller} className="grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
         {shown.map((status) => (
           <Column key={status} status={status} keys={columns[status]} byKey={byKey} canEdit={canEdit} active={active} onOpen={onOpen} onMenu={onMenu} />
         ))}
