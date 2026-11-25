@@ -3,6 +3,7 @@ import { Button, Drawer, Input, Label, Spinner, TextArea, TextField } from '@her
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, PRIORITIES, STATUS_LABEL, UNASSIGNED, WORK_ORDER, type Board, type HistoryEntry, type Item, type Priority, type Status } from './api'
 import { ago, ClaimBadge, StatusChip } from './bits'
+import { celebrate } from './celebrate'
 import { AssignToMe, ChoiceSelect, LabelPicker } from './fields'
 import { renderMarkdown } from './md'
 import { TicketThread } from './TicketThread'
@@ -47,16 +48,26 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
     try {
       await send()
       await Promise.all([refresh(), onChanged()])
+      return true
     } catch (err) {
       onError(err)
       await refresh()
+      return false
     } finally {
       setSaving(false)
     }
   }
 
-  const update = (fields: Parameters<typeof api.update>[2]) => save(() => api.update(context, item!.key, fields))
-  const moveTo = (status: Status) => status !== item?.status && save(() => api.move(context, item!.key, { status }))
+  const update = async (fields: Parameters<typeof api.update>[2]) => { await save(() => api.update(context, item!.key, fields)) }
+  const statusField = useRef<HTMLDivElement>(null)
+  const shownKey = useRef(itemKey)
+  shownKey.current = itemKey
+  const moveTo = async (status: Status) => {
+    if (!item || status === item.status) return
+    const { key, state } = item
+    const saved = await save(() => api.move(context, key, { status }))
+    if (saved && status === 'done' && state === 'open' && shownKey.current === key) celebrate(statusField.current)
+  }
 
   return (
     <Drawer>
@@ -93,7 +104,9 @@ export function ItemDrawer({ context, itemKey, board, canEdit, onClose, onChange
                   <div className="grid grid-cols-2 gap-3">
                     {canEdit ? (
                       <>
-                        <ChoiceSelect label="Status" value={item.status} options={WORK_ORDER} render={(s) => STATUS_LABEL[s]} onChange={(s) => void moveTo(s)} isDisabled={saving} />
+                        <div ref={statusField} className="rounded-xl">
+                          <ChoiceSelect label="Status" value={item.status} options={WORK_ORDER} render={(s) => STATUS_LABEL[s]} onChange={(s) => void moveTo(s)} isDisabled={saving} />
+                        </div>
                         <ChoiceSelect label="Priority" value={item.priority} options={PRIORITIES} render={(p) => p} onChange={(p: Priority) => void update({ priority: p })} isDisabled={saving} />
                         <div className="flex items-end gap-2">
                           <ChoiceSelect
