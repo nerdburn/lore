@@ -164,3 +164,23 @@ test('work claim: of two machines racing for a ticket through the same origin, t
     else process.env.LORE_HOME = prevHome
   }
 })
+
+test('claims: one made by hand is let go when its holder hands the ticket on, and is never reported as quiet', async () => {
+  const { root } = await fixture()
+  const as = (by: string, at: string) => ({ context: root, at, by })
+  await captureConsole(async () => {
+    workClaim(root, 'ACM-1', { stage: 'build', status: 'in_progress' }, as('jeff', '2026-09-21T09:00:00.000Z'))
+    workClaim(root, 'ACM-2', { holder: 'enso:athena', ref: 'WEB-2', stage: 'build' }, as('runner', '2026-09-21T09:00:00.000Z'))
+    assert.equal(item(root, 'ACM-1').claim!.holder, 'jeff')
+
+    const sent: MailMessage[] = []
+    const config = { ...ACME, client: { ...ACME.client!, owner: 'lead@agency.test' } }
+    assert.deepEqual(await alertStaleClaims(root, config, { send: async (m) => void sent.push(m), now: Date.parse('2026-09-22T09:00:00.000Z') }), ['ACM-2'], 'only the run is expected to check in')
+
+    await workMove(root, 'ACM-2', 'review', { reason: 'a person moved it' }, as('jeff', '2026-09-22T10:00:00.000Z'))
+    assert.equal(item(root, 'ACM-2').claim!.ref, 'WEB-2', "a run's claim is its runner's to release")
+    await workMove(root, 'ACM-1', 'review', { reason: 'PR is up' }, as('jeff', '2026-09-22T10:01:00.000Z'))
+    assert.equal(item(root, 'ACM-1').claim, undefined)
+    assert.deepEqual(item(root, 'ACM-1').history.at(-1)!.change, { claim: ['jeff @build', null], status: ['in_progress', 'review'] })
+  })
+})

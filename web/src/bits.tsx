@@ -60,7 +60,8 @@ const CLAIM_STALE_MS = 6 * 3_600_000
 export function ClaimBadge({ item }: { item: Item }) {
   const c = item.claim
   if (!c) return null
-  const stale = item.state === 'open' && Date.now() - Date.parse(c.renewed) > CLAIM_STALE_MS
+  // Only a run is expected to keep confirming its claim; a person's claim is never "quiet".
+  const stale = Boolean(c.ref) && item.state === 'open' && Date.now() - Date.parse(c.renewed) > CLAIM_STALE_MS
   const label = `${c.holder}${c.stage ? ` · ${c.stage}` : ''}`
   const title = `Held by ${c.holder}${c.ref ? ` (${c.ref})` : ''} , claimed ${ago(c.since)}${stale ? ` — last heard from ${ago(c.renewed)}` : ''}`
   return (
