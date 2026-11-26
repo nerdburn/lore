@@ -342,8 +342,14 @@ export function workMove(cwd: string, key: string, status: string, input: Change
   return mutate(cwd, opts, (items, _prefix, actor, at) => {
     const item = requireItem(items, key)
     const from = item.status
-    const change = applyChange(item, { status: to }, { at, by: actor, via: opts.via ?? 'cli', reason, sources: cleanList(input.sources) })
-    if (Object.keys(change).length === 0) throw new Error(`work move: ${item.key} is already ${to}`)
+    // Someone who claimed a ticket by hand (no run behind the claim) and then hands it
+    // on — to review, done or the archive — has stopped working it: let the claim go with
+    // the move. A run's claim is its runner's to release.
+    const held = item.claim
+    const letGo = held && !held.ref && held.holder === actor && (to === 'review' || to === 'done' || to === 'archived')
+    if (letGo) delete item.claim
+    const change = applyChange(item, { status: to }, { at, by: actor, via: opts.via ?? 'cli', reason, sources: cleanList(input.sources) }, letGo && to !== from ? { claim: [describeClaim(held), null] } : {})
+    if (!('status' in change)) throw new Error(`work move: ${item.key} is already ${to}`)
     return { item, message: `move ${item.key} ${from} → ${to} (${reason})`, source: input.sources?.[0] }
   })
 }

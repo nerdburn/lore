@@ -505,7 +505,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? unavailable
-        : 'Take a ticket for a run before starting work on it, so two agents or two runs never work the same ticket. A ticket has one holder: if someone else holds it — or you hold it under a different ref, meaning a run already exists — the claim is refused and tells you who has it; do not start work then. Calling it again with the same holder and ref confirms the claim and updates the stage, so call it on every handoff (build → review → qa). Only pass force when a person tells you to take the ticket over.',
+        : 'For unattended runs: take a ticket before a run starts work on it, so two agents or two runs never work the same ticket. Do not claim in an ordinary conversation with a person — move the ticket to in_progress and set its assignee instead. A ticket has one holder: if someone else holds it — or you hold it under a different ref, meaning a run already exists — the claim is refused and tells you who has it; do not start work then. Calling it again with the same holder and ref confirms the claim and updates the stage, so call it on every handoff (build → review → qa). Only pass force when a person tells you to take the ticket over.',
       inputSchema: {
         key: z.string().min(1).describe('e.g. CAR-3'),
         holder: z.string().optional().describe('who holds it, e.g. "enso:athena"; defaults to you'),

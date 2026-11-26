@@ -113,9 +113,14 @@ export function claimIsStale(claim: Pick<WorkClaim, 'renewed'>, now = Date.now()
   return Number.isFinite(renewed) && now - renewed > hours * 3_600_000
 }
 
-/** Open tickets whose holder has gone quiet. */
+/**
+ * Open tickets whose run has gone quiet. Only a claim that names a run
+ * (`ref`) is expected to keep confirming itself: a runner heartbeats, a
+ * person or a chat session that claimed a ticket does not, and their silence
+ * says nothing.
+ */
 export function staleClaims(items: LoreWorkItem[], now = Date.now(), hours = CLAIM_STALE_HOURS): LoreWorkItem[] {
-  return items.filter((i) => i.claim && i.state === 'open' && claimIsStale(i.claim, now, hours))
+  return items.filter((i) => i.claim?.ref && i.state === 'open' && claimIsStale(i.claim, now, hours))
 }
 
 export interface LoreWorkItem {
