@@ -19,7 +19,8 @@ const work = parseWorkItems(`
 test('Jev scores direct fit independently of the queue, and only against active goals', async () => {
   let sent: any
   const result = await triageRequest('Show alternate payment methods', goals, work, { apiKey: 'fixture', fetch: async (_, opts) => {
-    sent = JSON.parse(String(opts?.body))
+    const call = JSON.parse(String(opts?.body))
+    if (call.state.goals) sent = call
     return Response.json({ answers: { goal_0: { noul: 0.96 }, goal_1: { noul: 0.32 } } })
   } })
   assert.equal(sent.state.goals.length, 2)

@@ -63,7 +63,7 @@ export function RequestsView({
     setBusy(r.id)
     try {
       const { item } = await api.promote(context, r.id)
-      setRequests((all) => all?.map((x) => (x.id === r.id ? { ...x, ticket: item.key, similar: undefined } : x)))
+      setRequests((all) => all?.map((x) => (x.id === r.id ? { ...x, ticket: item.key, similar: undefined, coverage: undefined } : x)))
       onPromoted()
       toast.success(`Made ${item.key}`, { description: item.title, timeout: 8000, actionProps: { children: 'Open', onPress: () => onOpen(item.key) } })
     } catch (err) {
@@ -231,9 +231,14 @@ export function RequestsView({
                             {busy === r.id ? <Spinner size="sm" /> : 'Make ticket'}
                           </Button>
                         )}
-                        {r.similar && (
+                        {r.coverage && (
+                          <button type="button" className="text-left text-xs text-warning hover:underline" onClick={() => onOpen(r.coverage!.key)}>
+                            Jev suggests {r.coverage.key} may cover this request · {r.coverage.title}
+                          </button>
+                        )}
+                        {!r.coverage && r.similar && (
                           <button type="button" className="text-xs text-warning hover:underline" onClick={() => onOpen(r.similar!)}>
-                            may already be {r.similar}
+                            Similar title · {r.similar}
                           </button>
                         )}
                       </div>

@@ -514,7 +514,7 @@ export function shortTitle(text: string, max = 90): string {
 }
 
 /** A queued claim already occupies its runner, even before the first stage transition. */
-export function inFlight(item: LoreWorkItem): boolean {
+export function inFlight(item: Pick<LoreWorkItem, 'claim' | 'status'>): boolean {
   return !!item.claim || ['in_progress', 'review', 'blocked'].includes(item.status)
 }
 

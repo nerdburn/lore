@@ -268,7 +268,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   )
 
   tool('lore_request_triage', {
-    description: label + 'Use on incoming client work requests before offering to start, assigning a runner or changing rank. Shows work already underway, the head of the ranked backlog and suggested goal matches. Acknowledge the ask and keep existing commitments first. Only advance an ask ahead of them on an explicit priority decision. When classification needs review, compare the returned outcomes or leave the ask unlinked.',
+    description: label + 'Use on incoming client work requests before offering to start, assigning a runner or changing rank. Shows work already underway, the head of the ranked backlog, suggested goal matches and possible coverage by an open ticket. If work_coverage suggests a ticket, show its title and key and ask whether it covers the request before proposing a new ticket. A shortlist with no match is inconclusive. Acknowledge the ask and keep existing commitments first. Only advance an ask ahead of them on an explicit priority decision. When classification needs review, compare the returned outcomes or leave the ask unlinked.',
     inputSchema: { request: z.string().trim().min(1).max(20000).describe('the concrete ask in the client’s words') },
   }, async ({ request }) => {
     freshen()

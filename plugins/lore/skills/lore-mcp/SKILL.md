@@ -259,7 +259,7 @@ write allow-list; report either plainly rather than working around it.
 
 Call `lore_request_triage` with the ask while the conversation is happening.
 Tell the client which outcome it may support and what is already underway.
-When there is no clear match, leave the request open for planning. A batch
+If Jev suggests an existing ticket, give its title and key and ask whether it covers the ask. A suggestion leaves the request in intake. When there is no clear match, leave the request open for planning. A batch
 of asks goes into intake. If the client asks to track one, add or promote
 an unassigned to-do at the end of the ranked backlog. The regular fold
 records requests from synced conversations and links them to project goals.
