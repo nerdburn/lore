@@ -5,7 +5,7 @@ import type { LoreConfig } from './config.js'
 import { degraded, sourceStatuses } from './health.js'
 import { loadState } from './state.js'
 import { describeDelivery, describeWorkHistory, readWorkItems, workPrefix, type LoreWorkItem } from './work.js'
-import { readRoadmap } from './roadmap.js'
+import { activeGoal, goalTiming, readRoadmap } from './roadmap.js'
 
 /**
  * The status page — `context/derived/status.md`: the answer to "what's
@@ -104,7 +104,7 @@ export function renderOutstanding(root: string, config: Pick<LoreConfig, 'projec
   const stale = readList(root, 'requests').filter((r) => r.status === 'stale').length
   const allRoadmap = readRoadmap(root)
   const roadmap = allRoadmap
-    .filter((r) => r.kind === 'goal' && r.status !== 'done')
+    .filter(activeGoal)
     .sort((a, b) => String(a.priority ?? 'P9').localeCompare(String(b.priority ?? 'P9')))
   const byStatus = (s: string) => open.filter((i) => i.status === s).map(ticketLine)
   const counts = `${open.length} open ticket${open.length === 1 ? '' : 's'} (${byStatus('blocked').length} blocked, ${byStatus('in_progress').length} in progress${byStatus('review').length ? `, ${byStatus('review').length} in review` : ''}, ${byStatus('todo').length} to do) · ${requests.length} untracked request${requests.length === 1 ? '' : 's'} · ${roadmap.length} active roadmap goal${roadmap.length === 1 ? '' : 's'}`
@@ -121,7 +121,7 @@ export function renderOutstanding(root: string, config: Pick<LoreConfig, 'projec
       CAP.requests,
       'lore_recall category requests',
     ),
-    ...section('Roadmap goals', roadmap.map((r) => `- ${one(r.item)} (${r.horizon === 'short_term' ? 'short term' : r.horizon === 'long_term' ? 'long term' : 'timing not established'})${r.priority_reason ? ` — ${one(r.priority_reason)}` : ''}`), CAP.roadmap, 'lore_recall category roadmap'),
+    ...section('Roadmap goals', roadmap.map((r) => `- ${one(r.item)} (${goalTiming(r)})${r.priority_reason ? ` — ${one(r.priority_reason)}` : ''}`), CAP.roadmap, 'lore_recall category roadmap'),
     ...(allRoadmap.some(r => !r.kind && r.status !== 'done') ? ['_Earlier roadmap entries await review as goals or delivery tasks._', ''] : []),
     ...(stale ? [`_${stale} stale request${stale === 1 ? '' : 's'} (no activity in ~30 days) not listed._`, ''] : []),
   ]

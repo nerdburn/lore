@@ -99,3 +99,24 @@ test('status counts goals separately from old task-shaped roadmap entries', () =
   assert.match(text, /Resolve payment blockers before cosmetic changes/)
   assert.doesNotMatch(text, /Build a modal|Change a button colour/)
 })
+
+test('calendar goals retain their period, longer goals have no deadline, and intake survives promotion', () => {
+  const root = makeContextRepo({
+    'context/derived/roadmap.yaml': roadmap.replace('horizon: short_term', 'horizon: short_term\n  timeframe: { period: 2027-Q1, stated_on: 2026-11-27 }')
+      .replace('horizon: long_term', 'timeframe: { period: 2030-11, stated_on: 2026-11-27 }'),
+    'context/derived/requests.yaml': `
+- { id: req-1, status: open, request: Add a retry link, goal_ids: [road-1] }
+- { id: req-2, status: open, request: Show receipt, goal_ids: [road-1] }
+- { id: req-3, status: archived, request: Forgotten request, goal_ids: [road-1] }
+`,
+    'context/work/lore/ACM.yaml': '- { key: ACM-2, title: Display receipt, request: req-2, status: todo, state: open }',
+  })
+  const report = recallData(root, ACME, 'roadmap').roadmap!
+  assert.match(report.text, /Target period: 2027-Q1/)
+  assert.match(report.text, /Related requests awaiting a ticket: Add a retry link\./)
+  assert.match(report.text, /Supporting work: Display receipt \[ACM-2\]/)
+  assert.doesNotMatch(report.text, /2030|Show receipt|Forgotten request/)
+  const long = report.goals.find(g => g.id === 'road-2')!
+  assert.equal(long.horizon, 'long_term')
+  assert.equal(long.timeframe, undefined)
+})

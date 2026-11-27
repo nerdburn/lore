@@ -404,12 +404,20 @@ span several epics or tickets. `lore recall roadmap` and the MCP roadmap
 category return plain English, with descriptions of supporting work followed
 by ticket keys in brackets. `--json` retains structured access.
 
-Goals live in `context/derived/roadmap.yaml`; concrete delivery work lives in
-the tracker. The fold can propose evidence-backed priority changes in support
+The **Goals** tab lets the account team set outcomes during planning meetings.
+The first save preserves the existing roadmap in `context/goals.yaml` and puts
+the team in charge of future goal changes. Until then the project uses
+`context/derived/roadmap.yaml`. Concrete delivery work lives in the tracker. The fold can propose evidence-backed priority changes in support
 of a goal, with a reason explaining the tradeoff. It never automatically copies
 a goal's priority to every ticket. Older task-shaped roadmap entries are kept
 for history and classified separately as the fold reviews them. See
 [Roadmap goals](docs/ROADMAP_GOALS.md) for the fields and migration behavior.
+
+For an incoming client ask, `lore_request_triage` shows relevant goals,
+work already underway, and the front of the queue. Jev can suggest goal
+matches during the conversation. The fold records request-to-goal links
+for the board and roadmap. New tickets join the end of the ranked backlog.
+The Enso dispatcher starts one at a time per runner and project by default.
 
 ### Work — the tracker of record
 

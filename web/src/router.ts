@@ -27,7 +27,7 @@ export type Route =
   | { name: 'profile' }
   | { name: 'help' }
   | { name: 'authorize'; request: string }
-  | { name: 'board'; context: string; view: 'list' | 'kanban' | 'requests'; item?: string; filters: Filters }
+  | { name: 'board'; context: string; view: 'list' | 'kanban' | 'requests' | 'goals'; item?: string; filters: Filters }
 
 export function parseRoute(loc: Location = window.location): Route {
   const path = loc.pathname.startsWith(BASE) ? loc.pathname.slice(BASE.length) : loc.pathname
@@ -36,13 +36,13 @@ export function parseRoute(loc: Location = window.location): Route {
   if (/^\/profile\/?$/.test(path)) return { name: 'profile' }
   if (/^\/help\/?$/.test(path)) return { name: 'help' }
   if (/^\/authorize\/?$/.test(path)) return { name: 'authorize', request: new URLSearchParams(loc.search).get('request') ?? '' }
-  const m = /^\/p\/([\w.-]+)(\/requests)?\/?$/.exec(path)
+  const m = /^\/p\/([\w.-]+)(?:\/(requests|goals))?\/?$/.exec(path)
   if (!m) return { name: 'projects' }
   const q = new URLSearchParams(loc.search)
   return {
     name: 'board',
     context: m[1],
-    view: m[2] ? 'requests' : q.get('view') === 'list' ? 'list' : 'kanban',
+    view: m[2] === 'goals' || m[2] === 'requests' ? m[2] : q.get('view') === 'list' ? 'list' : 'kanban',
     item: q.get('item') ?? undefined,
     filters: { q: q.get('q') ?? '', labels: q.getAll('label'), assignees: q.getAll('assignee'), closed: q.get('closed') === '1', archived: q.get('archived') === '1' },
   }
@@ -65,7 +65,7 @@ export function href(route: Route): string {
   if (f.archived) q.set('archived', '1')
   if (route.item) q.set('item', route.item)
   const qs = q.toString()
-  return `${BASE}/p/${route.context}${route.view === 'requests' ? '/requests' : ''}${qs ? `?${qs}` : ''}`
+  return `${BASE}/p/${route.context}${route.view === 'requests' || route.view === 'goals' ? `/${route.view}` : ''}${qs ? `?${qs}` : ''}`
 }
 
 export function boardRoute(context: string): Route {

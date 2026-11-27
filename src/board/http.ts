@@ -4,6 +4,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { attachUpload, ATTACHMENTS_FILE, cleanName, guessType, liveAttachments, parseAttachments, removeAttachment, type AttachmentRecord } from '../attachments.js'
+import { parse } from 'yaml'
+import { MANAGED_GOALS, DERIVED_ROADMAP, goalTiming, roadmapGoals } from '../roadmap.js'
+import { resolveContext } from '../context.js'
+import { GoalConflict, goalRevision, saveGoal } from './goals.js'
 import { gitShow } from '../bare.js'
 import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
 import { addComment, ticketThread } from '../comments.js'
@@ -12,7 +16,7 @@ import { statusBeforeArchive, workPromote, workPromoteMany, workRank, type WorkW
 import { requestsSet, REQUESTS_FILE } from '../requests.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, parseRequests, requestRows, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
-import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, type BoardRole } from './access.js'
+import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, canEditGoals, type BoardRole, type BareProject } from './access.js'
 import type { LoreConfig } from '../config.js'
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
@@ -77,6 +81,22 @@ export function adminsFromEnv(env = process.env): string[] {
 }
 
 export function createBoardHandler(opts: BoardOptions): BoardHandler {
+  function boardRoadmap(project: BareProject) {
+    const bare = join(opts.repos, `${project.context}.git`)
+    const manual = gitShow(bare, MANAGED_GOALS, true)
+    const goals = roadmapGoals(parse(manual || gitShow(bare, DERIVED_ROADMAP, true))).filter(g => g.kind === 'goal')
+    return { goals, managed: !!manual }
+  }
+
+  function boardRequests(project: BareProject) {
+    const { goals } = boardRoadmap(project)
+    const bare = join(opts.repos, `${project.context}.git`)
+    const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true))
+    return requestRows(requests, bareWorkItems(opts.repos, project).items).map(r => ({
+      ...r, goals: goals.filter(g => r.goal_ids?.includes(g.id)).map(g => ({ outcome: g.item, timing: goalTiming(g) })),
+    }))
+  }
+
   const log = opts.log ?? ((line: string) => console.log(`[board] ${line}`))
   const now = opts.now ?? Date.now
   const secret = opts.secret ?? boardSecret()
@@ -272,6 +292,33 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         return send(res, 200, { projects }), true
       }
 
+      const goalsRoute = /^\/p\/([\w.-]+)\/goals(?:\/([^/]+))?$/.exec(route)
+      if (goalsRoute) {
+        const [, context, rawId] = goalsRoute
+        const project = bareProject(opts.repos, context)
+        if (!project || !boardRole(project.config, email, admins)) return send(res, 404, { error: 'no such board' }), true
+        const canEdit = canEditGoals(project.config, email, admins)
+        if (!rawId && method === 'GET') {
+          const { goals, managed } = boardRoadmap(project)
+          const bare = join(opts.repos, `${context}.git`)
+          const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true)).filter(r => r.status !== 'archived' && r.goal_ids?.length)
+          return send(res, 200, { managed, canEdit, goals: goals.map(g => ({
+            ...g, revision: goalRevision(g), requests: requests.filter(r => r.goal_ids?.includes(g.id)).map(r => ({ id: r.id, request: r.request })),
+          })) }), true
+        }
+        if ((!rawId && method === 'POST') || (rawId && method === 'PATCH')) {
+          if (!canEdit) return send(res, 403, { error: 'Goal editing is limited to the project account team.' }), true
+          const body = await readBody(req)
+          const goal = await serializeFor(context)(async () => {
+            const ctx = resolveContext(cwd, { context })
+            if (!canEditGoals(ctx.config, email, admins)) throw new Error('Goal editing is unavailable for this account.')
+            return saveGoal(ctx, email, rawId ? decodeURIComponent(rawId) : undefined, body)
+          })
+          return send(res, rawId ? 200 : 201, { goal: { ...goal, revision: goalRevision(goal) } }), true
+        }
+        return send(res, 405, { error: 'method not allowed' }), true
+      }
+
       // Client requests the fold recorded, with the ticket tracking each one (if any);
       // a member can turn one into a ticket.
       const reqRoute = /^\/p\/([\w.-]+)\/requests(?:\/([\w.-]+)\/promote)?$/.exec(route)
@@ -280,10 +327,8 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         const project = bareProject(opts.repos, context)
         const role = project ? boardRole(project.config, email, admins) : undefined
         if (!project || !role) return send(res, 404, { error: 'no such board' }), true
-        const bare = join(opts.repos, `${context}.git`)
-        const rows = () => requestRows(parseRequests(gitShow(bare, 'context/derived/requests.yaml', true)), bareWorkItems(opts.repos, project).items)
         if (!id && method === 'GET') {
-          return send(res, 200, { context, project: project.config.project, client: project.config.client?.name, role, archived: project.config.lifecycle === 'archived', requests: rows() }), true
+          return send(res, 200, { context, project: project.config.project, client: project.config.client?.name, role, archived: project.config.lifecycle === 'archived', requests: boardRequests(project) }), true
         }
         if (id && method === 'POST') {
           if (role !== 'member') return send(res, 403, { error: 'you can view this board but not change it' }), true
@@ -291,7 +336,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           const item = await serializeFor(context)(async () =>
             workPromote(cwd, id, { title: str(body.title), priority: str(body.priority) as never, reason: 'made a ticket from the requests list' }, { context, via: 'web', actor: email, operationId: randomUUID() }),
           )
-          return send(res, 201, { item, request: rows().find((r) => r.id === id) }), true
+          return send(res, 201, { item, request: boardRequests(project).find((r) => r.id === id) }), true
         }
         return send(res, 404, { error: 'not found' }), true
       }
@@ -319,8 +364,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           }
           throw new Error('action must be ticket, archive, delete or restore')
         })
-        const bare = join(opts.repos, `${context}.git`)
-        return send(res, 200, { ...done, requests: requestRows(parseRequests(gitShow(bare, REQUESTS_FILE, true)), bareWorkItems(opts.repos, project).items) }), true
+        return send(res, 200, { ...done, requests: boardRequests(project) }), true
       }
 
       const fileRoute = /^\/p\/([\w.-]+)\/files\/([a-f0-9]{64})$/.exec(route)
@@ -484,6 +528,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       return send(res, 405, { error: 'method not allowed' }), true
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      if (err instanceof GoalConflict) return send(res, 409, { error: message }), true
       if (err instanceof BodyError) return send(res, 400, { error: message }), true
       log(`${method} ${path}: ${message.split('\n')[0]}`)
       return send(res, /no item/.test(message) ? 404 : /archived|not in lore\.json/.test(message) ? 403 : 400, { error: message.split('\n')[0] }), true

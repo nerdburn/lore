@@ -40,6 +40,7 @@ test('mcp: exposes the registered tools including read-only Load', async () => {
     'lore_read',
     'lore_recall',
     'lore_remember',
+    'lore_request_triage',
     'lore_source_add',
     'lore_source_list',
     'lore_sow_add',
@@ -60,7 +61,7 @@ test('mcp: exposes the registered tools including read-only Load', async () => {
   assert.deepEqual([...MCP_TOOLS.map((t) => t.name)].sort(), tools)
   assert.deepEqual(
     MCP_TOOLS.filter((t) => !t.writes).map((t) => t.name),
-    ['lore_load', 'lore_grep', 'lore_read', 'lore_status', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
+    ['lore_load', 'lore_grep', 'lore_read', 'lore_status', 'lore_request_triage', 'lore_recall', 'lore_sync_now', 'lore_source_list'],
   )
   await s.close()
 })

@@ -5,14 +5,14 @@ one enso task per ticket, each stage change written back to the ticket, and
 never two runs of the same ticket at once.
 
 `lore_bridge.py` has no model in it. It needs the `lore` and `enso` CLIs on
-the machine that runs enso, lore ≥ the release with `lore work claim`, and
+the machine that runs enso, lore with `lore work claim --next-for`, and
 enso ≥ the release with `enso task add --unique-ref`.
 
 ## How a ticket flows
 
 1. Someone (a person on the board, or the PM agent) assigns a `todo` ticket
    to the agent's name (`LORE_ASSIGNEE`).
-2. `dispatch` claims it in lore, creates the enso task with
+2. When capacity opens, `dispatch` claims the first eligible assigned ticket in Lore rank order, creates the enso task with
    `--unique-ref lore:<KEY>`, and records the task ref and stage on the claim.
 3. enso runs its stages. After every move the `transition` hook updates the
    ticket's stage and status; a block also leaves the reason as a comment.
@@ -22,6 +22,14 @@ Each `dispatch` run also renews the runner's claims (its heartbeat — lore
 emails the account lead about a claim that has been silent for six hours),
 repairs anything a missed hook left behind, and drops the enso task of a
 ticket a person closed in lore.
+
+By default the runner gives its current ticket the available slot through
+build, review, and blocking. A claim in the Enso backlog also occupies a
+slot. Assigned work already in progress in Lore counts even if it has no
+claim. Set `LORE_MAX_IN_FLIGHT` for a runner that can actually work several
+tickets in parallel. `LORE_MAX_NEW` still limits starts per dispatcher pass.
+The claim checks capacity and rank again on a competing push. Existing runs
+continue to receive their heartbeats and stage updates.
 
 ## Setup
 

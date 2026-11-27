@@ -88,7 +88,32 @@ export interface BoardPerson {
 }
 
 /** Something the client asked for, as lore recorded it from the conversation. */
+export type GoalStatus = 'planned' | 'in_progress' | 'done' | 'retired'
+export interface Goal {
+  id: string
+  item: string
+  why?: string
+  success?: string
+  status: GoalStatus
+  priority?: Priority
+  priority_reason?: string
+  horizon?: 'unspecified' | 'short_term' | 'long_term'
+  timeframe?: { period: string; stated_on: string }
+  source?: string
+  work_items?: string[]
+  edited_by?: string
+  edited_at?: string
+  revision: string
+  requests?: { id: string; request: string }[]
+}
+export interface GoalsPage { goals: Goal[]; managed: boolean; canEdit: boolean }
+export interface GoalFields {
+  item: string; why: string; success: string; priority_reason: string; source: string
+  priority: Priority | ''; status: GoalStatus; timing: string; revision: string | null
+}
+
 export interface ClientRequest {
+  goals?: { outcome: string; timing: string }[]
   id: string
   request: string
   requested_by?: string
@@ -264,6 +289,9 @@ export const api = {
   connections: () => call<{ connections: Connection[] }>('/oauth/connections'),
   revokeConnection: (id: string) => call<{ ok: true }>(`/oauth/connections/${enc(id)}/revoke`, { body: {} }),
   board: (context: string) => call<Board>(`/p/${enc(context)}`),
+  goals: (context: string) => call<GoalsPage>(`/p/${enc(context)}/goals`),
+  saveGoal: (context: string, id: string | undefined, fields: GoalFields) =>
+    call<{ goal: Goal }>(`/p/${enc(context)}/goals${id ? `/${enc(id)}` : ''}`, { method: id ? 'PATCH' : 'POST', body: fields }),
   requests: (context: string) => call<{ requests: ClientRequest[]; role: Role; archived: boolean }>(`/p/${enc(context)}/requests`),
   requestsBulk: (context: string, ids: string[], action: 'ticket' | 'archive' | 'delete' | 'restore') =>
     call<{ tickets: string[]; changed: string[]; skipped: string[]; requests: ClientRequest[] }>(`/p/${enc(context)}/requests-bulk`, { body: { ids, action } }),
