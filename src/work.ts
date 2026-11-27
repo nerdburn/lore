@@ -388,6 +388,14 @@ export interface ChangeMeta {
   evidence_date?: string
 }
 
+/** Preserve the original promotion ID when another ask is covered by the same ticket. */
+export function addRequestLink(item: LoreWorkItem, id: string, meta: ChangeMeta) {
+  if (requestIds(item).includes(id)) return
+  const previous = item.linked_requests ?? []
+  item.linked_requests = [...previous, id]
+  applyChange(item, {}, meta, { linked_requests: [previous, item.linked_requests] })
+}
+
 /**
  * Apply field changes and record them as one history entry. Returns the
  * `{field: [from, to]}` record actually applied — empty when nothing

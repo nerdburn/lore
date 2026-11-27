@@ -205,7 +205,7 @@ export function RequestsView({
                     <div className="flex flex-col items-start gap-1">
                       {r.coverage && (
                         <button type="button" className="text-left text-xs text-warning hover:underline" onClick={() => onOpen(r.coverage!.key)}>
-                          Jev suggests {r.coverage.key} may cover this request · {r.coverage.title}
+                          Auto-link pending · {r.coverage.key} · {r.coverage.title}
                         </button>
                       )}
                       {!r.coverage && r.similar && (

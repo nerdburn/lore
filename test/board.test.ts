@@ -704,7 +704,7 @@ test('a primed snapshot becomes inaccessible to a signed-in viewer immediately a
   assert.equal((await api('/projects', { cookie })).body.projects.some((p: any) => p.context === context), false)
 })
 
-test('the requests board serves saved Jev coverage as a suggestion distinct from a promoted ticket', async () => {
+test('automatic Jev links leave intake and remain visible in the original request history', async () => {
   const context = 'lore-covered-work'
   const bare = pushContext(context, acmeConfig, {
     'context/work/lore/ACM.yaml': TRACKER,
@@ -717,14 +717,15 @@ test('the requests board serves saved Jev coverage as a suggestion distinct from
     return Response.json({ answers: Object.fromEntries(state.tickets.map((t: { title: string }, i: number) =>
       ['ticket_' + i, { noul: t.title === 'Checkout copy' ? 0.98 : 0.01 }])) })
   } })
-  git(clone, 'add', COVERAGE_FILE)
+  git(clone, 'add', COVERAGE_FILE, 'context/work/lore/ACM.yaml', 'context/audit.jsonl')
   git(clone, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '--quiet', '-m', 'save coverage')
   git(clone, 'push', '--quiet', 'origin', 'main')
   const cookie = await signIn('covered@viewers.io')
   const res = await api('/p/' + context + '/requests', { cookie })
   assert.equal(res.status, 200)
-  assert.deepEqual(res.body.requests[0].coverage, { key: 'ACM-2', title: 'Checkout copy', score: 0.98 })
-  assert.equal(res.body.requests[0].ticket, undefined)
+  assert.equal(res.body.requests[0].ticket, 'ACM-2')
+  const intake = await api('/p/' + context + '/requests?view=intake', { cookie })
+  assert.deepEqual(intake.body.requests, [])
 })
 
 test('request intake hides handled asks, keeps uncertain matches, and lets members confirm an existing ticket', async () => {

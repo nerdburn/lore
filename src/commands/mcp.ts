@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { git, NoContextError, readRegistry, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { recallData, roadmapAnswer } from '../recall.js'
 import { readRoadmap } from '../roadmap.js'
+import { liveCoverageCache } from '../request-coverage.js'
 import { triageRequest } from '../triage.js'
 import { statusView } from '../status.js'
 import { grepContext } from '../search.js'
@@ -268,11 +269,11 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   )
 
   tool('lore_request_triage', {
-    description: label + 'Use on incoming client work requests before offering to start, assigning a runner or changing rank. Shows work already underway, the head of the ranked backlog, suggested goal matches and possible coverage by an open ticket. If work_coverage suggests a ticket, show its title and key and ask whether it covers the request before proposing a new ticket. A shortlist with no match is inconclusive. Acknowledge the ask and keep existing commitments first. Only advance an ask ahead of them on an explicit priority decision. When classification needs review, compare the returned outcomes or leave the ask unlinked.',
+    description: label + 'Use on incoming client work requests before offering to start, assigning a runner or changing rank. Shows work already underway, the head of the ranked backlog, suggested goal matches and possible coverage by an open ticket. When Jev finds coverage, acknowledge the existing ticket by title and key. Lore links the recorded request automatically on extraction. No confirmation or new ticket is needed. A shortlist with no match is inconclusive. Acknowledge the ask and keep existing commitments first. Only advance an ask ahead of them on an explicit priority decision. When classification needs review, compare the returned outcomes or leave the ask unlinked.',
     inputSchema: { request: z.string().trim().min(1).max(20000).describe('the concrete ask in the client’s words') },
   }, async ({ request }) => {
     freshen()
-    return text(await triageRequest(request, readRoadmap(ctx.root), readWorkItems(ctx.root, workPrefix(ctx.config)), { apiKey: process.env.TYPESAFE_API_KEY }))
+    return text(await triageRequest(request, readRoadmap(ctx.root), readWorkItems(ctx.root, workPrefix(ctx.config)), { apiKey: process.env.TYPESAFE_API_KEY, liveCache: !archived && !hooks.readOnly ? liveCoverageCache(ctx.root) : undefined }))
   })
 
   tool(

@@ -7,6 +7,7 @@ import { pushWithRebase } from '../push.js'
 import { authorizeWrite } from '../write.js'
 import {
   applyChange,
+  addRequestLink,
   canonicalLabel,
   describeClaim,
   findItem,
@@ -258,10 +259,7 @@ export function linkRequest(cwd: string, id: string, key: string, opts: WorkWrit
     const item = requireItem(items, key)
     const already = requestTickets(requests, items).get(id)
     if (already) throw new Error(id + ' is already tracked as ' + already)
-    const previous = item.linked_requests ?? []
-    item.linked_requests = [...previous, id]
-    applyChange(item, {}, { at, by: actor, via: opts.via ?? 'cli', reason: 'Linked existing ticket to ' + id },
-      { linked_requests: [previous, item.linked_requests] })
+    addRequestLink(item, id, { at, by: actor, via: opts.via ?? 'cli', reason: 'Linked existing ticket to ' + id })
     return { item, message: 'link ' + id + ' to ' + item.key }
   })
 }
