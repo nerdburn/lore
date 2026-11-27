@@ -49,15 +49,26 @@ def run(cmd: list[str], stdin: str | None = None) -> subprocess.CompletedProcess
 
 
 def last_json(text: str):
-    for line in reversed(text.strip().splitlines()):
-        try:
-            return json.loads(line)
-        except ValueError:
-            continue
+    """The JSON document a CLI printed, pretty-printed or not, after any log lines.
+
+    lore and enso print `--json` results indented over many lines, so a single line can
+    be a fragment that is itself valid JSON (a bare string inside an array). Parse the
+    whole output first, then the tail starting at the last line that opens an object or
+    array.
+    """
+    text = text.strip()
     try:
         return json.loads(text)
     except ValueError:
-        return None
+        pass
+    lines = text.splitlines()
+    for start in range(len(lines) - 1, -1, -1):
+        if lines[start][:1] in "{[":
+            try:
+                return json.loads("\n".join(lines[start:]))
+            except ValueError:
+                continue
+    return None
 
 
 def lore(*args: str, ok: tuple[int, ...] = (0,)) -> tuple[int, object]:
