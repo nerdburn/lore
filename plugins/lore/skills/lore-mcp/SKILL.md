@@ -1,6 +1,6 @@
 ---
 name: lore-mcp
-description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_load, lore_load_all, lore_sync_now, lore_source_list, lore_remember, lore_sow_add, lore_doc_add, lore_source_add, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to add a GitHub repo, Slack channel, Granola folder, Notion page, Figma file, Jira board, Linear team, or mailbox to lore ("sync X too"), or which sources are synced; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked for activity counts or a load report for one or all projects; when asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
+description: Query project memory through the lore MCP server (lore_grep, lore_read, lore_recall, lore_load, lore_load_all, lore_sync_now, lore_source_list, lore_remember, lore_sow_add, lore_doc_add, lore_source_add, lore_request_triage, lore_work_add/promote/move/set/push) — or connect it if it isn't. Use when asked what a client said, asked, or decided; what is open, in progress, blocked, or done; what happened in a meeting; project history or status; when asked to "remember" a fact for the project; when asked to add a document, spec, or brief the client sent to project memory; when asked to add a GitHub repo, Slack channel, Granola folder, Notion page, Figma file, Jira board, Linear team, or mailbox to lore ("sync X too"), or which sources are synced; when asked to track, ticket, move, close, prioritise, or assign work, or what a ticket's history is; when asked to push or sync tickets to Jira; when asked for activity counts or a load report for one or all projects; when asked why something is missing from memory or why a source looks out of date; or when asked to hook an agent up to lore.
 ---
 
 # Using lore over MCP
@@ -254,6 +254,20 @@ and ask whether they still want a pin. When you do pin:
 
 The tool is unavailable on archived clients and may be refused by the repo's
 write allow-list; report either plainly rather than working around it.
+
+## Receiving client requests
+
+Call `lore_request_triage` with the ask while the conversation is happening.
+Tell the client which outcome it may support and what is already underway.
+When there is no clear match, leave the request open for planning. A batch
+of asks goes into intake. If the client asks to track one, add or promote
+an unassigned to-do at the end of the ranked backlog. The regular fold
+records requests from synced conversations and links them to project goals.
+
+If the client wants a change of order, name the work that would move and
+record the explicit decision and its source. A goal match alone leaves
+execution order intact. Apply the same rule before starting work directly
+from chat or handing it to another runner.
 
 ## Moving work — the tracker verbs
 

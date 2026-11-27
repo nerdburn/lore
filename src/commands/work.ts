@@ -12,6 +12,7 @@ import {
   describeClaim,
   findItem,
   hasLabel,
+  inFlight,
   nextKey,
   rankItem,
   readExternalIssues,
@@ -450,7 +451,12 @@ export class ClaimHeldError extends Error {
   }
 }
 
+export class DispatchDeferredError extends Error {}
+
 export interface WorkClaimInput {
+  /** Admission check for a fresh dispatch. Re-evaluated on a competing push. */
+  nextFor?: string
+  maxInFlight?: number
   /** Who is claiming; defaults to the caller. */
   holder?: string
   /** The holder's own id for this run (an enso task ref). A holder's second run on the same ticket is refused. */
@@ -531,6 +537,16 @@ export function workClaim(cwd: string, key: string, input: WorkClaimInput, opts:
   const res = decideAndPush(cwd, opts, (items, actor, at) => {
     const item = requireItem(items, key)
     const holder = input.holder?.trim() || actor
+    if (input.nextFor !== undefined) {
+      const assignee = input.nextFor.trim().toLowerCase()
+      const limit = input.maxInFlight ?? 1
+      if (!assignee || !Number.isSafeInteger(limit) || limit < 1) throw new Error('work claim: dispatch requires an assignee and a positive integer capacity')
+      const assigned = (i: LoreWorkItem) => i.assignee?.trim().toLowerCase() === assignee
+      const busy = items.filter(i => inFlight(i) && (i.claim?.holder === holder || assigned(i)))
+      if (busy.length >= limit) throw new DispatchDeferredError(`work claim: ${assignee} has work in flight (${busy.map(i => i.key).join(', ')})`)
+      const next = items.find(i => assigned(i) && i.status === 'todo' && !i.claim)
+      if (next !== item) throw new DispatchDeferredError(`work claim: ${item.key} is no longer next for ${assignee}`)
+    }
     const held = item.claim
     const mine = held && held.holder === holder && (!held.ref || !input.ref || held.ref === input.ref)
     if (held && !mine && !input.force) throw new ClaimHeldError(item.key, held, describeClaim({ holder, ref: input.ref })!)

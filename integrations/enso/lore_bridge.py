@@ -20,6 +20,7 @@ Configuration (environment):
   ENSO_PROJECT    enso project key new tasks go to                    dispatch
   ENSO_WORKSPACE  enso workspace (enso sets it for jobs and hooks)    required
   LORE_MAX_NEW    most tickets to start per run (default 3)
+  LORE_MAX_IN_FLIGHT  concurrent tickets per runner/assignee in this project (default 1)
   LORE_STATUS_MAP JSON {"<enso stage>": "<lore status>"} overriding the defaults
   LORE_BIN / ENSO_BIN  executables (default: lore / enso)
 
@@ -34,6 +35,7 @@ import sys
 
 FINISHED = ("done", "cancelled")
 STATUS = {"backlog": "todo", "blocked": "blocked", "build": "in_progress", "review": "review", "qa": "review", "merge": "review", "deploy": "review"}
+DEFERRED = 4  # rank or capacity changed before the dispatch claim
 HELD = 3  # `lore work claim` / `release`: someone else holds the ticket
 
 
@@ -49,15 +51,26 @@ def run(cmd: list[str], stdin: str | None = None) -> subprocess.CompletedProcess
 
 
 def last_json(text: str):
-    for line in reversed(text.strip().splitlines()):
-        try:
-            return json.loads(line)
-        except ValueError:
-            continue
+    """The JSON document a CLI printed, pretty-printed or not, after any log lines.
+
+    lore and enso print `--json` results indented over many lines, so a single line can
+    be a fragment that is itself valid JSON (a bare string inside an array). Parse the
+    whole output first, then the tail starting at the last line that opens an object or
+    array.
+    """
+    text = text.strip()
     try:
         return json.loads(text)
     except ValueError:
-        return None
+        pass
+    lines = text.splitlines()
+    for start in range(len(lines) - 1, -1, -1):
+        if lines[start][:1] in "{[":
+            try:
+                return json.loads("\n".join(lines[start:]))
+            except ValueError:
+                continue
+    return None
 
 
 def lore(*args: str, ok: tuple[int, ...] = (0,)) -> tuple[int, object]:
@@ -84,13 +97,21 @@ def lore_key(task: dict) -> str | None:
     return None
 
 
-def claim(key: str, **fields: str | None) -> bool:
+class DispatchDeferred(Exception):
+    """The ranked queue or available capacity changed before the claim."""
+
+
+def claim(key: str, *, fresh: bool = False, **fields: str | None) -> bool:
     """Take or confirm the claim; False when someone else holds the ticket."""
     args = ["work", "claim", key, "--holder", env("LORE_HOLDER"), "--json"]
     for flag, value in fields.items():
         if value:
             args += [f"--{flag}", value]
-    code, _ = lore(*args, ok=(0, HELD))
+    if fresh:
+        args += ["--next-for", env("LORE_ASSIGNEE"), "--max-in-flight", env("LORE_MAX_IN_FLIGHT", "1")]
+    code, result = lore(*args, ok=(0, HELD, DEFERRED))
+    if code == DEFERRED:
+        raise DispatchDeferred(result["deferred"])
     return code == 0
 
 
@@ -103,10 +124,10 @@ def release(key: str, reason: str, ref: str | None = None, status: str | None = 
     lore(*args, ok=(0, HELD))
 
 
-def start(ticket: dict) -> str:
+def start(ticket: dict, *, fresh: bool = False) -> str:
     """Claim the ticket, then create its enso task. Returns a line for the log."""
     key = ticket["key"].upper()
-    if not claim(key, stage="queued"):
+    if not claim(key, fresh=fresh, stage="queued"):
         return f"{key}: held by someone else, skipped"
     body = "\n\n".join(filter(None, [
         (ticket.get("description") or "").strip(),
@@ -166,7 +187,11 @@ def dispatch() -> None:
                 lines.append(line)
     fresh = [t for t in tickets or [] if not t.get("claim") and t.get("status") == "todo" and str(t.get("assignee") or "").lower() == assignee]
     for t in fresh[: int(os.environ.get("LORE_MAX_NEW", "3"))]:
-        lines.append(start(t))
+        try:
+            lines.append(start(t, fresh=True))
+        except DispatchDeferred as deferred:
+            lines.append(str(deferred))
+            break
     print("\n".join(lines) if lines else "nothing to do")
 
 

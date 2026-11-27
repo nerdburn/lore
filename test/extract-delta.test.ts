@@ -118,3 +118,34 @@ test('weekly report: written once on report day, not on every timer fold; --repo
     }
   }
 })
+
+test('a fold can match requests to managed goals but cannot add or rewrite those goals', async () => {
+  const managed = '- {id: road-1, kind: goal, item: Held by the team, status: planned}'
+  const derived = '- {id: old, kind: goal, item: Superseded, status: planned}'
+  const root = makeContextRepo({ 'context/goals.yaml': managed, 'context/derived/roadmap.yaml': derived })
+  const proposal = {
+    requests: [{ id: 'req-1', request: 'Support the outcome', status: 'open', goal_ids: ['old', 'road-1', 'invented'] }],
+    roadmap: [{ id: 'invented', kind: 'goal', item: 'An inferred outcome', status: 'planned' }],
+    decisions: [], contradictions: [],
+  }
+  const program = join(root, 'claude')
+  writeFileSync(program, `#!/bin/sh\ncat > "${root}/prompt"\ncat "${root}/result"\n`)
+  chmodSync(program, 0o755)
+  writeFileSync(join(root, 'result'), JSON.stringify({ result: JSON.stringify(proposal) }))
+  const env = { PATH: process.env.PATH, LORE_LLM: process.env.LORE_LLM, LORE_PR_MATCHING: process.env.LORE_PR_MATCHING }
+  try {
+    Object.assign(process.env, { PATH: `${root}:${env.PATH}`, LORE_LLM: 'cli', LORE_PR_MATCHING: 'off' })
+    await captureConsole(() => extract(root, { review: true }))
+    assert.equal(readFileSync(join(root, 'context/goals.yaml'), 'utf8'), managed)
+    assert.equal(readFileSync(join(root, 'context/derived/roadmap.yaml'), 'utf8'), derived)
+    const requests = readFileSync(join(root, 'context/derived/requests.yaml'), 'utf8')
+    assert.match(requests, /road-1/)
+    assert.doesNotMatch(requests, /- old|- invented/)
+    assert.match(readFileSync(join(root, 'context/derived/status.md'), 'utf8'), /Held by the team/)
+  } finally {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})

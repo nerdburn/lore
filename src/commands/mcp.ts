@@ -5,6 +5,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { git, NoContextError, readRegistry, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { recallData, roadmapAnswer } from '../recall.js'
+import { readRoadmap } from '../roadmap.js'
+import { triageRequest } from '../triage.js'
 import { statusView } from '../status.js'
 import { grepContext } from '../search.js'
 import { refresh } from './refresh.js'
@@ -39,6 +41,7 @@ export const MCP_TOOLS: readonly { name: string; writes: boolean; summary: strin
   { name: 'lore_grep', writes: false, summary: 'regex search across synced memory' },
   { name: 'lore_read', writes: false, summary: 'read a file or line range from the context repo' },
   { name: 'lore_status', writes: false, summary: "what's outstanding, ready to relay: summary, live open work, freshness" },
+  { name: 'lore_request_triage', writes: false, summary: 'compare an incoming ask to project goals and show work already underway' },
   { name: 'lore_recall', writes: false, summary: 'pins, tracker, derived artifacts, reports, SOWs at once' },
   { name: 'lore_sync_now', writes: false, summary: 'pull, and ask the host to sync (and fold) now' },
   { name: 'lore_source_list', writes: false, summary: 'what is synced: each source, its scope, and its health' },
@@ -185,7 +188,9 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
   const label = archived
     ? `ARCHIVED client (engagement ended ${ctx.config.archived_at?.slice(0, 10) ?? 'unknown'}; this is history, not current state). `
     : ''
-  const server = new McpServer({ name: 'lore', version: '0.5.5' })
+  const server = new McpServer({ name: 'lore', version: '0.5.5' }, {
+    instructions: 'For new client work requests, call lore_request_triage before promising or starting work. Keep current commitments first. To move a request ahead, establish which work the client or project lead wants to defer and record the decision.',
+  })
   const text = (value: unknown) => ({
     content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
   })
@@ -261,6 +266,14 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
       return text(statusView(ctx.root, ctx.config))
     },
   )
+
+  tool('lore_request_triage', {
+    description: label + 'Use on incoming client work requests before offering to start, assigning a runner or changing rank. Shows work already underway, the head of the ranked backlog and suggested goal matches. Acknowledge the ask and keep existing commitments first. Only advance an ask ahead of them on an explicit priority decision. When classification needs review, compare the returned outcomes or leave the ask unlinked.',
+    inputSchema: { request: z.string().trim().min(1).max(20000).describe('the concrete ask in the client’s words') },
+  }, async ({ request }) => {
+    freshen()
+    return text(await triageRequest(request, readRoadmap(ctx.root), readWorkItems(ctx.root, workPrefix(ctx.config)), { apiKey: process.env.TYPESAFE_API_KEY }))
+  })
 
   tool(
     'lore_recall',
@@ -441,7 +454,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? unavailable
-        : 'Create a work item in the lore tracker (the tracker of record). Use when a person asks to track/ticket something new; to track an existing derived request use lore_work_promote instead. Give a title and a reason; link a Jira/GitHub issue with external ("jira:INPT-9" / "github:owner/repo#42") if one exists.',
+        : 'Create a work item in the lore tracker (the tracker of record). Use when a person asks to track/ticket something new; to track an existing derived request use lore_work_promote instead. For incoming asks call lore_request_triage first. New tickets default to unassigned, at the end of the queue. Give a title and a reason; link a Jira/GitHub issue with external ("jira:INPT-9" / "github:owner/repo#42") if one exists.',
       inputSchema: {
         title: z.string().min(1),
         description: z.string().optional().describe('markdown body: what the ticket is, for people reading it'),
@@ -505,7 +518,7 @@ export function createServer(ctx: ResolvedContext, rememberOpts: { cwd: string; 
     {
       description: archived
         ? unavailable
-        : 'For unattended runs: take a ticket before a run starts work on it, so two agents or two runs never work the same ticket. Do not claim in an ordinary conversation with a person — move the ticket to in_progress and set its assignee instead. A ticket has one holder: if someone else holds it — or you hold it under a different ref, meaning a run already exists — the claim is refused and tells you who has it; do not start work then. Calling it again with the same holder and ref confirms the claim and updates the stage, so call it on every handoff (build → review → qa). Only pass force when a person tells you to take the ticket over.',
+        : 'For unattended runs: take a ticket before a run starts work on it, so two agents or two runs never work the same ticket. In client conversations triage incoming asks first. Record a start only when work actually begins. A ticket has one holder: if someone else holds it — or you hold it under a different ref, meaning a run already exists — the claim is refused and tells you who has it; do not start work then. Calling it again with the same holder and ref confirms the claim and updates the stage, so call it on every handoff (build → review → qa). Only pass force when a person tells you to take the ticket over.',
       inputSchema: {
         key: z.string().min(1).describe('e.g. CAR-3'),
         holder: z.string().optional().describe('who holds it, e.g. "enso:athena"; defaults to you'),

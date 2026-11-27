@@ -461,6 +461,7 @@ export function lastHumanChange(item: LoreWorkItem, field: string): string | und
 export interface DerivedRequest {
   id: string
   request: string
+  goal_ids?: string[]
   requested_by?: string
   date?: string
   status?: string
@@ -477,6 +478,7 @@ export function parseRequests(text: string): DerivedRequest[] {
     .map((r) => ({
       id: String(r.id),
       request: String(r.request ?? r.id).replace(/\s+/g, ' ').trim(),
+      ...(Array.isArray(r.goal_ids) ? { goal_ids: r.goal_ids.filter((id): id is string => typeof id === 'string') } : {}),
       ...(r.requested_by ? { requested_by: String(r.requested_by) } : {}),
       ...(r.date ? { date: String(r.date).slice(0, 10) } : {}),
       ...(r.status ? { status: String(r.status) } : {}),
@@ -509,6 +511,11 @@ export function shortTitle(text: string, max = 90): string {
   if (sentence && sentence.length <= max) return sentence.replace(/[.!?]$/, '')
   const cut = clean.slice(0, max - 1)
   return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 40)).replace(/[\s,;:(–—-]+$/, '')}…`
+}
+
+/** A queued claim already occupies its runner, even before the first stage transition. */
+export function inFlight(item: LoreWorkItem): boolean {
+  return !!item.claim || ['in_progress', 'review', 'blocked'].includes(item.status)
 }
 
 export function summarizeForRecall(item: LoreWorkItem): WorkItemSummary {

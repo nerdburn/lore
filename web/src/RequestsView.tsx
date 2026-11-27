@@ -54,7 +54,7 @@ export function RequestsView({
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return (showAll ? (requests ?? []) : waiting)
-      .filter((r) => !needle || `${r.request} ${r.requested_by ?? ''} ${r.id}`.toLowerCase().includes(needle))
+      .filter((r) => !needle || `${r.request} ${r.requested_by ?? ''} ${r.id} ${r.goals?.map(g => g.outcome).join(' ') ?? ''}`.toLowerCase().includes(needle))
       .slice()
       .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
   }, [requests, waiting, showAll, q])
@@ -198,6 +198,9 @@ export function RequestsView({
                       <span className="line-clamp-3 text-sm" title={r.request}>
                         {r.request}
                       </span>
+                      {r.goals?.map(g => (
+                        <span key={g.outcome} className="text-xs text-muted">Goal · {g.outcome} ({g.timing})</span>
+                      ))}
                       <span className="flex items-center gap-2 text-xs text-muted">
                         <span className="mono">{r.id}</span>
                         {r.source && /^https?:\/\//.test(r.source) && (

@@ -25,7 +25,7 @@ import { www } from './commands/www.js'
 import { sowAdd, sowList } from './commands/sow.js'
 import { workAdd, workMove, workSet, projectItemAdd, projectItemMove, projectSync } from './commands/project.js'
 import { docAdd, docAddFolder, docList } from './commands/doc.js'
-import { workLabel, workArchive, workUnarchive, workClaim, workRelease, workRenew, ClaimHeldError, workList, workPromote, workRank, workShow } from './commands/work.js'
+import { workLabel, workArchive, workUnarchive, workClaim, workRelease, workRenew, ClaimHeldError, DispatchDeferredError, workList, workPromote, workRank, workShow } from './commands/work.js'
 import { resolveContext } from './context.js'
 import { statusView } from './status.js'
 import { printPush, workPush } from './commands/work-push.js'
@@ -447,6 +447,8 @@ contextual(
     .argument('<key>', 'e.g. CAR-3')
     .option('--holder <who>', 'who holds it, e.g. enso:athena (default: you)')
     .option('--ref <id>', "the holder's own id for this run, e.g. an enso task ref")
+    .option('--next-for <assignee>', 'fresh dispatch only: require the next ranked assigned ticket and free capacity')
+    .option('--max-in-flight <count>', 'capacity for --next-for (default 1)', Number)
     .option('--stage <name>', 'where the run is: build, review, qa…')
     .option('--url <url>', 'a link to the run')
     .option('--status <s>', 'move the ticket in the same write')
@@ -459,6 +461,12 @@ contextual(
     const { item, outcome } = workClaim(root, key, o, { ...o, quiet: o.json })
     if (o.json) console.log(JSON.stringify({ ok: true, outcome, key: item.key, status: item.status, claim: item.claim }))
   } catch (err) {
+    if (err instanceof DispatchDeferredError) {
+      if (o.json) console.log(JSON.stringify({ ok: false, deferred: err.message }))
+      else console.error(err.message)
+      process.exitCode = 4
+      return
+    }
     if (!(err instanceof ClaimHeldError)) throw err
     if (o.json) console.log(JSON.stringify({ ok: false, key: err.key, held_by: err.claim }))
     else console.error(err.message)

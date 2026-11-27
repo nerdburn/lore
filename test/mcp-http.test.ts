@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { parse } from 'yaml'
 import { agentsAllow, agentsRevoke } from '../src/commands/agents.js'
+import { MCP_TOOLS } from '../src/commands/mcp.js'
 import { writeGlobalConfig } from '../src/context.js'
 import { createMcpHttpHandler, readAgentsFile, type McpHttpHandler } from '../src/mcp-http.js'
 import { fullFixtureRepo } from './helpers.js'
@@ -133,7 +134,9 @@ test('mcp-http: a context that is not on the host → 404', async () => {
 test('mcp-http: a granted agent gets the full tool set over HTTP, and writes are attributed to it', async () => {
   const s = await connect('accord-agent')
   const tools = (await s.client.listTools()).tools.map((t) => t.name)
-  assert.equal(tools.length, 22)
+  assert.equal(tools.length, MCP_TOOLS.length)
+  const triage = JSON.parse((await s.call('lore_request_triage', { request: 'Add invoice export' })).text)
+  assert.equal(triage.disposition, 'intake')
   assert.ok(tools.includes('lore_recall'))
   assert.deepEqual(handler.sessions().map((x) => [x.agent, x.context]), [['accord-agent', 'lore-acme']])
 

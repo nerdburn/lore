@@ -7,7 +7,7 @@ import { degraded, sourceStatuses, type SourceStatus } from './health.js'
 import { loadState } from './state.js'
 import type { Client, Lifecycle, LoreConfig } from './config.js'
 import type { Pin } from './types.js'
-import { roadmapRecall } from './roadmap.js'
+import { MANAGED_GOALS, readRoadmap, roadmapRecall } from './roadmap.js'
 
 /** Everything `recall` knows, in trust order: pins first, then derived. */
 export interface Recalled {
@@ -97,6 +97,8 @@ export function recallData(
       derived[name] = name === 'requests' && Array.isArray(value) ? value.filter((r) => (r as { status?: unknown } | null)?.status !== 'deleted') : value
     }
   }
+
+  if ((!category || category === 'roadmap') && existsSync(join(root, MANAGED_GOALS))) derived.roadmap = readRoadmap(root)
 
   const work: Record<string, WorkSummary> = {}
   const workDir = join(root, 'context/work')

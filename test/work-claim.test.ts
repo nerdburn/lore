@@ -184,3 +184,19 @@ test('claims: one made by hand is let go when its holder hands the ticket on, an
     assert.deepEqual(item(root, 'ACM-1').history.at(-1)!.change, { claim: ['jeff @build', null], status: ['in_progress', 'review'] })
   })
 })
+
+test('dispatch rechecks file rank and capacity on the claim, including work started outside the runner', async () => {
+  const root = makeContextRepo()
+  const opts = { context: root, quiet: true }
+  const dispatch = { holder: 'enso:athena', nextFor: 'Athena' }
+  const first = workAdd(root, { title: 'Finish checkout', assignee: 'athena' }, opts)
+  const second = workAdd(root, { title: 'Add invoice export', assignee: 'Athena', priority: 'P1' }, opts)
+  assert.throws(() => workClaim(root, second.key, dispatch, opts), /no longer next/)
+  assert.equal(workClaim(root, first.key, dispatch, opts).outcome, 'claimed')
+  assert.throws(() => workClaim(root, second.key, dispatch, opts), /work in flight/)
+  workRelease(root, first.key, { holder: dispatch.holder, status: 'review', reason: 'With the reviewer' }, opts)
+  assert.throws(() => workClaim(root, second.key, dispatch, opts), /work in flight/)
+  assert.equal(item(root, second.key).history.length, 1)
+  workMove(root, first.key, 'done', { reason: 'Accepted' }, opts)
+  assert.equal(workClaim(root, second.key, dispatch, opts).outcome, 'claimed')
+})

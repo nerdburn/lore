@@ -6,6 +6,7 @@ import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { NewItemModal } from './NewItemModal'
+import { GoalsView } from './GoalsView'
 import { RequestsView } from './RequestsView'
 import { celebrateTicket, ticketElement } from './celebrate'
 import { AvatarStack } from './people'
@@ -173,7 +174,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             {board.archived && ' · archived (read-only)'}
           </p>
         </div>
-        <Tabs selectedKey={route.view} onSelectionChange={(k) => navigate({ ...route, view: k as 'list' | 'kanban' | 'requests' }, true)}>
+        <Tabs selectedKey={route.view} onSelectionChange={(k) => navigate({ ...route, view: k as BoardRoute['view'] }, true)}>
           <Tabs.ListContainer>
             <Tabs.List aria-label="View">
               <Tabs.Tab id="kanban">
@@ -188,10 +189,14 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
                 Requests
                 <Tabs.Indicator />
               </Tabs.Tab>
+              <Tabs.Tab id="goals">
+                Goals
+                <Tabs.Indicator />
+              </Tabs.Tab>
             </Tabs.List>
           </Tabs.ListContainer>
         </Tabs>
-        {canEdit && (
+        {canEdit && route.view !== 'goals' && (
           <Button onPress={() => setCreating(true)}>
             <Plus />
             New ticket
@@ -199,7 +204,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
         )}
       </div>
 
-      <div className="flex flex-wrap items-end gap-3">
+      {route.view !== 'goals' && <div className="flex flex-wrap items-end gap-3">
         <SearchField aria-label="Search tickets" value={filters.q} onChange={(q) => setFilters((f) => ({ ...f, q }))} className="w-full sm:w-72">
           <SearchField.Group>
             <SearchField.SearchIcon />
@@ -224,9 +229,11 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
             </Switch.Content>
           </Switch>
         )}
-      </div>
+      </div>}
 
-      {route.view === 'requests' ? (
+      {route.view === 'goals' ? (
+        <GoalsView context={route.context} items={board.items} onOpen={open} onError={fail} />
+      ) : route.view === 'requests' ? (
         <RequestsView context={route.context} canEdit={canEdit} q={filters.q} showAll={filters.closed} onShowAll={(closed) => setFilters((f) => ({ ...f, closed }))} onOpen={open} onPromoted={() => void load()} onError={fail} />
       ) : route.view === 'kanban' ? (
         <KanbanView items={visible} canEdit={canEdit} showArchived={filters.archived} onOpen={open} onMove={moveItem} onMenu={openMenu} />

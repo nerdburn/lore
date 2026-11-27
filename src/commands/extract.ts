@@ -12,6 +12,7 @@ import { describeSows, readSows, summarizeSow } from '../sow.js'
 import { appendAudit } from '../audit.js'
 import { isHumanClosed, reidAroundClosed } from '../requests.js'
 import { applyFoldChanges, applyFoldCreations, describeWorkForPrompt, liveLabels, describeWorkHistory, readExternalIssues, readWorkItems, workPrefix, writeWorkItems, type WorkChangeProposal, type WorkCreateProposal } from '../work.js'
+import { activeGoal, MANAGED_GOALS, readRoadmap, normalizeGoalTimeframe, roadmapGoals, type RoadmapGoal } from '../roadmap.js'
 import { loadState, updateState } from '../state.js'
 import { fallbackApiKey, withCliFallback } from '../llm-fallback.js'
 import { STATUS_SUMMARY_SYSTEM, statusSummaryInput, writeStatus } from '../status.js'
@@ -73,7 +74,8 @@ const REPORT_DOC_CHARS = 12_000
 const REPORT_PROMPT_CHARS = 2_000_000
 /** Leave at least this much room for the week's material, however large the context. */
 const REPORT_MIN_MATERIAL_CHARS = 200_000
-const ARTIFACTS = ['requests', 'decisions', 'roadmap'] as const
+// Merge roadmap first so requests can reference goals established in the same batch.
+const ARTIFACTS = ['roadmap', 'requests', 'decisions'] as const
 
 const ITEM_SCHEMAS: Record<string, object> = {
   requests: {
@@ -81,12 +83,13 @@ const ITEM_SCHEMAS: Record<string, object> = {
     properties: {
       id: { type: 'string', description: 'req-0001 style; preserve existing ids' },
       request: { type: 'string' },
+      goal_ids: { type: 'array', items: { type: 'string' }, description: 'Ids of established project goals this ask directly advances. Empty when unclear.' },
       requested_by: { type: 'string' },
       date: { type: 'string' },
       status: { type: 'string', enum: ['open', 'in_progress', 'done', 'stale'] },
       source: { type: 'string', description: 'permalink to the evidence' },
     },
-    required: ['id', 'request', 'requested_by', 'date', 'status', 'source'],
+    required: ['id', 'request', 'goal_ids', 'requested_by', 'date', 'status', 'source'],
     additionalProperties: false,
   },
   decisions: {
@@ -108,6 +111,15 @@ const ITEM_SCHEMAS: Record<string, object> = {
       item: { type: 'string', description: 'the overarching outcome in plain English, not a task title or ticket list' },
       kind: { type: 'string', enum: ['goal', 'work'], description: 'goal for strategic outcomes; work only to classify an existing legacy task-shaped roadmap entry without deleting its history' },
       horizon: { type: 'string', enum: ['short_term', 'long_term', 'unspecified'], description: 'use the stated time horizon, never invent dates or infer it from priority' },
+      timeframe: {
+        type: 'object',
+        properties: {
+          period: { type: 'string', description: 'Calendar YYYY-MM, YYYY-Q1 through YYYY-Q4, or YYYY, resolved relative to the dated statement' },
+          stated_on: { type: 'string', description: 'YYYY-MM-DD of the source establishing timing' },
+        },
+        required: ['period', 'stated_on'],
+        additionalProperties: false,
+      },
       why: { type: 'string', description: 'why the goal matters, supported by cited evidence; empty if unknown' },
       success: { type: 'string', description: 'what achieving the outcome means; no invented targets; empty if unknown' },
       priority_reason: { type: 'string', description: 'plain-English implications for prioritising concrete work, including tradeoffs; empty if not established' },
@@ -199,6 +211,8 @@ Rules:
 - New ids continue the existing sequence (req-0007 after req-0006). Never reuse an existing id for a different item.
 - Jira epics and higher-level planning containers are context for their child work, not actionable tickets. Never create a work item for a container or recreate archived work. A concrete child task can still be tracked separately.
 - Roadmap means overarching short- and long-term goals: the outcomes the client/team want, why they matter, what success means, and how they guide work priorities. It is not a second backlog or an automatic copy of Jira epics. A goal may span several epics or tickets. Write goals as self-contained English explanations. Cite the plan/decision that establishes the goal, not merely an issue name. Preserve goal ids. Use horizon unspecified when the evidence does not establish timing. Keep unknown rationale or success criteria empty rather than inventing them. Closing a supporting ticket does not by itself achieve the goal.
+- A bounded goal covers at most one year. Resolve "this month", "next quarter", or "this year" against the date of the cited statement and preserve that period across later folds. Omit timeframe for open-ended long_term goals, timing beyond one year, or unknown timing.
+- For a request, record goal_ids for active project goals whose outcome it directly advances. Revisit open requests when goals change. A bare ask stays in intake. Record new tickets as unassigned todo with priority omitted unless the evidence establishes an owner, work already underway, or an explicit priority. Recency, goal fit, and an agent acknowledging a request leave the queue intact. Change order only on an explicit decision about what moves.
 - Review legacy roadmap entries against that definition: enrich an evidenced goal in place with kind goal; mark a task-shaped entry kind work, preserving its id, wording, status and source. Never declare a legacy task done just to remove it from the roadmap view. Do not create new kind work roadmap entries. Existing goal entries are updated only on evidence; do not invent a broader strategy from a collection of task titles.
 - Goals guide delivery priority. Link only real, relevant Lore keys in work_items. When a cited goal decision changes what should come first, propose high-confidence work_changes for priority/rank with a reason explaining the goal, the ticket's contribution and the tradeoff, citing that decision. Do not blindly copy a goal's priority to every ticket or override an explicit human priority/order using only an inferred goal relationship. A goal is not itself a work_new ticket: create tickets only for separately committed concrete actions.
 - Compare the pinned facts against the material; report any the evidence now contradicts. An empty contradictions list is the normal case.
@@ -259,8 +273,12 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   const review = opts.review === true && newFiles.length === 0
 
   if (wantArtifacts.length > 0 && (newFiles.length > 0 || review)) {
+    const managed = existsSync(join(root, MANAGED_GOALS))
+    const writable = wantArtifacts.filter(name => !(managed && name === 'roadmap'))
     const artifacts: Record<string, unknown[]> = {}
-    for (const name of wantArtifacts) artifacts[name] = readYamlList(root, `context/derived/${name}.yaml`)
+    for (const name of writable) artifacts[name] = readYamlList(root, `context/derived/${name}.yaml`)
+    if (managed) artifacts.roadmap = readRoadmap(root)
+    else if (artifacts.requests && !artifacts.roadmap) artifacts.roadmap = readYamlList(root, 'context/derived/roadmap.yaml')
     const pins = stringify((parse(readFileSync(join(root, 'context/facts.yaml'), 'utf8')) as Pin[] | null) ?? [])
 
     const batches = review ? [{ text: '(no new material — review the current artifacts and tracked work under the rules)', files: [] as { path: string; length: number }[] }] : pack(newFiles, BATCH_CHARS)
@@ -288,7 +306,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     for (let i = 0; i < batches.length; i++) {
       const inUse = liveLabels(workItems)
       const workNote = `\n\n# Tracked work (lore tracker ${prefix}: key | rank | status | priority | assignee | labels | title | external tracker state)\n${workItems.length ? describeWorkForPrompt(workItems, today) : '(no tickets yet)'}\n\n# Labels in use (the only labels a new ticket may carry)\n${inUse.length ? inUse.join(', ') : '(none yet — leave labels empty)'}`
-      const user = `Today is ${today}.${clientNote}${commitments}${workNote}${groupNote}\n\n# Current artifacts\n${Object.entries(artifacts)
+      const user = `Today is ${today}.${managed ? ' This project has a team-managed roadmap. Its entries are read-only. Return an empty roadmap delta and use the listed active goal IDs for request matching.' : ''}${clientNote}${commitments}${workNote}${groupNote}\n\n# Current artifacts\n${Object.entries(artifacts)
         // Requests a person archived or deleted are theirs: the fold neither sees nor reopens them.
         .map(([name, items]) => `## ${name}\n${stringify(name === 'requests' ? items.filter((i) => !isHumanClosed(i)) : items)}`)
         .join('\n')}\n\n# Pinned facts\n${pins}\n\n# New material\n${batches[i].text}`
@@ -296,12 +314,22 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
         console.warn(`  ⚠ batch ${i + 1} attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`),
       )
       const changes: string[] = []
-      for (const name of wantArtifacts) {
-        const proposed = (result as unknown as Record<string, unknown[]>)[name]
+      for (const name of writable) {
+        let proposed = (result as unknown as Record<string, unknown[]>)[name]
+        if (name === 'roadmap' && Array.isArray(proposed)) {
+          proposed = proposed.map(g => g && typeof g === 'object' ? normalizeGoalTimeframe(g as RoadmapGoal) : g)
+        }
+        if (name === 'requests' && Array.isArray(proposed)) {
+          const activeIds = new Set(roadmapGoals(artifacts.roadmap).filter(activeGoal).map(g => g.id))
+          proposed = proposed.map(r => {
+            const request = r as { goal_ids?: unknown }
+            return Array.isArray(request?.goal_ids) ? { ...request, goal_ids: [...new Set(request.goal_ids.filter(id => activeIds.has(id)))] } : r
+          })
+        }
         const merged = acceptFold(name, artifacts[name], name === 'requests' ? reidAroundClosed(artifacts[name], proposed) : proposed)
         if (merged.rejected) console.warn(`  ⚠ ${name}: model ${merged.rejected}`)
         if (merged.added || merged.updated) changes.push(`${name} +${merged.added}/~${merged.updated}`)
-        for (const item of (result as unknown as Record<string, unknown[]>)[name] ?? []) foldChanges.push(`${name}: ${JSON.stringify(item)}`)
+        for (const item of proposed ?? []) foldChanges.push(`${name}: ${JSON.stringify(item)}`)
         artifacts[name] = merged.items
       }
       contradictions = result.contradictions
@@ -351,7 +379,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       // Checkpoint after every batch — artifacts to disk, consumed files to
       // state.extracted — so a killed fold resumes at the next batch instead
       // of refolding from the start.
-      for (const name of wantArtifacts) {
+      for (const name of writable) {
         writeFileSync(
           join(root, `context/derived/${name}.yaml`),
           `# Derived by \`lore extract\` — regenerable; do not hand-edit.\n` + stringify(artifacts[name]),
@@ -399,7 +427,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
       console.log('weekly report: no material this week')
     } else {
       const artifactContext = ARTIFACTS.map((n) => {
-        const items = readYamlList(root, `context/derived/${n}.yaml`)
+        const items = n === 'roadmap' ? readRoadmap(root) : readYamlList(root, `context/derived/${n}.yaml`)
         return `## ${n}\n${items.length ? stringify(reportArtifacts(n, items, weekAgo)) : '(none yet)'}`
       }).join('\n')
       const sowNote = commitmentsNote(root)

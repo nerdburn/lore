@@ -28,6 +28,13 @@ export function boardRole(config: LoreConfig, email: string, admins: string[] = 
   return role
 }
 
+/** Strategy is edited by the account team. Client-side ticket editors can read it. */
+export function canEditGoals(config: LoreConfig, email: string, admins: string[]): boolean {
+  if (boardRole(config, email, admins) !== 'member') return false
+  return admins.includes(email) || config.client?.owner?.trim().toLowerCase() === email ||
+    !!config.client?.contacts.some(c => c.side === 'team' && (c.email.toLowerCase() === email || c.aliases?.includes(email)))
+}
+
 export const CONTEXT_RE = /^[\w.-]+$/
 
 export interface BareProject {

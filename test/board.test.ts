@@ -583,7 +583,8 @@ test('board requests: lists what the client asked for with its ticket, and a mem
     { project: 'reqs', client: { name: 'Reqs', domains: ['acme.com'] }, sources: {}, board: { enabled: true, members: ['jane@acme.com'], viewers: ['@viewers.io'] } },
     {
       'context/work/lore/REQ.yaml': `- key: REQ-1\n  title: Checkout copy\n  status: todo\n  state: open\n  request: req-0001\n  labels: []\n  sources: []\n  created: 2026-08-04\n  updated: 2026-08-04\n  history: []\n- key: REQ-2\n  title: Black Friday landing page\n  status: in_progress\n  state: open\n  labels: []\n  sources: []\n  created: 2026-08-04\n  updated: 2026-08-04\n  history: []\n`,
-      'context/derived/requests.yaml': `# Derived\n- id: req-0001\n  request: New checkout copy\n  requested_by: Priya Patel (client)\n  date: 2026-09-01\n  status: in_progress\n  source: https://slack.com/archives/C1/p1\n- id: req-0002\n  request: ${long}\n  requested_by: Priya Patel (client)\n  date: 2026-09-10\n  status: open\n- id: req-0003\n  request: Black Friday landing page\n  date: 2026-09-11\n  status: open\n`,
+      'context/derived/roadmap.yaml': '- { id: road-1, kind: goal, item: Increase signup completion, status: planned, timeframe: { period: 2026-Q4, stated_on: 2026-09-01 } }',
+      'context/derived/requests.yaml': `# Derived\n- id: req-0001\n  request: New checkout copy\n  requested_by: Priya Patel (client)\n  date: 2026-09-01\n  status: in_progress\n  source: https://slack.com/archives/C1/p1\n- id: req-0002\n  request: ${long}\n  goal_ids: [road-1]\n  requested_by: Priya Patel (client)\n  date: 2026-09-10\n  status: open\n- id: req-0003\n  request: Black Friday landing page\n  date: 2026-09-11\n  status: open\n`,
     },
   )
   const member = await signIn('jane@acme.com')
@@ -606,6 +607,7 @@ test('board requests: lists what the client asked for with its ticket, and a mem
   assert.equal(made.body.item.title.length <= 90, true, made.body.item.title)
   assert.match(made.body.item.description, /fill the rest in later from their settings page\n\nAsked by Priya Patel \(client\) on 2026-09-10\.$/)
   assert.equal(made.body.request.ticket, 'REQ-3')
+  assert.deepEqual(made.body.request.goals, [{ outcome: 'Increase signup completion', timing: '2026-Q4' }])
 
   const twice = await api('/p/lore-reqs/requests/req-0002/promote', { cookie: member, body: {} })
   assert.equal(twice.status, 400)
@@ -647,4 +649,39 @@ test('board requests: several at once — make tickets, archive, delete, and put
   const back = await bulk(member, ['req-0004', 'req-0005', 'req-0001'], 'restore')
   assert.deepEqual([back.body.changed, back.body.skipped], [['req-0004', 'req-0005'], ['req-0001']])
   assert.equal(state(back.body.requests)['req-0005'], 'open')
+})
+
+test('goals page: team edits take ownership, preserve IDs and related requests, and refuse stale or client edits', async () => {
+  const config = { ...acmeConfig, client: { ...acmeConfig.client, contacts: [{ name: 'PM', email: 'pm@studio.test', side: 'team' }] },
+    board: { ...acmeConfig.board, members: [...acmeConfig.board.members, 'pm@studio.test'] } }
+  const bare = pushContext('lore-goals', config, {
+    'context/derived/roadmap.yaml': '- {id: road-7, kind: goal, item: Improve checkout, status: planned, work_items: [ACM-1]}\n- {id: road-8, item: Legacy entry, status: planned}',
+    'context/derived/requests.yaml': '- {id: req-1, request: Add retry, goal_ids: [road-7], status: open}',
+  })
+  const route = '/p/lore-goals/goals'
+  const pm = await session('pm@studio.test')
+  const client = await session('jane@acme.com')
+  const list = await api(route, { cookie: client })
+  assert.equal(list.body.canEdit, false)
+  assert.equal(list.body.managed, false)
+  const original = list.body.goals[0]
+  assert.equal(original.requests[0].id, 'req-1')
+  const body = { revision: original.revision, item: 'Recover failed checkouts', why: 'Revenue', success: '', priority_reason: '', source: '', priority: 'P1', timing: 'long_term', status: 'in_progress' }
+  const edit = (cookie: string, fields: unknown) => api(route + '/road-7', { cookie, method: 'PATCH', body: fields })
+  assert.equal((await edit(client, body)).status, 403)
+  assert.equal((await edit(pm, body)).status, 200)
+  assert.equal((await edit(pm, body)).status, 409)
+  assert.equal((await api(route, { cookie: pm, body: { ...body, timing: '2999-Q1', revision: null } })).status, 400)
+  const create = await api(route, { cookie: pm, body: { ...body, item: 'Launch subscriptions', revision: null } })
+  assert.equal(create.status, 201)
+  const saved = await api(route, { cookie: pm })
+  assert.equal(saved.body.managed, true)
+  assert.equal(saved.body.canEdit, true)
+  assert.equal(saved.body.goals.length, 2)
+  assert.deepEqual(saved.body.goals[0].work_items, ['ACM-1'])
+  assert.equal(saved.body.goals[0].edited_by, 'pm@studio.test')
+  assert.match(git(bare, 'show', 'HEAD:context/goals.yaml'), /road-8/)
+  assert.match(git(bare, 'show', 'HEAD:context/audit.jsonl'), /"action":"goal"/)
+  const requests = await api('/p/lore-goals/requests', { cookie: client })
+  assert.equal(requests.body.requests[0].goals[0].outcome, body.item)
 })
