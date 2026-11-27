@@ -49,22 +49,23 @@ the response returns the outcomes for the agent to review.
 
 Triage also checks whether an existing open ticket covers the entire ask.
 Jev compares up to eight ticket titles and descriptions, shortlisted using
-words in the request with space reserved for work in flight. It suggests the
-highest-scoring ticket at or above 0.90. The tool reports how many tickets it
-checked. A project manager can open the suggested ticket to review its scope.
+words in the request with space reserved for work in flight. The highest-scoring ticket at or above 0.90 covers
+the ask. Live triage names the ticket and reports how many candidates it checked.
 
-During extraction Lore saves these checks for waiting requests, newest first,
-with up to three new checks per project per run. The Requests tab displays
-saved suggestions immediately. Editing the request or ticket scope, closing
-the ticket or promoting the request hides the old suggestion. The next
-extract retries failed checks. A suggestion alone leaves the queue intact.
+During extraction Lore links each matched request ID to the existing ticket
+and removes it from web intake. It rechecks the request text, ticket scope,
+open status and existing links before writing. The ticket history records
+the Jev score. Existing commitments keep their order. An ask first seen in
+chat can reuse its live match once it has a request ID. Older saved matches
+are eligible too. Extraction checks up to three new asks per project per run,
+newest first, and retries failed checks.
 
 The regular fold reads the conversation and records applicable `goal_ids`
 on requests. The Requests tab shows open asks awaiting triage. An ask leaves this view when
 work is underway, its status closes, or a ticket tracks it. Lore recognizes
 a promoted request ID, a team-confirmed link, or an unambiguous match to
 the original Slack message or external issue URL. A member can use **Link
-existing** to confirm a suggested ticket or pick another ticket. The request
+existing** to attach an ask manually. The request
 and its source remain available in Lore history. Roadmap recall
 also follows the request through promotion to its ticket. An unmatched
 request can stay open. To change the order, record the client's or lead's

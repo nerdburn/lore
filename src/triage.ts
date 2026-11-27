@@ -4,11 +4,10 @@ import { activeGoal, goalTiming, type RoadmapGoal } from './roadmap.js'
 import { inFlight, type LoreWorkItem } from './work.js'
 
 /** Advice for a live conversation. This path has no tracker or roadmap writes. */
-export async function triageRequest(request: string, roadmap: RoadmapGoal[], work: LoreWorkItem[], opts: { apiKey?: string; fetch?: Fetch } = {}) {
+export async function triageRequest(request: string, roadmap: RoadmapGoal[], work: LoreWorkItem[], opts: { apiKey?: string; fetch?: Fetch; liveCache?: string } = {}) {
   const open = work.filter(i => i.state === 'open')
   const summary = (i: LoreWorkItem) => ({ key: i.key, title: i.title, status: i.status, assignee: i.assignee, holder: i.claim?.holder })
   const queue = {
-    disposition: 'intake',
     in_flight: open.filter(inFlight).map(summary),
     next_queued: open.filter(i => !inFlight(i)).slice(0, 5).map(summary),
   }
@@ -16,7 +15,7 @@ export async function triageRequest(request: string, roadmap: RoadmapGoal[], wor
     checkLiveCoverage(request, open, opts),
     goalFit(request, roadmap, opts),
   ])
-  return { ...queue, ...fit, work_coverage: coverage }
+  return { ...queue, ...fit, disposition: coverage.suggestion ? 'covered' : 'intake', work_coverage: coverage }
 }
 
 async function goalFit(request: string, roadmap: RoadmapGoal[],

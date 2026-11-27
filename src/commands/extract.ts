@@ -1,5 +1,5 @@
 import { reconcileProjects } from '../projects.js'
-import { refreshRequestCoverage } from '../request-coverage.js'
+import { liveCoverageCache, refreshRequestCoverage } from '../request-coverage.js'
 import { reconcileDelivery } from '../delivery.js'
 import { importSlackAttachments } from '../attachments.js'
 import { execFileSync } from 'node:child_process'
@@ -422,7 +422,7 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
   }
 
   if (wantArtifacts.includes('requests')) {
-    await refreshRequestCoverage(root, workPrefix(config), { apiKey: process.env.TYPESAFE_API_KEY })
+    await refreshRequestCoverage(root, workPrefix(config), { apiKey: process.env.TYPESAFE_API_KEY, liveCache: liveCoverageCache(root) })
   }
 
   if (reportDue) {
