@@ -4,7 +4,7 @@ import { parse } from 'yaml'
 import type { LoreConfig } from './config.js'
 import { degraded, sourceStatuses } from './health.js'
 import { loadState } from './state.js'
-import { describeDelivery, describeWorkHistory, readWorkItems, workPrefix, type LoreWorkItem } from './work.js'
+import { describeDelivery, describeWorkHistory, requestIds, readWorkItems, workPrefix, type LoreWorkItem } from './work.js'
 import { activeGoal, goalTiming, readRoadmap } from './roadmap.js'
 
 /**
@@ -97,9 +97,9 @@ function section(title: string, lines: string[], cap: number, more: string): str
 export function renderOutstanding(root: string, config: Pick<LoreConfig, 'project' | 'client' | 'work'>): string {
   const items = readWorkItems(root, workPrefix(config))
   const open = items.filter((i) => i.state === 'open')
-  const ticketed = new Set(items.map((i) => i.request).filter(Boolean))
+  const ticketed = new Set(items.flatMap(requestIds))
   const requests = readList(root, 'requests')
-    .filter((r) => (r.status === 'open' || r.status === 'in_progress') && !ticketed.has(r.id))
+    .filter((r) => (r.status === 'open' || r.status === 'in_progress') && (!r.id || !ticketed.has(r.id)))
     .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')))
   const stale = readList(root, 'requests').filter((r) => r.status === 'stale').length
   const allRoadmap = readRoadmap(root)

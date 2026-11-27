@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { LoreConfig } from './config.js'
+import { slackMessageRef } from './connectors/slack.js'
 import { readWorkTable as readGithubTable, type WorkItem as GithubItem } from './connectors/github.js'
 import { readWorkTable as readJiraTable, type JiraWorkItem } from './connectors/jira.js'
 import { readWorkTable as readLinearTable, type LinearWorkItem } from './connectors/linear.js'
@@ -135,6 +136,8 @@ export interface LoreWorkItem {
   labels: string[]
   /** The derived request this was promoted from. */
   request?: string
+  /** Other client asks explicitly linked to this ticket. */
+  linked_requests?: string[]
   external?: ExternalRef
   /** The run working this ticket now, if any. */
   claim?: WorkClaim
@@ -345,7 +348,7 @@ function mergeItem(b: LoreWorkItem, o: LoreWorkItem, t: LoreWorkItem): LoreWorkI
  * PR while the fold records another — so they merge as sets: theirs, plus
  * what ours added, minus what ours removed. Any other field: theirs wins.
  */
-const SET_FIELDS = new Set(['sources', 'labels'])
+const SET_FIELDS = new Set(['sources', 'labels', 'linked_requests'])
 
 function mergeSet(base: string[] = [], ours: string[] = [], theirs: string[] = []): string[] {
   const removed = new Set(base.filter((v) => !ours.includes(v)))
@@ -494,9 +497,50 @@ export interface RequestRow extends DerivedRequest {
   similar?: string
 }
 
-export function requestRows(requests: DerivedRequest[], items: Pick<LoreWorkItem, 'key' | 'title' | 'request' | 'state'>[]): RequestRow[] {
-  const byRequest = new Map(items.filter((i) => i.request).map((i) => [i.request!, i.key]))
-  return requests.map((r) => {
+export function requestIds(item: Pick<LoreWorkItem, 'request' | 'linked_requests'>): string[] {
+  return [...(item.request ? [item.request] : []), ...(Array.isArray(item.linked_requests) ? item.linked_requests : [])]
+}
+
+type RequestTicket = Pick<LoreWorkItem, 'key' | 'request' | 'linked_requests' | 'sources' | 'external'>
+
+// A meeting or thread can contain several different asks. Only infer a link
+// from a unique originating Slack message or a ticket's own external URL.
+export function requestTickets(requests: DerivedRequest[], items: RequestTicket[]) {
+  const links = new Map<string, string>()
+  const origins = new Map<string, string | null>()
+  const add = (source: string | undefined, key: string) => {
+    if (source) origins.set(source, origins.has(source) && origins.get(source) !== key ? null : key)
+  }
+  for (const item of items) {
+    for (const id of requestIds(item)) links.set(id, item.key)
+    if (item.sources[0]) add(slackMessageRef(item.sources[0]), item.key)
+    add(item.external?.url, item.key)
+  }
+  const seen = new Set<string>()
+  const ambiguous = new Set<string>()
+  for (const r of requests) {
+    if (!r.source) continue
+    const source = slackMessageRef(r.source) ?? r.source
+    if (seen.has(source)) ambiguous.add(source)
+    seen.add(source)
+  }
+  for (const r of requests) {
+    if (!r.source || links.has(r.id)) continue
+    const source = slackMessageRef(r.source) ?? r.source
+    const key = origins.get(source)
+    if (key && !ambiguous.has(source)) links.set(r.id, key)
+  }
+  return links
+}
+
+export function inRequestIntake(r: { ticket?: string; status?: string }): boolean {
+  return !r.ticket && (!r.status || r.status === 'open')
+}
+
+export function requestRows(requests: DerivedRequest[], items: (RequestTicket & Pick<LoreWorkItem, 'title' | 'state'>)[], intakeOnly = false): RequestRow[] {
+  const byRequest = requestTickets(requests, items)
+  const visible = intakeOnly ? requests.filter(r => inRequestIntake({ status: r.status, ticket: byRequest.get(r.id) })) : requests
+  return visible.map((r) => {
     const ticket = byRequest.get(r.id)
     const similar = ticket ? undefined : items.find((i) => i.state === 'open' && titleSimilarity(i.title, shortTitle(r.request)) >= 0.7)?.key
     return { ...r, ...(ticket ? { ticket } : {}), ...(similar ? { similar } : {}) }
@@ -933,7 +977,7 @@ export function applyFoldCreations(items: LoreWorkItem[], prefix: string, propos
       continue
     }
     const request = p.request?.trim()
-    const byRequest = request ? items.find((i) => i.request === request) : undefined
+    const byRequest = request ? items.find((i) => requestIds(i).includes(request)) : undefined
     if (byRequest) {
       skipped.push(`"${title}": ${request} is already ${byRequest.key}`)
       continue
@@ -988,7 +1032,7 @@ export function describeWorkForPrompt(items: LoreWorkItem[], today: string): str
       ({ i, idx }) =>
         `${i.key} | rank ${idx + 1} | ${i.status}${i.priority ? ` | ${i.priority}` : ''}${i.assignee ? ` | ${i.assignee}` : ''}${i.labels.length ? ` | #${i.labels.join(' #')}` : ''} | ${i.title}${
           i.external ? ` | ${i.external.system} ${i.external.key}: ${i.external.status}` : ''
-        }${i.request ? ` | from ${i.request}` : ''}${i.description ? `\n  Description: ${i.description.slice(0, 6000)}` : ''}${describeDelivery(i) ? `\n${describeDelivery(i)}` : ''}`,
+        }${requestIds(i).length ? ` | requests ${requestIds(i).join(', ')}` : ''}${i.description ? `\n  Description: ${i.description.slice(0, 6000)}` : ''}${describeDelivery(i) ? `\n${describeDelivery(i)}` : ''}`,
     )
     .join('\n')
 }

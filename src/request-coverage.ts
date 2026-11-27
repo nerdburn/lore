@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path'
 import { JEV_MODEL, jevNouls, type Fetch, type NoulQuestion } from './jev.js'
 import { REQUESTS_FILE } from './requests.js'
-import { inFlight, parseRequests, readWorkItems, type DerivedRequest, type LoreWorkItem } from './work.js'
+import { inFlight, inRequestIntake, requestTickets, parseRequests, readWorkItems, type DerivedRequest, type LoreWorkItem } from './work.js'
 
 export const COVERAGE_FILE = 'context/derived/request-coverage.json'
 const MAX_CANDIDATES = 8
@@ -89,22 +89,22 @@ export async function checkLiveCoverage(request: string, work: Ticket[], opts: O
   return { status: 'needs_review', checked: 0, open: open.length }
 }
 
-const waiting = (r: DerivedRequest) => !['done', 'stale', 'archived', 'deleted'].includes(r.status ?? '')
+const waiting = inRequestIntake
 
 // The fold writes this advisory index alongside its artifacts. Negative checks
 // are reusable too. Failed calls stay pending for the next scheduled extract.
 export async function refreshRequestCoverage(root: string, prefix: string, opts: Options) {
   const source = join(root, REQUESTS_FILE)
   if (!opts.apiKey || !existsSync(source)) return
-  const requests = parseRequests(readFileSync(source, 'utf8')).filter(waiting)
+  const requests = parseRequests(readFileSync(source, 'utf8'))
   const path = join(root, COVERAGE_FILE)
   if (!requests.length && !existsSync(path)) return
   const work = requests.length ? readWorkItems(root, prefix) : []
-  const linked = new Set(work.map(t => t.request))
+  const linked = requestTickets(requests, work)
   const shortlist = candidateIndex(work)
   const previous = existsSync(path) ? readFileSync(path, 'utf8') : ''
   const saved = parseCoverage(previous)
-  const pending = requests.filter(r => !linked.has(r.id) && r.request.length <= 20_000)
+  const pending = requests.filter(r => waiting(r) && !linked.has(r.id) && r.request.length <= 20_000)
     .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
   const active = new Set(pending.map(r => requestHash(r.request)))
   for (const id of Object.keys(saved)) if (!active.has(id)) delete saved[id]

@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { parse } from 'yaml'
 import { AUDIT_FILE, appendAudit } from '../audit.js'
 import { git, resolveContext, type ResolvedContext, type ResolveOptions } from '../context.js'
 import { pushWithRebase } from '../push.js'
@@ -15,6 +14,8 @@ import {
   inFlight,
   nextKey,
   rankItem,
+  requestTickets,
+  parseRequests,
   readExternalIssues,
   readWorkItems,
   shortTitle,
@@ -247,17 +248,35 @@ export function workAdd(cwd: string, input: WorkAddInput, opts: WorkWriteOptions
   })
 }
 
+export function linkRequest(cwd: string, id: string, key: string, opts: WorkWriteOptions): LoreWorkItem {
+  const ctx = resolveContext(cwd, opts)
+  const path = join(ctx.root, 'context/derived/requests.yaml')
+  const requests = parseRequests(existsSync(path) ? readFileSync(path, 'utf8') : '')
+  const request = requests.find(r => r.id === id)
+  if (!request) throw new Error('No such request')
+  return mutate(cwd, opts, (items, _prefix, actor, at) => {
+    const item = requireItem(items, key)
+    const already = requestTickets(requests, items).get(id)
+    if (already) throw new Error(id + ' is already tracked as ' + already)
+    const previous = item.linked_requests ?? []
+    item.linked_requests = [...previous, id]
+    applyChange(item, {}, { at, by: actor, via: opts.via ?? 'cli', reason: 'Linked existing ticket to ' + id },
+      { linked_requests: [previous, item.linked_requests] })
+    return { item, message: 'link ' + id + ' to ' + item.key }
+  })
+}
+
 /** Turn a derived request (req-0007) into a tracked item, keeping its evidence. */
 export function workPromote(cwd: string, requestId: string, input: { title?: string; description?: string; priority?: WorkPriority; reason?: string } = {}, opts: WorkWriteOptions = {}): LoreWorkItem {
   const ctx = resolveContext(cwd, opts)
   const path = join(ctx.root, 'context/derived/requests.yaml')
-  const requests = existsSync(path) ? ((parse(readFileSync(path, 'utf8')) as Record<string, unknown>[] | null) ?? []) : []
+  const requests = existsSync(path) ? parseRequests(readFileSync(path, 'utf8')) : []
   const req = requests.find((r) => r.id === requestId.trim())
   if (!req) throw new Error(`work promote: no derived request ${requestId} (see \`lore recall requests\`)`)
   const priority = requirePriority(input.priority)
   return mutate(cwd, opts, (items, prefix, actor, at) => {
-    const already = items.find((i) => i.request === req.id)
-    if (already) throw new Error(`work promote: ${req.id} is already tracked as ${already.key}`)
+    const already = requestTickets(requests, items).get(req.id)
+    if (already) throw new Error(`work promote: ${req.id} is already tracked as ${already}`)
     const source = typeof req.source === 'string' ? req.source : undefined
     // A long ask becomes a short title, with the ask itself kept as the ticket's body.
     const asked = String(req.request ?? req.id).replace(/\s+/g, ' ').trim()
@@ -302,14 +321,15 @@ export async function workPromoteMany(cwd: string, requestIds: string[], input: 
   const skipped: string[] = []
   await mutateBatch(cwd, opts, 'work item change', async (items, prefix, actor, at, ctx) => {
     const path = join(ctx.root, 'context/derived/requests.yaml')
-    const requests = existsSync(path) ? ((parse(readFileSync(path, 'utf8')) as Record<string, unknown>[] | null) ?? []) : []
+    const requests = existsSync(path) ? parseRequests(readFileSync(path, 'utf8')) : []
     const missing = wanted.filter((id) => !requests.some((r) => r.id === id))
     if (missing.length) throw new Error(`work promote: no derived request ${missing.join(', ')} — nothing changed`)
+    const byRequest = requestTickets(requests, items)
     for (const id of wanted) {
       const req = requests.find((r) => r.id === id)!
-      const already = items.find((i) => i.request === id)
+      const already = byRequest.get(id)
       if (already) {
-        skipped.push(`${id} is already ${already.key}`)
+        skipped.push(`${id} is already ${already}`)
         continue
       }
       const source = typeof req.source === 'string' ? req.source : undefined
@@ -762,6 +782,7 @@ export function workShow(cwd: string, key: string, opts: ResolveOptions & { json
     if (item.external) console.log(`external: ${item.external.system} ${item.external.key} (${item.external.status}) ${item.external.url}`)
     for (const pr of item.related_prs ?? []) console.log(`related PR: ${pr.repo}#${pr.number} (${pr.status}) ${pr.title}\n  ${pr.reason} ${pr.url}`)
     if (item.request) console.log(`from request: ${item.request}`)
+    if (item.linked_requests?.length) console.log(`linked requests: ${item.linked_requests.join(', ')}`)
     for (const s of item.sources) console.log(`source: ${s}`)
     console.log('history:')
     for (const h of item.history) {

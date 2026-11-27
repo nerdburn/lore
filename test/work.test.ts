@@ -19,6 +19,7 @@ import {
   mergeWorkItems,
   mirrorExternal,
   parseWorkItems,
+  requestTickets,
   readExternalIssues,
   readWorkItems,
   summarizeForRecall,
@@ -721,4 +722,20 @@ test('Jira mirror closes legacy epic tickets but never imports or reopens planni
   writeFileSync(join(root, 'context/work/jira/ACM.yaml'), jiraTable('In Progress', 'In Progress').replace('type: Story', 'type: Epic'))
   assert.equal(mirrorExternal(root, MIRROR_CONFIG, AT).updated, 0)
   assert.equal(readWorkItems(root, 'ACM')[0].status, 'done')
+})
+
+test('infer a request link only from a unique originating message or external issue', () => {
+  const message = 'https://slack.com/archives/C123/p1700000000000000'
+  const issue = 'https://acme.atlassian.net/browse/ACM-71'
+  const work = parseWorkItems(JSON.stringify([
+    { key: 'A-1', title: 'First', sources: [message] },
+    { key: 'A-2', title: 'Second', external: { url: issue } },
+  ]))
+  const requests = [{ id: 'r1', request: 'one', source: message }, { id: 'r2', request: 'two', source: issue }]
+  assert.deepEqual([...requestTickets(requests, work)], [['r1', 'A-1'], ['r2', 'A-2']])
+  assert.equal(requestTickets([...requests, { ...requests[0], id: 'r3' }], work).has('r1'), false)
+  work[1].sources = [message]
+  assert.equal(requestTickets(requests, work).has('r1'), false)
+  work[1].linked_requests = ['r1']
+  assert.equal(requestTickets(requests, work).get('r1'), 'A-2')
 })

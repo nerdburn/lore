@@ -12,11 +12,11 @@ import { gitShow } from '../bare.js'
 import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type BlobStore } from '../blobs.js'
 import { addComment, ticketThread } from '../comments.js'
 import { workAdd, workMove, workSet } from '../commands/project.js'
-import { statusBeforeArchive, workPromote, workPromoteMany, workRank, type WorkWriteOptions } from '../commands/work.js'
+import { linkRequest, statusBeforeArchive, workPromote, workPromoteMany, workRank, type WorkWriteOptions } from '../commands/work.js'
 import { COVERAGE_FILE, parseCoverage, savedCoverage } from '../request-coverage.js'
 import { requestsSet, REQUESTS_FILE } from '../requests.js'
 import { serializeFor } from '../queue.js'
-import { findItem, labelCounts, parseRequests, requestRows, workPrefix, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget, type WorkItemSummary } from '../work.js'
+import { findItem, labelCounts, parseRequests, requestRows, requestTickets, workPrefix, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget, type WorkItemSummary } from '../work.js'
 import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, canEditGoals, type BoardRole, type BareProject } from './access.js'
 import { BoardSnapshots, emptyBoardCounts } from './snapshots.js'
 import type { LoreConfig } from '../config.js'
@@ -91,12 +91,12 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
     return { goals, managed: !!manual }
   }
 
-  function boardRequests(project: BareProject, items: WorkItemSummary[]) {
+  function boardRequests(project: BareProject, items: WorkItemSummary[], intakeOnly = false) {
     const { goals } = boardRoadmap(project)
     const bare = join(opts.repos, `${project.context}.git`)
     const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true))
     const coverage = savedCoverage(parseCoverage(gitShow(bare, COVERAGE_FILE, true)), items)
-    return requestRows(requests, items).map(r => ({
+    return requestRows(requests, items, intakeOnly).map(r => ({
       ...r, coverage: coverage(r), goals: goals.filter(g => r.goal_ids?.includes(g.id)).map(g => ({ outcome: g.item, timing: goalTiming(g) })),
     }))
   }
@@ -323,11 +323,15 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         if (!project || !boardRole(project.config, email, admins)) return send(res, 404, { error: 'no such board' }), true
         const canEdit = canEditGoals(project.config, email, admins)
         if (!rawId && method === 'GET') {
-          const { goals, managed } = boardRoadmap(project)
+          const current = await visibleItems(project, email)
+          const { goals, managed } = boardRoadmap(current.project)
           const bare = join(opts.repos, `${context}.git`)
-          const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true)).filter(r => r.status !== 'archived' && r.goal_ids?.length)
-          return send(res, 200, { managed, canEdit, goals: goals.map(g => ({
-            ...g, revision: goalRevision(g), requests: requests.filter(r => r.goal_ids?.includes(g.id)).map(r => ({ id: r.id, request: r.request })),
+          const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true))
+          const links = requestTickets(requests, current.items)
+          return send(res, 200, { managed, canEdit: canEditGoals(current.project.config, email, admins), goals: goals.map(g => ({
+            ...g, revision: goalRevision(g), requests: requests.filter(r => r.status !== 'archived' && r.goal_ids?.includes(g.id)).map(r => ({
+              id: r.id, request: r.request, status: r.status, ticket: links.get(r.id),
+            })),
           })) }), true
         }
         if ((!rawId && method === 'POST') || (rawId && method === 'PATCH')) {
@@ -345,22 +349,27 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
 
       // Client requests the fold recorded, with the ticket tracking each one (if any);
       // a member can turn one into a ticket.
-      const reqRoute = /^\/p\/([\w.-]+)\/requests(?:\/([\w.-]+)\/promote)?$/.exec(route)
+      const reqRoute = /^\/p\/([\w.-]+)\/requests(?:\/([\w.-]+)\/(promote|link))?$/.exec(route)
       if (reqRoute) {
-        const [, context, id] = reqRoute
+        const [, context, id, action] = reqRoute
         const project = bareProject(opts.repos, context)
         const role = project ? boardRole(project.config, email, admins) : undefined
         if (!project || !role) return send(res, 404, { error: 'no such board' }), true
         if (!id && method === 'GET') {
           const current = await visibleItems(project, email)
           const config = current.project.config
-          return send(res, 200, { context, project: config.project, client: config.client?.name, role: current.role, archived: config.lifecycle === 'archived', requests: boardRequests(current.project, current.items) }), true
+          return send(res, 200, { context, project: config.project, client: config.client?.name, role: current.role, archived: config.lifecycle === 'archived', requests: boardRequests(current.project, current.items, url.searchParams.get('view') === 'intake') }), true
         }
         if (id && method === 'POST') {
           if (role !== 'member') return send(res, 403, { error: 'you can view this board but not change it' }), true
           const body = await readBody(req)
+          const w: WorkWriteOptions = { context, via: 'web', actor: email, operationId: randomUUID() }
+          if (action === 'link') {
+            const item = await serializeFor(context)(async () => linkRequest(cwd, id, str(body.key) ?? '', w))
+            return send(res, 200, { item }), true
+          }
           const item = await serializeFor(context)(async () =>
-            workPromote(cwd, id, { title: str(body.title), priority: str(body.priority) as never, reason: 'made a ticket from the requests list' }, { context, via: 'web', actor: email, operationId: randomUUID() }),
+            workPromote(cwd, id, { title: str(body.title), priority: str(body.priority) as never, reason: 'made a ticket from the requests list' }, w),
           )
           const current = await visibleItems(project, email)
           return send(res, 201, { item, request: boardRequests(current.project, current.items).find((r) => r.id === id) }), true
@@ -392,7 +401,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           throw new Error('action must be ticket, archive, delete or restore')
         })
         const current = await visibleItems(project, email)
-        return send(res, 200, { ...done, requests: boardRequests(current.project, current.items) }), true
+        return send(res, 200, { ...done, requests: boardRequests(current.project, current.items, url.searchParams.get('view') === 'intake') }), true
       }
 
       const fileRoute = /^\/p\/([\w.-]+)\/files\/([a-f0-9]{64})$/.exec(route)
