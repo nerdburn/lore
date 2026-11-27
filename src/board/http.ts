@@ -13,6 +13,7 @@ import { blobStoreFromEnv, MAX_ATTACHMENT_BYTES, TooLarge, writeHashed, type Blo
 import { addComment, ticketThread } from '../comments.js'
 import { workAdd, workMove, workSet } from '../commands/project.js'
 import { statusBeforeArchive, workPromote, workPromoteMany, workRank, type WorkWriteOptions } from '../commands/work.js'
+import { COVERAGE_FILE, parseCoverage, savedCoverage } from '../request-coverage.js'
 import { requestsSet, REQUESTS_FILE } from '../requests.js'
 import { serializeFor } from '../queue.js'
 import { findItem, labelCounts, parseRequests, requestRows, workPrefix, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget, type WorkItemSummary } from '../work.js'
@@ -94,8 +95,9 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
     const { goals } = boardRoadmap(project)
     const bare = join(opts.repos, `${project.context}.git`)
     const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true))
+    const coverage = savedCoverage(parseCoverage(gitShow(bare, COVERAGE_FILE, true)), items)
     return requestRows(requests, items).map(r => ({
-      ...r, goals: goals.filter(g => r.goal_ids?.includes(g.id)).map(g => ({ outcome: g.item, timing: goalTiming(g) })),
+      ...r, coverage: coverage(r), goals: goals.filter(g => r.goal_ids?.includes(g.id)).map(g => ({ outcome: g.item, timing: goalTiming(g) })),
     }))
   }
 

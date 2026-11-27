@@ -7,6 +7,7 @@ import { brotliCompressSync, gzipSync } from 'node:zlib'
 import { after, before, test } from 'node:test'
 import { parse } from 'yaml'
 import { assigneeResolver, boardRole, principalMatches } from '../src/board/access.js'
+import { COVERAGE_FILE, refreshRequestCoverage } from '../src/request-coverage.js'
 import { CodeStore, SessionSigner } from '../src/board/auth.js'
 import type { MailMessage } from '../src/board/email.js'
 import { boardAdd, boardEnable, boardRemove } from '../src/commands/board.js'
@@ -701,4 +702,27 @@ test('a primed snapshot becomes inaccessible to a signed-in viewer immediately a
   assert.equal((await api(path, { cookie })).status, 404)
   assert.equal((await api(path + '/requests', { cookie })).status, 404)
   assert.equal((await api('/projects', { cookie })).body.projects.some((p: any) => p.context === context), false)
+})
+
+test('the requests board serves saved Jev coverage as a suggestion distinct from a promoted ticket', async () => {
+  const context = 'lore-covered-work'
+  const bare = pushContext(context, acmeConfig, {
+    'context/work/lore/ACM.yaml': TRACKER,
+    'context/derived/requests.yaml': '- {id: req-1, request: Refresh payment wording, status: open}',
+  })
+  const clone = join(home, 'covered-work')
+  execFileSync('git', ['clone', '--quiet', bare, clone])
+  await refreshRequestCoverage(clone, 'ACM', { apiKey: 'fixture', fetch: async (_, init) => {
+    const { state } = JSON.parse(String(init?.body))
+    return Response.json({ answers: Object.fromEntries(state.tickets.map((t: { title: string }, i: number) =>
+      ['ticket_' + i, { noul: t.title === 'Checkout copy' ? 0.98 : 0.01 }])) })
+  } })
+  git(clone, 'add', COVERAGE_FILE)
+  git(clone, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '--quiet', '-m', 'save coverage')
+  git(clone, 'push', '--quiet', 'origin', 'main')
+  const cookie = await signIn('covered@viewers.io')
+  const res = await api('/p/' + context + '/requests', { cookie })
+  assert.equal(res.status, 200)
+  assert.deepEqual(res.body.requests[0].coverage, { key: 'ACM-2', title: 'Checkout copy', score: 0.98 })
+  assert.equal(res.body.requests[0].ticket, undefined)
 })

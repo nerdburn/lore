@@ -211,7 +211,7 @@ test('delivery: bounded catch-up continues automatically without repeating evalu
   assert.equal(second.pending, 0)
 })
 
-test('extract: historical delivery evidence reaches the fold with descriptions without extra classification', async () => {
+test('extract: historical delivery evidence reaches the fold with PR matching disabled and request coverage runs independently', async () => {
   const { root } = fixture([ticket()], [pr(42, { state: 'closed', merged: true, draft: false })])
   writeFileSync(join(root, 'context/derived/requests.yaml'), '- id: req-0001\n  request: Account recovery\n  status: open\n')
   const bin = join(root, 'bin')
@@ -235,9 +235,16 @@ if (prompt.includes('# New material')) {
     process.env.LORE_LLM = 'cli'
     process.env.TYPESAFE_API_KEY = 'test'
     process.env.LORE_PR_MATCHING = 'off'
-    globalThis.fetch = (async () => { classificationCalls++; throw new Error('No classification expected with PR matching disabled') }) as Fetch
+    const sent: unknown[] = []
+    globalThis.fetch = (async (_, init) => {
+      classificationCalls++
+      const { state, questions } = JSON.parse(String(init?.body))
+      sent.push([state.request, Object.keys(questions)])
+      return Response.json({ answers: { ticket_0: { noul: 0.94 } } })
+    }) as Fetch
     await captureConsole(() => extract(root))
-    assert.equal(classificationCalls, 0, 'ordinary extraction needs no additional classification')
+    assert.equal(classificationCalls, 1)
+    assert.deepEqual(sent, [['Account recovery', ['ticket_0']]], 'only request coverage calls Jev')
     const prompt = readFileSync(promptFile, 'utf8')
     assert.match(prompt, /Related PR acme\/web#42/)
     assert.match(prompt, /Reset endpoint, email and reset screen/)

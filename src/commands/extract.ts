@@ -1,4 +1,5 @@
 import { reconcileProjects } from '../projects.js'
+import { refreshRequestCoverage } from '../request-coverage.js'
 import { reconcileDelivery } from '../delivery.js'
 import { importSlackAttachments } from '../attachments.js'
 import { execFileSync } from 'node:child_process'
@@ -418,6 +419,10 @@ export async function extract(root: string, opts: { report?: boolean; review?: b
     }
   } else if (wantArtifacts.length > 0) {
     console.log('no new stream material since last extract')
+  }
+
+  if (wantArtifacts.includes('requests')) {
+    await refreshRequestCoverage(root, workPrefix(config), { apiKey: process.env.TYPESAFE_API_KEY })
   }
 
   if (reportDue) {

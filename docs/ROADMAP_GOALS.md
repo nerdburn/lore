@@ -47,6 +47,18 @@ work in flight and up to five queued tickets in tracker rank order. With
 and suggests direct matches scoring at least 0.85. If Jev is unavailable,
 the response returns the outcomes for the agent to review.
 
+Triage also checks whether an existing open ticket covers the entire ask.
+Jev compares up to eight ticket titles and descriptions, shortlisted using
+words in the request with space reserved for work in flight. It suggests the
+highest-scoring ticket at or above 0.90. The tool reports how many tickets it
+checked. A project manager can open the suggested ticket to review its scope.
+
+During extraction Lore saves these checks for waiting requests, newest first,
+with up to three new checks per project per run. The Requests tab displays
+saved suggestions immediately. Editing the request or ticket scope, closing
+the ticket or promoting the request hides the old suggestion. The next
+extract retries failed checks. A suggestion alone leaves the queue intact.
+
 The regular fold reads the conversation and records applicable `goal_ids`
 on requests. The Requests tab shows the linked outcomes. Roadmap recall
 also follows the request through promotion to its ticket. An unmatched

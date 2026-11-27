@@ -124,6 +124,7 @@ export interface ClientRequest {
   ticket?: string
   /** An open ticket that reads like this request. */
   similar?: string
+  coverage?: { key: string; title: string; score: number }
 }
 
 export interface Board {
