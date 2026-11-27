@@ -685,3 +685,20 @@ test('goals page: team edits take ownership, preserve IDs and related requests, 
   const requests = await api('/p/lore-goals/requests', { cookie: client })
   assert.equal(requests.body.requests[0].goals[0].outcome, body.item)
 })
+
+test('a primed snapshot becomes inaccessible to a signed-in viewer immediately after a config push', async () => {
+  const context = 'lore-revoked-viewer'
+  const bare = pushContext(context, acmeConfig, { 'context/work/lore/ACM.yaml': TRACKER })
+  const cookie = await signIn('revocation@viewers.io')
+  const path = '/p/' + context
+  assert.equal((await api(path, { cookie })).body.items.length, 3)
+  const clone = join(home, 'revoke-access')
+  execFileSync('git', ['clone', '--quiet', bare, clone])
+  writeFileSync(join(clone, 'lore.json'), JSON.stringify({ ...acmeConfig, board: { ...acmeConfig.board, viewers: [] } }))
+  git(clone, 'add', 'lore.json')
+  git(clone, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '--quiet', '-m', 'remove viewer')
+  git(clone, 'push', '--quiet', 'origin', 'main')
+  assert.equal((await api(path, { cookie })).status, 404)
+  assert.equal((await api(path + '/requests', { cookie })).status, 404)
+  assert.equal((await api('/projects', { cookie })).body.projects.some((p: any) => p.context === context), false)
+})

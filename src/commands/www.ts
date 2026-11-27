@@ -143,6 +143,7 @@ export function www(opts: WwwOptions): { close(): Promise<void>; ready: Promise<
   return {
     ready,
     close: async () => {
+      await board?.close()
       await mcp?.close()
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
     },

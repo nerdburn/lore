@@ -15,8 +15,9 @@ import { workAdd, workMove, workSet } from '../commands/project.js'
 import { statusBeforeArchive, workPromote, workPromoteMany, workRank, type WorkWriteOptions } from '../commands/work.js'
 import { requestsSet, REQUESTS_FILE } from '../requests.js'
 import { serializeFor } from '../queue.js'
-import { findItem, labelCounts, parseRequests, requestRows, summarizeForRecall, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget } from '../work.js'
+import { findItem, labelCounts, parseRequests, requestRows, workPrefix, WORK_PRIORITIES, WORK_STATUSES, type LoreWorkItem, type RankTarget, type WorkItemSummary } from '../work.js'
 import { assigneeResolver, assigneeOptions, bareProject, bareProjects, bareWorkItems, boardRole, canEditGoals, type BoardRole, type BareProject } from './access.js'
+import { BoardSnapshots, emptyBoardCounts } from './snapshots.js'
 import type { LoreConfig } from '../config.js'
 import { boardSecret, CodeStore, cookieHeader, normalizeEmail, RateLimiter, readCookie, SessionSigner, type Session } from './auth.js'
 import { codeEmail, createSendMail, emailConfigFromEnv, type SendMail } from './email.js'
@@ -64,6 +65,7 @@ export interface BoardOptions {
 }
 
 export interface BoardHandler {
+  close(): Promise<void>
   handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean>
   /** The signed-in session on this request, if any. */
   session(req: IncomingMessage): Session | undefined
@@ -88,11 +90,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
     return { goals, managed: !!manual }
   }
 
-  function boardRequests(project: BareProject) {
+  function boardRequests(project: BareProject, items: WorkItemSummary[]) {
     const { goals } = boardRoadmap(project)
     const bare = join(opts.repos, `${project.context}.git`)
     const requests = parseRequests(gitShow(bare, REQUESTS_FILE, true))
-    return requestRows(requests, bareWorkItems(opts.repos, project).items).map(r => ({
+    return requestRows(requests, items).map(r => ({
       ...r, goals: goals.filter(g => r.goal_ids?.includes(g.id)).map(g => ({ outcome: g.item, timing: goalTiming(g) })),
     }))
   }
@@ -120,6 +122,18 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
     return boardPeople(config, all)
       .filter((p) => p.role === 'member')
       .map((p) => resolve(p.email))
+  }
+
+  const snapshots = new BoardSnapshots(opts.repos, undefined, log)
+  const close = snapshots.start()
+
+  // Recheck the live configuration after a potentially slow first build.
+  async function visibleItems(project: BareProject, email: string) {
+    const items = await snapshots.read(project, 'items').catch(() => { throw new SnapshotUnavailable() })
+    const current = bareProject(opts.repos, project.context)
+    const role = current && boardRole(current.config, email, admins)
+    if (!current || !role || workPrefix(current.config) !== workPrefix(project.config)) throw new BoardUnavailable()
+    return { project: current, role, items }
   }
 
   function eligible(email: string): boolean {
@@ -281,14 +295,22 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
 
       if (route === '/projects' && method === 'GET') {
         const allProfiles = readProfiles(profiles)
-        const projects = bareProjects(opts.repos)
-          .map((p) => ({ p, role: boardRole(p.config, email, admins) }))
-          .filter((x): x is { p: typeof x.p; role: BoardRole } => Boolean(x.role))
-          .map(({ p, role }) => {
-            const { prefix, items } = bareWorkItems(opts.repos, p)
-            const counts = Object.fromEntries(WORK_STATUSES.map((st) => [st, items.filter((i) => i.status === st).length]))
-            return { context: p.context, project: p.config.project, client: p.config.client?.name, prefix, role, archived: p.config.lifecycle === 'archived', counts, people: boardPeople(p.config, allProfiles) }
+        const visible = bareProjects(opts.repos).filter(p => boardRole(p.config, email, admins))
+        const rows = await Promise.all(visible.map(async p => {
+          const counts = await snapshots.read(p, 'counts').catch(() => {
+            // Keep the project list available if one repo has an unreadable tracker.
+            log('Could not read board counts for ' + p.context)
+            return emptyBoardCounts()
           })
+          return { context: p.context, prefix: workPrefix(p.config), counts }
+        }))
+        const projects = rows.flatMap(({ context, prefix, counts }) => {
+          const p = bareProject(opts.repos, context)
+          const role = p && boardRole(p.config, email, admins)
+          if (!p || !role || workPrefix(p.config) !== prefix) return []
+          return [{ context, project: p.config.project, client: p.config.client?.name, prefix, role,
+            archived: p.config.lifecycle === 'archived', counts, people: boardPeople(p.config, allProfiles) }]
+        })
         return send(res, 200, { projects }), true
       }
 
@@ -328,7 +350,9 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
         const role = project ? boardRole(project.config, email, admins) : undefined
         if (!project || !role) return send(res, 404, { error: 'no such board' }), true
         if (!id && method === 'GET') {
-          return send(res, 200, { context, project: project.config.project, client: project.config.client?.name, role, archived: project.config.lifecycle === 'archived', requests: boardRequests(project) }), true
+          const current = await visibleItems(project, email)
+          const config = current.project.config
+          return send(res, 200, { context, project: config.project, client: config.client?.name, role: current.role, archived: config.lifecycle === 'archived', requests: boardRequests(current.project, current.items) }), true
         }
         if (id && method === 'POST') {
           if (role !== 'member') return send(res, 403, { error: 'you can view this board but not change it' }), true
@@ -336,7 +360,8 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           const item = await serializeFor(context)(async () =>
             workPromote(cwd, id, { title: str(body.title), priority: str(body.priority) as never, reason: 'made a ticket from the requests list' }, { context, via: 'web', actor: email, operationId: randomUUID() }),
           )
-          return send(res, 201, { item, request: boardRequests(project).find((r) => r.id === id) }), true
+          const current = await visibleItems(project, email)
+          return send(res, 201, { item, request: boardRequests(current.project, current.items).find((r) => r.id === id) }), true
         }
         return send(res, 404, { error: 'not found' }), true
       }
@@ -364,17 +389,25 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
           }
           throw new Error('action must be ticket, archive, delete or restore')
         })
-        return send(res, 200, { ...done, requests: boardRequests(project) }), true
+        const current = await visibleItems(project, email)
+        return send(res, 200, { ...done, requests: boardRequests(current.project, current.items) }), true
       }
 
       const fileRoute = /^\/p\/([\w.-]+)\/files\/([a-f0-9]{64})$/.exec(route)
       const m = fileRoute ? null : /^\/p\/([\w.-]+)(?:\/items(?:\/([\w.-]+)(?:\/(move|rank|thread|comments|files|detach))?)?)?$/.exec(route)
       if (!m && !fileRoute) return send(res, 404, { error: 'not found' }), true
       const [, context, key, action] = (m ?? [route, fileRoute![1], undefined, undefined]) as unknown as [string, string, string | undefined, string | undefined]
-      const project = bareProject(opts.repos, context)
-      const role = project ? boardRole(project.config, email, admins) : undefined
+      let project = bareProject(opts.repos, context)
+      let role = project ? boardRole(project.config, email, admins) : undefined
       // A board you can't see and a board that doesn't exist look the same.
       if (!project || !role) return send(res, 404, { error: 'no such board' }), true
+      let summaries: WorkItemSummary[] = []
+      if (method === 'GET' && !key && !fileRoute) {
+        const current = await visibleItems(project, email)
+        project = current.project
+        role = current.role
+        summaries = current.items
+      }
       const bare = join(opts.repos, `${context}.git`)
 
       // A file: only one this board's record names, so a hash alone opens nothing.
@@ -396,23 +429,22 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
 
       const resolveAssignee = assigneeResolver(project.config, readProfiles(profiles),
         bareProjects(opts.repos).filter(p => boardRole(p.config, email, admins)).map(p => p.config))
-      const canonicalItem = (item: LoreWorkItem): LoreWorkItem => item.assignee ? { ...item, assignee: resolveAssignee(item.assignee) } : item
-      const optionsFor = (items: LoreWorkItem[]) => [...new Set(assigneeOptions(project.config, items,
+      const canonicalItem = <T extends Pick<LoreWorkItem, 'assignee'>>(item: T): T => item.assignee ? { ...item, assignee: resolveAssignee(item.assignee) } : item
+      const optionsFor = (items: Pick<LoreWorkItem, 'assignee'>[]) => [...new Set(assigneeOptions(project.config, items,
         [...memberAssignees(project.config, resolveAssignee), ...(role === 'member' ? [resolveAssignee(email)] : [])]).map(resolveAssignee))].sort((a, b) => a.localeCompare(b))
 
       if (method === 'GET') {
-        const { prefix, items: storedItems } = bareWorkItems(opts.repos, project)
-        const items = storedItems.map(canonicalItem)
         if (key) {
-          const item = findItem(items, key)
-          return item ? send(res, 200, { item }) : send(res, 404, { error: `no item ${key}` }), true
+          const item = findItem(bareWorkItems(opts.repos, project).items, key)
+          return item ? send(res, 200, { item: canonicalItem(item) }) : send(res, 404, { error: `no item ${key}` }), true
         }
+        const items = summaries.map(canonicalItem)
         return (
           send(res, 200, {
             context,
             project: project.config.project,
             client: project.config.client?.name,
-            prefix,
+            prefix: workPrefix(project.config),
             role,
             archived: project.config.lifecycle === 'archived',
             statuses: WORK_STATUSES,
@@ -421,7 +453,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
             assignees: optionsFor(items),
             // "Assign to me": who the signed-in person is, as an assignee on this board.
             me_assignee: resolveAssignee(email),
-            items: items.map((i) => summarizeForRecall(i)),
+            items,
             people: boardPeople(project.config, readProfiles(profiles)),
           }),
           true
@@ -528,6 +560,11 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
       return send(res, 405, { error: 'method not allowed' }), true
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      if (err instanceof SnapshotUnavailable) {
+        log('Could not read the board snapshot for ' + path)
+        return send(res, 503, { error: 'Could not load the current tracker. Please retry.' }), true
+      }
+      if (err instanceof BoardUnavailable) return send(res, 404, { error: 'no such board' }), true
       if (err instanceof GoalConflict) return send(res, 409, { error: message }), true
       if (err instanceof BodyError) return send(res, 400, { error: message }), true
       log(`${method} ${path}: ${message.split('\n')[0]}`)
@@ -536,6 +573,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
   }
 
   return {
+    close,
     handle,
     session,
     isAdmin: (req) => {
@@ -544,6 +582,9 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
     },
   }
 }
+
+class BoardUnavailable extends Error {}
+class SnapshotUnavailable extends Error {}
 
 // ---- helpers ----
 
