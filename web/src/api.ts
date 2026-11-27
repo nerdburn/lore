@@ -104,7 +104,7 @@ export interface Goal {
   edited_by?: string
   edited_at?: string
   revision: string
-  requests?: { id: string; request: string }[]
+  requests?: { id: string; request: string; status?: string; ticket?: string }[]
 }
 export interface GoalsPage { goals: Goal[]; managed: boolean; canEdit: boolean }
 export interface GoalFields {
@@ -293,9 +293,10 @@ export const api = {
   goals: (context: string) => call<GoalsPage>(`/p/${enc(context)}/goals`),
   saveGoal: (context: string, id: string | undefined, fields: GoalFields) =>
     call<{ goal: Goal }>(`/p/${enc(context)}/goals${id ? `/${enc(id)}` : ''}`, { method: id ? 'PATCH' : 'POST', body: fields }),
-  requests: (context: string) => call<{ requests: ClientRequest[]; role: Role; archived: boolean }>(`/p/${enc(context)}/requests`),
+  requests: (context: string) => call<{ requests: ClientRequest[]; role: Role; archived: boolean }>(`/p/${enc(context)}/requests?view=intake`),
   requestsBulk: (context: string, ids: string[], action: 'ticket' | 'archive' | 'delete' | 'restore') =>
-    call<{ tickets: string[]; changed: string[]; skipped: string[]; requests: ClientRequest[] }>(`/p/${enc(context)}/requests-bulk`, { body: { ids, action } }),
+    call<{ tickets: string[]; changed: string[]; skipped: string[]; requests: ClientRequest[] }>(`/p/${enc(context)}/requests-bulk?view=intake`, { body: { ids, action } }),
+  linkRequest: (context: string, id: string, key: string) => call<{ item: Item }>(`/p/${enc(context)}/requests/${enc(id)}/link`, { body: { key } }),
   promote: (context: string, id: string) => call<{ item: Item; request?: ClientRequest }>(`/p/${enc(context)}/requests/${enc(id)}/promote`, { body: {} }),
   item: (context: string, key: string) => call<{ item: Item }>(`/p/${enc(context)}/items/${enc(key)}`),
   add: (context: string, fields: Partial<Pick<Item, 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'labels'>>) =>

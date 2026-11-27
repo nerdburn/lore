@@ -234,7 +234,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
       {route.view === 'goals' ? (
         <GoalsView context={route.context} items={board.items} onOpen={open} onError={fail} />
       ) : route.view === 'requests' ? (
-        <RequestsView context={route.context} canEdit={canEdit} q={filters.q} showAll={filters.closed} onShowAll={(closed) => setFilters((f) => ({ ...f, closed }))} onOpen={open} onPromoted={() => void load()} onError={fail} />
+        <RequestsView key={route.context} items={board.items} context={route.context} canEdit={canEdit} q={filters.q} onOpen={open} onPromoted={() => void load()} onError={fail} />
       ) : route.view === 'kanban' ? (
         <KanbanView items={visible} canEdit={canEdit} showArchived={filters.archived} onOpen={open} onMove={moveItem} onMenu={openMenu} />
       ) : (

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
-import { parseRequests, readWorkItems, type DerivedRequest, type LoreWorkItem } from './work.js'
+import { requestTickets, parseRequests, readWorkItems, type DerivedRequest, type LoreWorkItem } from './work.js'
 
 /** Goals live above delivery tickets. Legacy task-shaped entries stay readable. */
 export interface RoadmapGoal {
@@ -76,7 +76,7 @@ const statuses: Record<string, string> = { planned: 'Planned', in_progress: 'In 
 
 export function renderRoadmap(goals: RoadmapGoal[], work: LoreWorkItem[] = [], requests: DerivedRequest[] = []): string {
   const current = goals.filter(activeGoal)
-  const ticketed = new Set(work.map(i => i.request))
+  const ticketed = requestTickets(requests, work)
   const lines: string[] = []
   const groups = [
     ['short_term', 'Short-term goals'],
@@ -96,8 +96,8 @@ export function renderRoadmap(goals: RoadmapGoal[], work: LoreWorkItem[] = [], r
       lines.push(`${statuses[g.status] || 'Status not established'}${priorities[g.priority || ''] ? `; ${priorities[g.priority!].toLowerCase()}` : ''}.`)
       if (g.priority_reason) lines.push(`What this means for work priorities: ${sentence(plain(g.priority_reason))}`)
       const linked = requests.filter(r => r.goal_ids?.includes(g.id) && r.status !== 'archived')
-      const linkedIds = new Set(linked.map(r => r.id))
-      const related = work.filter(i => i.status !== 'archived' && (g.work_items?.includes(i.key) || (i.request && linkedIds.has(i.request))))
+      const linkedKeys = new Set(linked.map(r => ticketed.get(r.id)))
+      const related = work.filter(i => i.status !== 'archived' && (g.work_items?.includes(i.key) || linkedKeys.has(i.key)))
       const intake = linked.filter(r => !ticketed.has(r.id) && (r.status === 'open' || r.status === 'in_progress'))
       if (intake.length) lines.push(`Related requests awaiting a ticket: ${intake.map(r => plain(r.request)).join('; ')}.`)
       if (related.length) lines.push(`Supporting work: ${related.map(i => `${plain(i.title)} [${i.key}] (${i.status.replaceAll('_', ' ')})`).join('; ')}.`)

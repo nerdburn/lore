@@ -726,3 +726,55 @@ test('the requests board serves saved Jev coverage as a suggestion distinct from
   assert.deepEqual(res.body.requests[0].coverage, { key: 'ACM-2', title: 'Checkout copy', score: 0.98 })
   assert.equal(res.body.requests[0].ticket, undefined)
 })
+
+test('request intake hides handled asks, keeps uncertain matches, and lets members confirm an existing ticket', async () => {
+  const context = 'lore-request-intake'
+  const slack = 'https://acme.slack.com/archives/C987/p1700000000000000'
+  const meeting = 'https://example.com/meeting/123'
+  const tracked = parse(TRACKER)
+  tracked[0].sources = [slack]
+  tracked[1].sources = [meeting]
+  tracked[2].request = 'promoted'
+  const requests = [
+    { id: 'source', request: 'New landing design', source: slack.replace('acme.slack', 'slack') + '?thread_ts=123' },
+    { id: 'promoted', request: 'Old promo', status: 'open' },
+    { id: 'active', request: 'Work started elsewhere', status: 'in_progress' },
+    { id: 'done', request: 'Finished', status: 'done' },
+    { id: 'stale', request: 'Obsolete', status: 'stale' },
+    { id: 'archived', request: 'Set aside', status: 'archived' },
+    { id: 'unlinked', request: 'Checkout copy', source: meeting },
+    { id: 'second', request: 'Another request from this meeting', source: meeting },
+  ]
+  const bare = pushContext(context, acmeConfig, {
+    'context/work/lore/ACM.yaml': JSON.stringify(tracked),
+    'context/derived/requests.yaml': JSON.stringify(requests),
+  })
+  const member = await signIn('jane@acme.com')
+  const viewer = await signIn('intake@viewers.io')
+  const path = '/p/' + context + '/requests'
+  const intake = async () => (await api(path + '?view=intake', { cookie: viewer })).body.requests.map((r: { id: string }) => r.id)
+  assert.deepEqual(await intake(), ['unlinked', 'second'])
+  const stored = () => git(bare, 'show', 'HEAD:context/derived/requests.yaml')
+  const original = stored()
+  const link = (id: string, cookie: string, key: string) => api(path + '/' + id + '/link', { cookie, body: { key } })
+  assert.equal((await link('unlinked', viewer, 'ACM-3')).status, 403)
+  assert.equal((await link('unlinked', member, 'NONEXISTENT')).status, 404)
+  assert.equal((await link('unlinked', member, 'ACM-3')).status, 200)
+  assert.deepEqual(await intake(), ['second'])
+  const bulk = await api(path + '-bulk?view=intake', { cookie: member, body: { ids: ['unlinked', 'source'], action: 'ticket' } })
+  assert.equal(bulk.status, 200)
+  assert.deepEqual(bulk.body.tickets, [])
+  assert.deepEqual(bulk.body.requests.map((r: { id: string }) => r.id), ['second'])
+  assert.equal((await api(path + '/unlinked/promote', { cookie: member, body: {} })).status, 400)
+  assert.equal((await link('second', member, 'ACM-3')).status, 200)
+  assert.deepEqual(await intake(), [])
+  const history = (await api(path, { cookie: viewer })).body.requests
+  assert.equal(history.length, requests.length)
+  assert.equal(history.find((r: { id: string }) => r.id === 'unlinked').ticket, 'ACM-3')
+  const items = parse(git(bare, 'show', 'HEAD:context/work/lore/ACM.yaml'))
+  assert.deepEqual(items.map((i: { key: string }) => i.key), ['ACM-1', 'ACM-2', 'ACM-3'])
+  assert.deepEqual(items[2].linked_requests, ['unlinked', 'second'])
+  assert.equal(items[2].request, 'promoted')
+  assert.equal(items[2].status, 'done')
+  assert.equal(stored(), original)
+})

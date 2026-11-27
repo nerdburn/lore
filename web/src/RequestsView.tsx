@@ -1,23 +1,15 @@
 import { ArrowUpRightFromSquare } from '@gravity-ui/icons'
-import { Button, Checkbox, Chip, Dropdown, Label, Spinner, Switch, Table, toast } from '@heroui/react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type ClientRequest } from './api'
+import { Button, Checkbox, Dropdown, Label, Spinner, Table, toast } from '@heroui/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, type ClientRequest, type Item } from './api'
 
-const STATUS_LABEL: Record<string, string> = { open: 'Open', in_progress: 'In progress', done: 'Done', stale: 'Stale', archived: 'Archived' }
-const STATUS_COLOR: Record<string, 'default' | 'accent' | 'success' | 'warning'> = { open: 'default', in_progress: 'accent', done: 'success', stale: 'warning' }
 const POLL_MS = 60_000
 
-/**
- * What the client has asked for that is not a ticket yet. Each row can be
- * turned into one; rows already tracked, done or gone stale are hidden until
- * asked for.
- */
 export function RequestsView({
   context,
   canEdit,
   q,
-  showAll,
-  onShowAll,
+  items,
   onOpen,
   onPromoted,
   onError,
@@ -25,8 +17,7 @@ export function RequestsView({
   context: string
   canEdit: boolean
   q: string
-  showAll: boolean
-  onShowAll: (v: boolean) => void
+  items: Item[]
   onOpen: (key: string) => void
   onPromoted: () => void
   onError: (err: unknown) => void
@@ -35,9 +26,15 @@ export function RequestsView({
   const [busy, setBusy] = useState<string>()
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
+  const [linking, setLinking] = useState<{ id: string; key: string }>()
+  const chosenTicket = linking && items.find(i => i.key === linking.key.trim().toUpperCase())
+  const revision = useRef(0)
+
   const load = useCallback(async () => {
     try {
-      setRequests((await api.requests(context)).requests)
+      const before = revision.current
+      const result = await api.requests(context)
+      if (before === revision.current) setRequests(result.requests)
     } catch (err) {
       onError(err)
       setRequests((r) => r ?? [])
@@ -50,22 +47,23 @@ export function RequestsView({
     return () => clearInterval(t)
   }, [load])
 
-  const waiting = useMemo(() => (requests ?? []).filter((r) => !r.ticket && r.status !== 'done' && r.status !== 'stale' && r.status !== 'archived'), [requests])
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return (showAll ? (requests ?? []) : waiting)
+    return (requests ?? [])
       .filter((r) => !needle || `${r.request} ${r.requested_by ?? ''} ${r.id} ${r.goals?.map(g => g.outcome).join(' ') ?? ''}`.toLowerCase().includes(needle))
       .slice()
       .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
-  }, [requests, waiting, showAll, q])
+  }, [requests, q])
 
-  const promote = async (r: ClientRequest) => {
+  const track = async (r: ClientRequest, key?: string) => {
     setBusy(r.id)
     try {
-      const { item } = await api.promote(context, r.id)
-      setRequests((all) => all?.map((x) => (x.id === r.id ? { ...x, ticket: item.key, similar: undefined, coverage: undefined } : x)))
+      const { item } = key ? await api.linkRequest(context, r.id, key) : await api.promote(context, r.id)
+      revision.current++
+      setLinking(undefined)
+      setRequests((all) => all?.filter(x => x.id !== r.id))
       onPromoted()
-      toast.success(`Made ${item.key}`, { description: item.title, timeout: 8000, actionProps: { children: 'Open', onPress: () => onOpen(item.key) } })
+      toast.success(`${key ? 'Linked to' : 'Made'} ${item.key}`, { description: item.title, timeout: 8000, actionProps: { children: 'Open', onPress: () => onOpen(item.key) } })
     } catch (err) {
       onError(err)
     } finally {
@@ -73,7 +71,7 @@ export function RequestsView({
     }
   }
 
-  // Only rows on screen can be acted on: a selection never reaches past the search or the switch.
+  // Only rows on screen can be acted on: a selection never reaches past the search.
   const picked = useMemo(() => rows.filter((r) => selected.has(r.id)), [rows, selected])
   const allPicked = rows.length > 0 && picked.length === rows.length
   const toggle = (id: string, on: boolean) =>
@@ -89,6 +87,7 @@ export function RequestsView({
     setBusy('bulk')
     try {
       const res = await api.requestsBulk(context, ids, action)
+      revision.current++
       setRequests(res.requests)
       setSelected(new Set())
       if (action === 'ticket') onPromoted()
@@ -99,7 +98,7 @@ export function RequestsView({
       else if (action === 'restore') toast.success(`Restored ${n} request${s}`)
       else
         toast.success(`${action === 'archive' ? 'Archived' : 'Deleted'} ${n} request${s}`, {
-          description: action === 'archive' ? `Hidden until you show archived requests.${left}` : `Removed from the list.${left}`,
+          description: action === 'archive' ? `Removed from intake.${left}` : `Removed from the list.${left}`,
           timeout: 10000,
           actionProps: n ? { children: 'Undo', onPress: () => void bulk('restore', res.changed) } : undefined,
         })
@@ -122,7 +121,7 @@ export function RequestsView({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">
-          {waiting.length} request{waiting.length === 1 ? '' : 's'} without a ticket, of {requests.length} recorded from the client.
+          {requests.length} request{requests.length === 1 ? '' : 's'} awaiting triage.
         </p>
         <div className="flex items-center gap-4">
           {canEdit && (
@@ -131,15 +130,12 @@ export function RequestsView({
                 {busy === 'bulk' ? <Spinner size="sm" /> : `Actions${picked.length ? ` (${picked.length})` : ''}`}
               </Button>
               <Dropdown.Popover placement="bottom end">
-                <Dropdown.Menu onAction={(k) => void bulk(k as 'ticket' | 'archive' | 'delete' | 'restore')} disabledKeys={picked.some((r) => r.status === 'archived') ? [] : ['restore']}>
+                <Dropdown.Menu onAction={(k) => void bulk(k as 'ticket' | 'archive' | 'delete' | 'restore')}>
                   <Dropdown.Item id="ticket" textValue="Make tickets">
                     <Label>Make tickets</Label>
                   </Dropdown.Item>
                   <Dropdown.Item id="archive" textValue="Archive">
                     <Label>Archive</Label>
-                  </Dropdown.Item>
-                  <Dropdown.Item id="restore" textValue="Unarchive">
-                    <Label>Unarchive</Label>
                   </Dropdown.Item>
                   <Dropdown.Item id="delete" textValue="Delete" variant="danger">
                     <Label>Delete</Label>
@@ -148,14 +144,6 @@ export function RequestsView({
               </Dropdown.Popover>
             </Dropdown>
           )}
-        <Switch isSelected={showAll} onChange={onShowAll} size="sm">
-          <Switch.Content className="flex items-center gap-2 text-sm">
-            <Switch.Control>
-              <Switch.Thumb />
-            </Switch.Control>
-            Show ticketed, done, stale &amp; archived
-          </Switch.Content>
-        </Switch>
         </div>
       </div>
       <Table>
@@ -176,10 +164,9 @@ export function RequestsView({
               <Table.Column isRowHeader>Request</Table.Column>
               <Table.Column className="w-44">Asked by</Table.Column>
               <Table.Column className="w-32">Date</Table.Column>
-              <Table.Column className="w-28">Status</Table.Column>
               <Table.Column className="w-44">Ticket</Table.Column>
             </Table.Header>
-            <Table.Body renderEmptyState={() => <div className="p-8 text-center text-muted">{requests.length ? 'No requests waiting for a ticket.' : 'No client requests recorded yet.'}</div>}>
+            <Table.Body renderEmptyState={() => <div className="p-8 text-center text-muted">{requests.length ? 'No requests match this search.' : 'No requests awaiting triage.'}</div>}>
               {rows.map((r) => (
                 <Table.Row key={r.id} id={r.id}>
                   {canEdit && (
@@ -215,34 +202,39 @@ export function RequestsView({
                   <Table.Cell className="text-sm">{r.requested_by ?? <span className="text-muted">—</span>}</Table.Cell>
                   <Table.Cell className="text-sm whitespace-nowrap text-muted">{r.date ?? '—'}</Table.Cell>
                   <Table.Cell>
-                    <Chip size="sm" variant="soft" color={STATUS_COLOR[r.status ?? ''] ?? 'default'}>
-                      {STATUS_LABEL[r.status ?? ''] ?? r.status ?? '—'}
-                    </Chip>
-                  </Table.Cell>
-                  <Table.Cell>
-                    {r.ticket ? (
-                      <Button size="sm" variant="ghost" onPress={() => onOpen(r.ticket!)}>
-                        <span className="mono">{r.ticket}</span>
-                      </Button>
-                    ) : (
-                      <div className="flex flex-col items-start gap-1">
-                        {canEdit && r.status !== 'done' && r.status !== 'archived' && (
-                          <Button size="sm" variant="secondary" isDisabled={busy !== undefined} onPress={() => void promote(r)}>
-                            {busy === r.id ? <Spinner size="sm" /> : 'Make ticket'}
-                          </Button>
-                        )}
-                        {r.coverage && (
-                          <button type="button" className="text-left text-xs text-warning hover:underline" onClick={() => onOpen(r.coverage!.key)}>
-                            Jev suggests {r.coverage.key} may cover this request · {r.coverage.title}
-                          </button>
-                        )}
-                        {!r.coverage && r.similar && (
-                          <button type="button" className="text-xs text-warning hover:underline" onClick={() => onOpen(r.similar!)}>
-                            Similar title · {r.similar}
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    <div className="flex flex-col items-start gap-1">
+                      {r.coverage && (
+                        <button type="button" className="text-left text-xs text-warning hover:underline" onClick={() => onOpen(r.coverage!.key)}>
+                          Jev suggests {r.coverage.key} may cover this request · {r.coverage.title}
+                        </button>
+                      )}
+                      {!r.coverage && r.similar && (
+                        <button type="button" className="text-xs text-warning hover:underline" onClick={() => onOpen(r.similar!)}>
+                          Similar title · {r.similar}
+                        </button>
+                      )}
+                      {canEdit && (linking?.id === r.id ? (
+                        <form className="flex flex-col gap-1" onSubmit={e => {
+                          e.preventDefault()
+                          if (chosenTicket) void track(r, chosenTicket.key)
+                        }}>
+                          <input aria-label="Existing ticket" list="request-ticket-options" placeholder="Ticket key or title" autoFocus
+                            className="rounded border border-muted/50 bg-transparent px-2 py-1 text-sm"
+                            value={linking.key} onChange={e => setLinking({ id: r.id, key: e.target.value })} />
+                          <datalist id="request-ticket-options">{items.map(i => <option key={i.key} value={i.key}>{i.title}</option>)}</datalist>
+                          <div className="flex gap-1">
+                            <Button size="sm" type="submit" isDisabled={!!busy || !chosenTicket}>Link ticket</Button>
+                            <Button size="sm" variant="ghost" onPress={() => setLinking(undefined)}>Cancel</Button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          <Button size="sm" variant="secondary" isDisabled={!!busy} onPress={() => void track(r)}>Make ticket</Button>
+                          {items.length > 0 && <Button size="sm" variant="ghost" isDisabled={!!busy}
+                            onPress={() => setLinking({ id: r.id, key: r.coverage?.key ?? r.similar ?? '' })}>Link existing</Button>}
+                        </div>
+                      ))}
+                    </div>
                   </Table.Cell>
                 </Table.Row>
               ))}

@@ -116,10 +116,9 @@ export function GoalsView({ context, items, onOpen, onError }: {
   const active = page.goals.filter(g => g.status !== 'retired' && g.status !== 'done').sort((a, b) => (a.priority || 'Z').localeCompare(b.priority || 'Z'))
   const past = page.goals.filter(g => g.status === 'retired' || g.status === 'done')
   function row(goal: Goal) {
-    const requestIds = new Set(goal.requests?.map(r => r.id))
-    const tickets = items.filter(i => i.status !== 'archived' && (goal.work_items?.includes(i.key) || (i.request && requestIds.has(i.request))))
-    const ticketed = new Set(items.map(i => i.request))
-    const intake = goal.requests?.filter(r => !ticketed.has(r.id)) ?? []
+    const ticketKeys = new Set(goal.requests?.map(r => r.ticket))
+    const tickets = items.filter(i => i.status !== 'archived' && (goal.work_items?.includes(i.key) || ticketKeys.has(i.key)))
+    const intake = goal.requests?.filter(r => !r.ticket && (!r.status || r.status === 'open')) ?? []
     return (
       <article key={goal.id} className="grid gap-x-8 gap-y-3 border-t border-separator py-5 sm:grid-cols-[9rem_minmax(0,1fr)_auto]">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 sm:flex-col">
@@ -136,7 +135,7 @@ export function GoalsView({ context, items, onOpen, onError }: {
             <summary className="cursor-pointer text-link">Related work ({tickets.length + intake.length})</summary>
             <ul className="mt-2 space-y-1">
               {tickets.map(i => <li key={i.key}><button className="text-left text-link hover:underline" onClick={() => onOpen(i.key)}>{i.title} [{i.key}]</button></li>)}
-              {intake.map(r => <li key={r.id}><a className="text-link hover:underline" href={href({ name: 'board', context, view: 'requests', filters: { ...NO_FILTERS, q: r.id, closed: true } })}>{r.request} [{r.id}]</a></li>)}
+              {intake.map(r => <li key={r.id}><a className="text-link hover:underline" href={href({ name: 'board', context, view: 'requests', filters: { ...NO_FILTERS, q: r.id } })}>{r.request} [{r.id}]</a></li>)}
             </ul>
           </details>}
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">

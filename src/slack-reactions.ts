@@ -5,7 +5,7 @@ import type { LoreConfig } from './config.js'
 import { appendAudit } from './audit.js'
 import { jevNouls, type Fetch } from './jev.js'
 import { SLACK_REACTIONS, slackMessageRef, type ReactionSignal } from './connectors/slack.js'
-import { applyChange, nextKey, readWorkItems, stateFor, workPrefix, writeWorkItems, type LoreWorkItem } from './work.js'
+import { applyChange, nextKey, requestIds, readWorkItems, stateFor, workPrefix, writeWorkItems, type LoreWorkItem } from './work.js'
 
 /**
  * Slack reactions → the tracker. A team member's 👍 approves a client's
@@ -157,7 +157,7 @@ export async function applySlackReactions(
 
 function findTicket(items: LoreWorkItem[], permalink: string, request: string | undefined): LoreWorkItem | undefined {
   return items.find((i) => i.sources.some((s) => slackMessageRef(s) === permalink))
-    ?? (request ? items.find((i) => i.request === request) : undefined)
+    ?? (request ? items.find((i) => requestIds(i).includes(request)) : undefined)
 }
 
 /** Derived request id by the Slack message it came from. */

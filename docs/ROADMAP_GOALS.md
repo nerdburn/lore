@@ -60,7 +60,12 @@ the ticket or promoting the request hides the old suggestion. The next
 extract retries failed checks. A suggestion alone leaves the queue intact.
 
 The regular fold reads the conversation and records applicable `goal_ids`
-on requests. The Requests tab shows the linked outcomes. Roadmap recall
+on requests. The Requests tab shows open asks awaiting triage. An ask leaves this view when
+work is underway, its status closes, or a ticket tracks it. Lore recognizes
+a promoted request ID, a team-confirmed link, or an unambiguous match to
+the original Slack message or external issue URL. A member can use **Link
+existing** to confirm a suggested ticket or pick another ticket. The request
+and its source remain available in Lore history. Roadmap recall
 also follows the request through promotion to its ticket. An unmatched
 request can stay open. To change the order, record the client's or lead's
 decision identifying the work that moves.
