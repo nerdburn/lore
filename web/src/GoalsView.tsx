@@ -1,7 +1,5 @@
-import { Plus } from '@gravity-ui/icons'
 import { Button, Chip, Input, Label, Spinner, TextArea, TextField, toast } from '@heroui/react'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { createPortal } from 'react-dom'
 import { api, ApiError, type Goal, type GoalFields, type GoalsPage, type GoalStatus, type Item } from './api'
 import { ChoiceSelect } from './fields'
 import { href, NO_FILTERS } from './router'
@@ -90,12 +88,12 @@ function GoalEditor({ goal, managed, context, onCancel, onSaved, onConflict }: {
   )
 }
 
-export function GoalsView({ context, items, actionSlot, onOpen, onError }: {
-  context: string; items: Item[]; actionSlot: HTMLDivElement | null; onOpen: (key: string) => void; onError: (err: unknown) => void
+export function GoalsView({ context, items, editor, setEditor, onOpen, onError }: {
+  context: string; items: Item[]; editor?: { goal?: Goal }; setEditor: (editor?: { goal?: Goal }) => void
+  onOpen: (key: string) => void; onError: (err: unknown) => void
 }) {
   const [page, setPage] = useState<GoalsPage>()
   const [error, setError] = useState('')
-  const [editor, setEditor] = useState<{ goal?: Goal }>()
   const load = useCallback(async () => {
     setError('')
     try { setPage(await api.goals(context)) }
@@ -151,7 +149,6 @@ export function GoalsView({ context, items, actionSlot, onOpen, onError }: {
 
   return (
     <section className="max-w-5xl py-3">
-      {page.canEdit && actionSlot && createPortal(<Button onPress={() => setEditor({})}><Plus />New goal</Button>, actionSlot)}
       <h2 className="mb-5 text-xl font-semibold">Project goals</h2>
       {active.length ? active.map(row) : <p className="border-t border-separator py-6 text-muted">No active goals yet.{page.canEdit && ' Add an outcome from your next planning meeting.'}</p>}
       {past.length > 0 && <details className="border-t border-separator pt-4">

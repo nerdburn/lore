@@ -662,6 +662,8 @@ test('goals page: team edits take ownership, preserve IDs and related requests, 
   const route = '/p/lore-goals/goals'
   const pm = await session('pm@studio.test')
   const client = await session('jane@acme.com')
+  assert.equal((await api('/p/lore-goals', { cookie: pm })).body.canEditGoals, true)
+  assert.equal((await api('/p/lore-goals', { cookie: client })).body.canEditGoals, false)
   const list = await api(route, { cookie: client })
   assert.equal(list.body.canEdit, false)
   assert.equal(list.body.managed, false)

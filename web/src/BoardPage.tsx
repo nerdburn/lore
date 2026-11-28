@@ -1,7 +1,7 @@
 import { Plus } from '@gravity-ui/icons'
 import { Button, Label, ListBox, SearchField, Select, Spinner, Switch, Tabs, toast } from '@heroui/react'
 import { useCallback, useEffect, useMemo, useRef, useState, type Key } from 'react'
-import { api, ApiError, type Board, type Item, type Status } from './api'
+import { api, ApiError, type Board, type Goal, type Item, type Status } from './api'
 import { ItemDrawer } from './ItemDrawer'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
@@ -25,7 +25,10 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   const filters = route.filters
   const setFilters = (fn: (f: Filters) => Filters) => navigate({ ...route, filters: fn(route.filters) }, true)
   const [creating, setCreating] = useState(false)
-  const [goalActionSlot, setGoalActionSlot] = useState<HTMLDivElement | null>(null)
+  const [goalEditor, setGoalEditor] = useState<{ goal?: Goal }>()
+  useEffect(() => {
+    if (route.view !== 'goals') setGoalEditor(undefined)
+  }, [route.view])
   const [menu, setMenu] = useState<TicketMenuPosition>()
   const [actionBusy, setActionBusy] = useState(false)
   // While a write is in flight, a poll must not snap the card back.
@@ -196,11 +199,14 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
               </Tabs.List>
             </Tabs.ListContainer>
           </Tabs>
-          {route.view === 'goals' ? <div className="contents" ref={setGoalActionSlot} /> : canEdit && (
-            <Button onPress={() => setCreating(true)}>
-              <Plus />
-              New ticket
-            </Button>
+          {canEdit && (
+            <div className="flex w-32 justify-end empty:hidden lg:empty:block">
+              {route.view === 'goals' ? board.canEditGoals && (
+                <Button className="w-full" isDisabled={!!goalEditor} onPress={() => setGoalEditor({})}><Plus />New goal</Button>
+              ) : (
+                <Button className="w-full" onPress={() => setCreating(true)}><Plus />New ticket</Button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -233,7 +239,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
       </div>}
 
       {route.view === 'goals' ? (
-        <GoalsView key={route.context} context={route.context} items={board.items} actionSlot={goalActionSlot} onOpen={open} onError={fail} />
+        <GoalsView key={route.context} context={route.context} items={board.items} editor={goalEditor} setEditor={setGoalEditor} onOpen={open} onError={fail} />
       ) : route.view === 'requests' ? (
         <RequestsView key={route.context} context={route.context} canEdit={canEdit} q={filters.q} onOpen={open} onPromoted={() => void load()} onError={fail} />
       ) : route.view === 'kanban' ? (

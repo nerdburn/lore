@@ -133,6 +133,7 @@ export interface Board {
   client?: string
   prefix: string
   role: Role
+  canEditGoals: boolean
   archived: boolean
   labels: string[]
   assignees: string[]
