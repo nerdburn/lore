@@ -25,6 +25,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   const filters = route.filters
   const setFilters = (fn: (f: Filters) => Filters) => navigate({ ...route, filters: fn(route.filters) }, true)
   const [creating, setCreating] = useState(false)
+  const [goalActionSlot, setGoalActionSlot] = useState<HTMLDivElement | null>(null)
   const [menu, setMenu] = useState<TicketMenuPosition>()
   const [actionBusy, setActionBusy] = useState(false)
   // While a write is in flight, a poll must not snap the card back.
@@ -161,47 +162,47 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
     )
 
   return (
-    <div className="mx-auto flex max-w-[1400px] flex-col gap-4 px-4 py-6">
-      <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-        <div className="mr-auto">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">{board.client ?? board.project}</h1>
-            <AvatarStack people={board.people} max={8} />
-          </div>
-          <p className="text-sm text-muted">
-            {board.items.filter((i) => i.state === 'open').length} open · <span className="mono">{board.prefix}</span>
-            {board.role === 'viewer' && ' · view only'}
-            {board.archived && ' · archived (read-only)'}
-          </p>
+    <div className="mx-auto flex max-w-[1400px] flex-col gap-4 px-4 pt-4 pb-6">
+      <div className="grid items-center gap-x-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">{board.client ?? board.project}</h1>
+          <AvatarStack people={board.people} max={8} />
         </div>
-        <Tabs selectedKey={route.view} onSelectionChange={(k) => navigate({ ...route, view: k as BoardRoute['view'] }, true)}>
-          <Tabs.ListContainer>
-            <Tabs.List aria-label="View">
-              <Tabs.Tab id="kanban">
-                Board
-                <Tabs.Indicator />
-              </Tabs.Tab>
-              <Tabs.Tab id="list">
-                List
-                <Tabs.Indicator />
-              </Tabs.Tab>
-              <Tabs.Tab id="requests">
-                Requests
-                <Tabs.Indicator />
-              </Tabs.Tab>
-              <Tabs.Tab id="goals">
-                Goals
-                <Tabs.Indicator />
-              </Tabs.Tab>
-            </Tabs.List>
-          </Tabs.ListContainer>
-        </Tabs>
-        {canEdit && route.view !== 'goals' && (
-          <Button onPress={() => setCreating(true)}>
-            <Plus />
-            New ticket
-          </Button>
-        )}
+        <p className="text-sm text-muted lg:col-start-1 lg:row-start-2">
+          {board.items.filter((i) => i.state === 'open').length} open · <span className="mono">{board.prefix}</span>
+          {board.role === 'viewer' && ' · view only'}
+          {board.archived && ' · archived (read-only)'}
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3 lg:col-start-2 lg:row-start-1 lg:mt-0">
+          <Tabs selectedKey={route.view} onSelectionChange={(k) => navigate({ ...route, view: k as BoardRoute['view'] }, true)}>
+            <Tabs.ListContainer>
+              <Tabs.List aria-label="View">
+                <Tabs.Tab id="kanban">
+                  Board
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="list">
+                  List
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="requests">
+                  Requests
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="goals">
+                  Goals
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+              </Tabs.List>
+            </Tabs.ListContainer>
+          </Tabs>
+          {route.view === 'goals' ? <div className="contents" ref={setGoalActionSlot} /> : canEdit && (
+            <Button onPress={() => setCreating(true)}>
+              <Plus />
+              New ticket
+            </Button>
+          )}
+        </div>
       </div>
 
       {route.view !== 'goals' && <div className="flex flex-wrap items-end gap-3">
@@ -232,9 +233,9 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
       </div>}
 
       {route.view === 'goals' ? (
-        <GoalsView context={route.context} items={board.items} onOpen={open} onError={fail} />
+        <GoalsView key={route.context} context={route.context} items={board.items} actionSlot={goalActionSlot} onOpen={open} onError={fail} />
       ) : route.view === 'requests' ? (
-        <RequestsView key={route.context} items={board.items} context={route.context} canEdit={canEdit} q={filters.q} onOpen={open} onPromoted={() => void load()} onError={fail} />
+        <RequestsView key={route.context} context={route.context} canEdit={canEdit} q={filters.q} onOpen={open} onPromoted={() => void load()} onError={fail} />
       ) : route.view === 'kanban' ? (
         <KanbanView items={visible} canEdit={canEdit} showArchived={filters.archived} onOpen={open} onMove={moveItem} onMenu={openMenu} />
       ) : (

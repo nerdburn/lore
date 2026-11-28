@@ -1,7 +1,7 @@
 import { ArrowUpRightFromSquare } from '@gravity-ui/icons'
 import { Button, Checkbox, Dropdown, Label, Spinner, Table, toast } from '@heroui/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, type ClientRequest, type Item } from './api'
+import { api, type ClientRequest } from './api'
 
 const POLL_MS = 60_000
 
@@ -9,7 +9,6 @@ export function RequestsView({
   context,
   canEdit,
   q,
-  items,
   onOpen,
   onPromoted,
   onError,
@@ -17,7 +16,6 @@ export function RequestsView({
   context: string
   canEdit: boolean
   q: string
-  items: Item[]
   onOpen: (key: string) => void
   onPromoted: () => void
   onError: (err: unknown) => void
@@ -26,8 +24,6 @@ export function RequestsView({
   const [busy, setBusy] = useState<string>()
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  const [linking, setLinking] = useState<{ id: string; key: string }>()
-  const chosenTicket = linking && items.find(i => i.key === linking.key.trim().toUpperCase())
   const revision = useRef(0)
 
   const load = useCallback(async () => {
@@ -55,15 +51,14 @@ export function RequestsView({
       .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
   }, [requests, q])
 
-  const track = async (r: ClientRequest, key?: string) => {
+  const promote = async (r: ClientRequest) => {
     setBusy(r.id)
     try {
-      const { item } = key ? await api.linkRequest(context, r.id, key) : await api.promote(context, r.id)
+      const { item } = await api.promote(context, r.id)
       revision.current++
-      setLinking(undefined)
       setRequests((all) => all?.filter(x => x.id !== r.id))
       onPromoted()
-      toast.success(`${key ? 'Linked to' : 'Made'} ${item.key}`, { description: item.title, timeout: 8000, actionProps: { children: 'Open', onPress: () => onOpen(item.key) } })
+      toast.success(`Made ${item.key}`, { description: item.title, timeout: 8000, actionProps: { children: 'Open', onPress: () => onOpen(item.key) } })
     } catch (err) {
       onError(err)
     } finally {
@@ -213,27 +208,9 @@ export function RequestsView({
                           Similar title · {r.similar}
                         </button>
                       )}
-                      {canEdit && (linking?.id === r.id ? (
-                        <form className="flex flex-col gap-1" onSubmit={e => {
-                          e.preventDefault()
-                          if (chosenTicket) void track(r, chosenTicket.key)
-                        }}>
-                          <input aria-label="Existing ticket" list="request-ticket-options" placeholder="Ticket key or title" autoFocus
-                            className="rounded border border-muted/50 bg-transparent px-2 py-1 text-sm"
-                            value={linking.key} onChange={e => setLinking({ id: r.id, key: e.target.value })} />
-                          <datalist id="request-ticket-options">{items.map(i => <option key={i.key} value={i.key}>{i.title}</option>)}</datalist>
-                          <div className="flex gap-1">
-                            <Button size="sm" type="submit" isDisabled={!!busy || !chosenTicket}>Link ticket</Button>
-                            <Button size="sm" variant="ghost" onPress={() => setLinking(undefined)}>Cancel</Button>
-                          </div>
-                        </form>
-                      ) : (
-                        <div className="flex flex-wrap gap-1">
-                          <Button size="sm" variant="secondary" isDisabled={!!busy} onPress={() => void track(r)}>Make ticket</Button>
-                          {items.length > 0 && <Button size="sm" variant="ghost" isDisabled={!!busy}
-                            onPress={() => setLinking({ id: r.id, key: r.coverage?.key ?? r.similar ?? '' })}>Link existing</Button>}
-                        </div>
-                      ))}
+                      {canEdit && !r.coverage && (
+                        <Button size="sm" variant="secondary" isDisabled={!!busy} onPress={() => void promote(r)}>Make ticket</Button>
+                      )}
                     </div>
                   </Table.Cell>
                 </Table.Row>

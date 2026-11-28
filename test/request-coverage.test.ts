@@ -44,6 +44,26 @@ test('live triage suggests possible coverage independently of goals and reports 
   assert.equal(failure.work_coverage.suggestion, undefined)
 })
 
+test('extraction checks explicitly cited tracker issues and links only the request Jev judges covered', async () => {
+  const extra = Array.from({ length: 12 }, (_, i) => ({ key: 'WEB-' + (i + 1), title: 'Checkout decision', status: 'todo' }))
+  const external = { system: 'jira', key: 'OPS-987', id: 'jira:OPS-987', url: 'https://example.org/browse/OPS-987', status: 'To Do', category: 'To Do' }
+  const ticket = { key: 'WEB-13', title: 'Separator convention', status: 'todo', external }
+  const asks = ['Checkout decision for OPS-987: choose the page-title separator.', 'After OPS-987 add a separate checkout feature.']
+  const requests = asks.map((request, i) => ({ id: 'req-' + (i + 1), request, status: 'open' }))
+  const root = makeContextRepo({ [workFile('WEB')]: JSON.stringify([...extra, ticket]), [REQUESTS_FILE]: JSON.stringify(requests) })
+  const checked: string[] = []
+  await refreshRequestCoverage(root, 'WEB', { apiKey: 'fixture', fetch: async (_, init) => {
+    const { state } = JSON.parse(String(init?.body))
+    checked.push(state.request)
+    assert.equal(state.tickets[0].externalKey, external.key)
+    assert.equal(state.tickets[0].url, external.url)
+    return Response.json({ answers: Object.fromEntries(state.tickets.map((t: { key: string }, i: number) =>
+      ['ticket_' + i, { noul: t.key === ticket.key && state.request === asks[0] ? 0.96 : 0.1 }])) })
+  } })
+  assert.deepEqual(checked, asks)
+  assert.deepEqual(readWorkItems(root, 'WEB').find(t => t.key === ticket.key)?.linked_requests, ['req-1'])
+})
+
 test('extraction retains positive and negative checks, rechecks changed scopes, and suppresses stale suggestions on read', async () => {
   const requests = [request, { id: 'req-2', request: 'Send payment receipts' }, { id: 'req-3', request: 'Archived', status: 'archived' },
     { id: 'req-4', request: 'Already promoted' }]

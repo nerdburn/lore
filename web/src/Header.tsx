@@ -18,7 +18,6 @@ export function Header({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
         >
           <Logo />
           <span>lore</span>
-          <span className="font-normal text-muted">board</span>
         </a>
         <div className="flex-1" />
         {me.admin && (
