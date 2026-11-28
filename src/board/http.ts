@@ -457,6 +457,7 @@ export function createBoardHandler(opts: BoardOptions): BoardHandler {
             client: project.config.client?.name,
             prefix: workPrefix(project.config),
             role,
+            canEditGoals: canEditGoals(project.config, email, admins),
             archived: project.config.lifecycle === 'archived',
             statuses: WORK_STATUSES,
             priorities: WORK_PRIORITIES,
