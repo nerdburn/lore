@@ -1,970 +1,164 @@
-# lore
+# Lore
 
-**Git-native project memory for agents.** Everything is derived from sources of truth — Slack, GitHub, Jira, Granola meetings, Notion, Figma, and the client's email — except what you explicitly ask it to remember. Ask an agent literally anything about a project and it can find it.
+Lore is a Model Context Protocol (MCP) server that gives an agent memory for a client project. Ask “What are we already working on, who asked for it, and where did we agree to it?” The agent can search conversations, meetings, docs and tickets, follow links to the original evidence, and update tracked work when asked.
 
-No server, no database service. Text in git is the source of truth; a timer keeps it fresh; the CLI is the interface — the repo is just the database.
+Each project has a private Git repository, called its **context repo**, separate from the code repos it tracks. **Sync** imports source material. Optional **extraction** turns it into requests, decisions, roadmap entries and reports. An optional **web board** lets people manage tickets, triage requests and edit project goals. If your team already hosts Lore, skip to [Connect an MCP client](#connect-an-mcp-client).
 
-## How it works
+## Install Lore
 
-```
-lore setup     # wizard: create a context repo, wire every source, sync it, link this repo
-lore sync      # connectors → context/streams/ + context/work/  (deterministic, no LLM)
-lore extract   # streams → derived artifacts      (LLM fold — Claude API or subscription)
-
-lore grep      # search project memory — from any linked repo, or anywhere with -p
-lore recall    # pinned facts + derived artifacts + live work tables
-lore remember  # pin a fact (an explicit write)
-lore sow add   # attach a statement of work: human-weeks sold over a period (the other explicit write)
-lore doc add   # add a document a client sent — spec, brief, deck — to the raw material, folded like email
-lore refresh   # pull the latest memory; --trigger makes the host sync right now
-lore mcp       # the same verbs as MCP tools over stdio, for agents
-```
-
-Storage and interface are separate layers:
-
-- **Storage** is a *context repo* — a plain private git repo, usually one per
-  client, separate from the code. Slack history has a different audience than
-  code, and a standalone repo has no CI or branch protection for the sync to
-  fight.
-- **Interface** is this CLI. Project repos carry a one-line pointer; the CLI
-  resolves it, keeps a clone in `~/.lore/cache/`, pulls before reads, pushes
-  writes. Neither agents nor humans need to know where the files live.
-
-Two ways to host the storage, chosen once in `~/.lore/config.json` and
-otherwise identical:
-
-- **Self-hosted** (recommended): one VM holds every client's context repo as
-  a bare git origin and a systemd timer runs the sync and fold every 15
-  minutes. Vendor tokens live in the host platform's secret injection, never
-  on disk. [docs/DEPLOY_EXE.md](docs/DEPLOY_EXE.md) is the exe.dev runbook;
-  `deploy/exe/setup.sh` provisions the host.
-- **GitHub-hosted**: each context repo is a private GitHub repo and a daily
-  GitHub Action runs the sync, with tokens as Actions secrets.
-
-Sync pulls raw material into `context/streams/` as permalinked markdown,
-scrubbing anything that looks like a token, key, or password on the way in
-(git history is forever). Lore is also the **work tracker of record**:
-`context/work/lore/<PREFIX>.yaml` holds the project's tickets (CAR-1,
-JOI-14…) in rank order. Jira and GitHub Issues are inputs — sync mirrors
-their open issues into that table and keeps their own snapshots under
-`context/work/jira/` and `context/work/github/` — and every ticket carries a
-history of who moved it, through which surface, why, and on what evidence:
-a person via `lore work`, an agent over MCP, sync when the external tracker
-moves, or the fold when the conversation is unambiguous evidence that
-something shipped, stalled, or changed priority. Extract folds the streams
-into structured artifacts — `derived/requests.yaml`, `decisions.yaml`,
-`roadmap.yaml`, weekly reports — every item citing its source, and reviews
-the tracker as part of the same pass. `facts.yaml` is the pinned layer:
-written only via `lore remember`, and it wins over derived data on conflict.
-Every explicit write lands in `context/audit.jsonl` with who asked, through
-which surface, and the supporting source.
-
-## Setup
-
-### 0. Install the CLI
-
-Requires Node >= 20.12 and git; the GitHub-hosted mode also needs the
-[`gh` CLI](https://cli.github.com), authenticated. Not on npm yet:
+On the machine where you will set up projects, use Git, npm and Node.js 22.13+ (22.x) or Node 24. Build and install the CLI from this repository.
 
 ```sh
-npm install -g github:nerdburn/lore
+git clone https://github.com/nerdburn/lore.git
+cd lore
+npm ci
+package=$(npm pack --ignore-scripts --silent)
+npm install -g "./$package"
+lore --version
 ```
 
-Self-hosted? Provision the host first ([docs/DEPLOY_EXE.md](docs/DEPLOY_EXE.md))
-and set `remote` in `~/.lore/config.json` to it; `lore setup` then creates
-bare repos there instead of on GitHub. GitHub-hosted? The first `lore setup`
-asks which GitHub org context repos belong in (**yours, never the client's**)
-and saves it.
+`npm ci` builds the CLI and the web UI. Keep the tarball if you plan to install the same build on a server.
 
-### 1. One-time source credentials — once per workspace, not per client
+## Choose where project memory lives
 
-Only for the sources you use. Every client after the first reuses these.
+**For one person, start locally.** Create a directory for your private context repos, such as `mkdir -p "$HOME/lore-data/repos"`. Set `remote` in `~/.lore/config.json` to that directory’s **absolute path**. Create `~/.lore` and the config file if needed. For example, on a Mac the setting might be `{ "remote": "/Users/alex/lore-data/repos" }`. You run sync locally and your MCP client starts Lore over stdio.
 
-- **Slack** — `lore manifest slack | pbcopy`, then at
-  [api.slack.com/apps](https://api.slack.com/apps): **Create New App → From a
-  manifest** → pick the workspace → paste → **Create**, then **Install App**
-  and copy the **Bot User OAuth Token** (`xoxb-…`). The app is read-only by
-  design — no `chat:write`, no events; the bot never posts. `export
-  SLACK_TOKEN=xoxb-…` (or `.env` — never git), or register it as the host's
-  `slack` integration when self-hosted.
-- **GitHub** — a fine-grained token (or a GitHub App installation) with read
-  access to Contents, Issues, Pull requests, and Metadata on just the
-  client's repos, as `LORE_GITHUB_TOKEN`. Never a broad personal token, and
-  not an Actions workflow's own `GITHUB_TOKEN`, which only sees the context
-  repo.
-- **Granola** — OAuth: `lore auth granola` once on the machine that syncs. It
-  prints a URL and a code, you approve in a browser, and the grant is saved
-  to `~/.lore/granola-auth.json` and refreshed automatically. (A static
-  `token` or a proxy `endpoint` also work.)
-- **Notion** — an internal integration; its token as `NOTION_TOKEN`. Sharing
-  pages with the integration (Notion → page ··· → Connections) is the consent
-  model.
-- **Jira Cloud** — an Atlassian account email + API token as `JIRA_EMAIL` /
-  `JIRA_TOKEN` (HTTP Basic), or an `api_base` proxy that injects the header.
-- **Gmail** — a Google Workspace *service account with domain-wide
-  delegation*, scopes `gmail.readonly` (and `admin.directory.user.readonly`
-  for `users: "all"`), granted once by a Workspace admin. Key JSON at
-  `~/.lore/gmail-sa.json` on the syncing host. It can't sit behind a
-  header-injecting proxy, because the bearer differs per mailbox.
-
-### 2. Run the wizard — once per client
-
-From inside the client's project repo:
+**For a team, deploy one shared host.** The included provisioning script targets an exe.dev Linux VM. It installs Lore, creates the Git storage under `/srv/lore/repos`, starts the HTTP service on port 8000, and schedules sync every 15 minutes by default. Run these commands from the Lore checkout with your own VM name and the tarball built above.
 
 ```sh
-cd ~/code/acme
-lore setup --channels "#acme,#acme-dev" \
-  --github "acme/web,acme/mobile" \
-  --granola "Acme" \
-  --notion "https://www.notion.so/acme/…" \
-  --jira "ACM" --jira-site https://acme.atlassian.net \
-  --gmail all \
-  --client "Acme" --domains "acme.com"
+ssh exe.dev new --name acme-lore --cpu 1 --memory 2GB --disk 30GB --tag lore
+host=exedev@acme-lore.exe.xyz
+scp deploy/exe/setup.sh "$host:/tmp/lore-setup.sh"
+scp "$package" "$host:/tmp/lore.tgz"
+ssh "$host" 'sudo env LORE_REF=/tmp/lore.tgz bash /tmp/lore-setup.sh'
+ssh "$host" 'systemctl is-active lore-sync.timer lore-www.service'
 ```
 
-Every flag is optional and every value is a prompt with a derived default —
-the context repo name comes from the git remote (`lore-acme`), backfill
-defaults to 3 months. Give it any subset of sources: `--channels` is not
-required when another source is given, so a client without Slack works.
-Agents and scripts pass flags plus `--yes` to skip prompts.
-
-Setup writes `lore.json` with the sources and the client block, scaffolds
-and pushes the context repo, and links the repo you're standing in. Then,
-per mode: self-hosted, the host's timer picks the new repo up on its next
-run; GitHub-hosted, it creates the private repo, sets the token secrets,
-verifies the daily workflow registered, and dispatches the first sync.
-
-The first sync backfills and can be slow (Slack rate-limits new apps hard;
-lore waits and resumes automatically). After that, syncs are incremental.
-
-### 3. What the human still does
-
-- **Slack**: `/invite @lore` in each channel. The bot can only read channels
-  it's been invited to — that's the consent model, not a limitation:
-  `lore.json` says what lore *wants*, invitations control what it *can*, and
-  the bot in the member list means a synced channel is never a secret.
-- **Notion**: share the client's root page(s) with the integration.
-- **GitHub**, self-hosted: one integration per client repo on the host.
-- **Gmail**, first time only: a Workspace admin grants the delegation.
-
-### 4. Link any other project repos
-
-```sh
-cd ~/code/acme-mobile
-lore link your-org/lore-acme          # or just `lore link lore-acme` when self-hosted
-```
-
-Writes the one-line `lore.json` pointer and an `AGENTS.md` section — commit
-both. That's the entire footprint in a code repo: no context files, no
-workflow, no secrets. Any number of repos can point at one context repo.
-
-## Sources
-
-Each is an entry under `sources` in the context repo's `lore.json`; the
-wizard writes them, `lore source add` widens them later (an agent can too,
-via `lore_source_add`), and this is what they mean. Every scope belongs to
-exactly one client repo. Secrets are always `env:` references (lore loads
-`.env` from the working directory; real env vars win) or an `api_base` /
-`endpoint` proxy that injects them, so a token never sits in git.
+On your laptop, set the following field in `~/.lore/config.json`. Lore uses SSH to create, clone and update context repos on this host.
 
 ```json
-"sources": {
-  "slack":   { "channels": ["#acme", "#acme-dev"], "token": "env:SLACK_TOKEN" },
-  "github":  { "repos": ["acme/web", "acme/mobile"], "token": "env:LORE_GITHUB_TOKEN" },
-  "granola": { "folders": ["Acme"], "attendee_domains": ["acme.com"] },
-  "notion":  { "roots": ["<page or database url>"], "token": "env:NOTION_TOKEN" },
-  "jira":    { "projects": ["ACM"], "site": "https://acme.atlassian.net", "email": "env:JIRA_EMAIL", "token": "env:JIRA_TOKEN" },
-  "linear":  { "teams": ["PRP"], "token": "env:LINEAR_API_KEY" },
-  "gmail":   { "users": "all", "admin": "shawn@inputlogic.ca", "exclude": [], "query": "-subject:\"Invitation:\" -label:newsletters" }
-}
+{ "remote": "exedev@acme-lore.exe.xyz:/srv/lore/repos" }
 ```
 
-- **Slack** syncs messages and threads per channel. Channel names must match
-  Slack exactly (hyphens!). Every run re-reads a rolling `overlap_days`
-  window (default 1) for late deliveries and tracks replies per thread for
-  `thread_window_days` (default 30), so late replies to old threads are
-  picked up regardless of the overlap. Channels added to `lore.json` later
-  backfill automatically.
-- **Linear** syncs issues and comments for each team through the GraphQL
-  API and maintains `context/work/linear/<TEAM>.yaml` — the live issue
-  table (`category` is Linear's state type), seeded with every open issue
-  on the first sync and mirrored into the lore tracker like Jira: `started`
-  is in progress, `completed`/`canceled` are done. A personal API key goes
-  in as `Authorization` — on the host through two http-proxy integrations,
-  `api_base` for api.linear.app and `uploads_base` for uploads.linear.app,
-  where files pasted into issues live.
-- **GitHub** syncs issues, pull requests, comments, reviews, commits, and
-  releases for each repo, and maintains
-  `context/work/github/<owner>__<repo>.yaml` — the live issue/PR table,
-  seeded with every open item on the first sync. `include` narrows the kinds
-  (`issues`, `comments`, `reviews`, `commits`, `releases`).
-- **Granola** talks to Granola's MCP server as a client, so it sees exactly
-  what a Granola-connected agent sees. Meetings are scoped by `folders`
-  (titles or ids), `attendee_domains`, and the repo's `client` block — any
-  attendee at a client domain or any listed client-side contact marks a
-  meeting; the union is synced. Each meeting becomes a notes doc (title,
-  attendees with emails, private notes, AI summary) plus a threaded
-  transcript (`"transcripts": false` to skip). Meetings sync once they are
-  `settle_hours` old (default 1) so the summary exists. A meeting filed into
-  the folder days later is still picked up: every run lists the last
-  `rescan_days` (default 30) and syncs any in-scope meeting not yet in the
-  stream. Granola allows
-  roughly one transcript fetch every two minutes per account, so a run
-  syncs notes for every meeting first (cheap; the cursor advances) and then
-  spends at most `transcript_seconds` (default 300) on the transcripts it
-  still owes, oldest first, carrying the rest in the cursor for later runs.
-  Transcript calls are paced across every client in a run, the gap widens
-  each time Granola says slow down, and a transcript already in the stream
-  is never fetched twice. A backfill's summaries land in the first run and
-  its transcripts trickle in over the following hours. Meeting content is
-  evidence for extraction, never authoritative work or facts.
-- **Notion** reads pages and databases the integration has been connected to.
-  Scope a client's docs with `roots` — page or database ids or URLs;
-  anything beneath one is in — or leave it empty for everything shared. Each
-  edit becomes a stream doc with the page rendered to markdown (title,
-  database properties, blocks), so documentation history is grep-able and
-  folded like everything else. Pages edited in the last `settle_minutes`
-  (default 30) wait for the next run.
-- **Jira Cloud** syncs issues and comments, rendering Atlassian Document
-  Format to markdown, and maintains `context/work/jira/<KEY>.yaml` — the live
-  issue table with Jira's status and status category (`state: open` unless
-  the category is Done), seeded with every unresolved issue on the first
-  sync. Scope by project keys (`projects`) or, for workspaces that run
-  clients as boards inside one project, by board ids (`boards`; a board
-  resolves to its saved filter's JQL — `lore setup --jira board:293`).
-  `site` is the Atlassian URL for permalinks and, without a proxy, the API.
-- **Figma** syncs the design as evidence: for each configured file (design
-  file or FigJam board; the REST API does not serve Slides decks — export
-  those to PDF and `lore doc add` them) one doc per top-level frame per page —
-  its text layers in reading order under nested-frame headings, component
-  instances by name, a deep link to the node — re-emitted only when that
-  frame's content changes; an index of pages and frames per file version;
-  and design comments as threaded docs anchored to the frame they were left
-  on. So an agent can check a request or ticket against what the design
-  actually says and link the screen. It is design intent, not the shipped
-  UI. Scope by `files` (URLs or keys) and/or `projects`; auth is a personal
-  access token as `token` (`env:FIGMA_TOKEN`, sent as X-Figma-Token) or an
-  `api_base` proxy that injects it.
-- **Gmail** reads the client's email out of your team's inboxes — for the
-  client who doesn't use Slack. Documents the client links (Google Docs,
-  Sheets, Slides, uploaded Word/PowerPoint/Excel, Drive-hosted PDFs) or
-  attaches (PDF, Word, PowerPoint, Excel, text) are read too — Drive as the
-  mailbox owner, attachments from Gmail — and filed into the `docs` stream
-  dated and attributed like the email, so the content is in memory, not just
-  the link. A Drive folder — linked in an email, or shared with a teammate
-  (Drive's "shared a folder with you" notice, when the sharer is the client)
-  — is read once per email: every readable file in it and its subfolders.
-  A link the owner cannot open is logged, never fatal; images and Figma
-  links stay links. `documents: false` on the source opts out. Mailboxes default to the `team`-side contacts
-  in the `client` block; `users` names them, or `users: "all"` reads every
-  active mailbox in the Workspace (listed through the Directory API as
-  `admin`, default `client.owner`), so a teammate the client emails for the
-  first time is covered with no config change. `exclude` is an opt-out
-  either way. In each mailbox it searches for mail from/to/cc the client's
-  domains or client-side contacts, so internal mail never matches. A thread
-  that landed in four inboxes is one doc, keyed on its Message-ID
-  (`meta.mailboxes` says who had it); replies chain on `References`. Quoted
-  history and signatures are trimmed. Setup: `--gmail` (team contacts),
-  `--gmail all`, or `--gmail "a@x.com,b@x.com"`.
-- **Documents** (`docs`) is the stream with no connector: the spec, brief,
-  deck, or handoff package a client sends by whatever means. `lore doc add
-  <link-or-file>` puts it under `context/streams/docs/<title-slug>/` as one
-  stream doc — the sender as author, the link as permalink — so it is
-  grep-able at once and the next fold reads it exactly like a day of email:
-  requirements a spec states become requests from whoever sent it, a plan
-  in a brief becomes roadmap, every item citing the document. Nothing in a
-  document is authoritative (that is what an SOW is for). Google Docs,
-  Slides, Sheets, and Drive-hosted PDFs or text are read through the
-  Workspace service account as `client.owner` (`--as` to read as someone
-  else), so nothing needs to be link-shareable; local `.md`, `.txt`, and
-  `.pdf` files work too. Re-adding identical content is a no-op; a changed
-  document lands as a new version in the same channel. A 400-page spec is
-  fine: the fold splits it across batches and the weekly report only sees
-  its opening. Every add is audited, committed, and pushed.
+Keep the host private while setting it up. The host trusts exe.dev’s authenticated peer identity for VM agents, so the raw service port must only be reachable through a trusted ingress. Back up the context repos and the credentials needed to restore service. [Host deployment, authentication and backups](docs/DEPLOY_EXE.md)
 
-Sources are independent: one that fails doesn't hold up the rest. The
-others sync, commit and fold as usual; the failed source keeps its old
-cursor, resumes from there on a later run, and the fold — a content delta —
-picks up the catch-up material whenever it lands. A source with no
-connector or an unresolved `env:` ref fails that source, not the run. To
-keep a source configured but skipped entirely, set `"disabled": true` on it.
+## Create a project and run the first sync
 
-What replaces the old all-or-nothing rule is *saying so*. Per-source health
-lives in `state.json` and surfaces everywhere freshness does: `lore check`
-and `lore source list` for a human, the host page's client table, and
-`recall` — whose `synced.sources` classifies each source `ok`, `stale`
-(synced before, currently failing, with how many hours of gap), `never`, or
-`disabled`, and whose `synced.degraded` names the ones an answer must be
-hedged on. A run-level "synced 2 minutes ago" can hide a source that has
-been down for days; the per-source layer is what keeps an agent from
-presenting partial memory as complete. `backfill` seeds the first sync N months back (per-source
-overrides supported); everything after is forward-incremental.
+1. **Authorize a source.** For this example, give a GitHub token read access to the selected repository’s contents, issues, pull requests and metadata. Set `LORE_GITHUB_TOKEN` in the environment of the process that runs sync. Locally, that is your shell. On the VM, edit `/etc/lore/env` with `sudoedit`, or use a credential-injecting integration. Keep credential values outside the context repo.
+2. **Create the context.** Run setup from the project’s code repo. Replace the sample repo, name and addresses with your own.
 
-**Who the client is.** Every context repo carries a `client` block — name,
-email domains, known contacts with `side: client|team|vendor` (and
-`aliases` for a person's other addresses, such as a personal gmail, matched
-like the primary email by Gmail and Granola), and `owner`:
-the *team-side* account lead, the Workspace user the service account acts as
-for Gmail directory listing and Google Doc export (asked once by `lore
-setup`, saved as `owner` in `~/.lore/config.json`, `--owner` overrides).
-Email is the identity key; names are display. Connectors use it to scope material
-(Granola matches attendees, Gmail matches correspondents and picks
-mailboxes), extract uses it to tell client asks from team decisions, and
-`recall` returns it so an agent knows who it is talking about.
+   ```sh
+   cd ~/code/acme-web
+   lore setup lore-acme --client "Acme" --owner pm@example.com \
+     --domains acme.example --github your-org/acme-web --yes
+   ```
 
-```json
-"client": {
-  "name": "Acme",
-  "domains": ["acme.com"],
-  "contacts": [{ "name": "Priya Patel", "email": "priya@acme.com", "role": "Product owner" }]
-}
+   This creates `lore-acme` in the configured storage. In a Git checkout without an existing `lore.json`, setup also writes a pointer and an `AGENTS.md` entry. Commit those two files so teammates inherit the link. In another code repo for the same project, run `lore link lore-acme` to share that memory.
+3. **Sync.** On a local installation, run the following with the repos path you configured above.
+
+   ```sh
+   lore run-all --repos "$HOME/lore-data/repos" --work "$HOME/lore-data/work"
+   ```
+
+   On the shared host, the timer discovers new projects automatically. To start immediately, run `ssh "$host" 'sudo systemctl start lore-sync.service'`. The first run backfills three months by default. Set `--backfill` during setup to change the window. Repeat the local command when you want fresh data, or schedule it.
+4. **Verify from the linked code repo.** Run `lore source list` to see each source’s scope, last success and errors. Run `lore grep "checkout"` with a term you expect to find. A successful sync makes the raw material searchable even before extraction.
+
+For derived requests, decisions and reports, set `ANTHROPIC_API_KEY` for the runner and add `--extract` to local `run-all`, or set `LORE_EXTRACT=1` in the host’s `/etc/lore/env`. For Jev’s semantic matching, including linking requests to work that already covers them, also set `TYPESAFE_API_KEY`. These features send relevant project material to their configured model providers. [Extraction options](docs/DEPLOY_EXE.md#5-extract)
+
+## Connect an MCP client
+
+**Local or SSH-backed Git storage.** Configure your MCP client to launch `lore mcp --context lore-acme`. The machine running the client needs the CLI, the `remote` setting and access to the context repo. For Codex, register the server once.
+
+```sh
+codex mcp add lore-acme -- lore mcp --context lore-acme
 ```
 
-<details>
-<summary>Manual setup (what the wizard does, by hand)</summary>
-
-`lore init` in a fresh repo scaffolds `lore.json`, `context/`, `AGENTS.md`,
-and `.github/workflows/lore-sync.yml`. Edit the config, then sync and push:
+For a client with a JSON configuration file, add this server entry.
 
 ```json
 {
-  "project": "acme",
-  "sources": {
-    "slack": { "channels": ["#acme", "#acme-dev"], "token": "env:SLACK_TOKEN" }
-  },
-  "backfill": { "months": 3 },
-  "extract": ["requests", "decisions", "roadmap", "weekly-report"]
-}
-```
-
-```sh
-lore check && lore sync
-git add -A && git commit -m "lore: first sync" && git push
-gh secret set SLACK_TOKEN --repo your-org/lore-acme     # GitHub-hosted only
-```
-
-Optional `"write": { "allow": ["shawn", "priya"] }` restricts who may
-`remember`. The actor is the OS user (or `--by` on the CLI; MCP callers can
-never name one). It is an honesty check, not authentication — anyone who can
-push to the context repo can bypass it.
-
-`extract` picks its LLM backend automatically: with `ANTHROPIC_API_KEY` (or
-`ANTHROPIC_AUTH_TOKEN`) set it calls the Claude API, billed per token;
-otherwise it shells out to a logged-in `claude` CLI, which runs on your
-Claude subscription — in CI, set a `CLAUDE_CODE_OAUTH_TOKEN` secret instead
-of an API key (Max plans: `claude setup-token`). Override with
-`LORE_LLM=sdk|cli`. The fold returns a delta (new or changed items only;
-everything else is kept verbatim), so an incremental fold is small and
-never drops an existing item. A first fold or multi-batch re-fold uses
-`LORE_MODEL` (default `claude-opus-4-8`); the routine one-batch fold onto
-existing artifacts uses `LORE_MODEL_INCREMENTAL` (default `claude-sonnet-5`).
-
-</details>
-
-## Using it
-
-From a linked repo:
-
-```sh
-lore grep "black friday"                  # search everything
-lore grep -i --channel acme-dev "deploy"  # case-insensitive, one channel
-lore recall decisions                     # pinned facts + derived, one category
-lore recall reports                       # the latest weekly reports
-lore recall work                          # the lore tracker (open tickets, who moved each and why) + Jira/GitHub snapshots
-lore work list                            # open tickets in rank order
-lore work move CAR-3 done --reason "Cory shipped it Friday" --source https://slack.com/…
-lore remember "client wants launch before Black Friday" -c decisions
-lore refresh --trigger --fold             # self-hosted: sync + fold right now, wait for it
-```
-
-From anywhere — `~/.lore/registry.json` learns project names as you use them:
-
-```sh
-lore grep -p acme "launch date"
-lore --context your-org/lore-acme recall
-```
-
-Reads pull the cache first (`--no-pull` to skip). `remember` commits and
-pushes the pin immediately — a fact that only exists in a local cache isn't
-remembered, it's misplaced. Resolution order: `--context` flag → nearest
-`lore.json` walking up from cwd → `-p/--project` via the registry. The cache
-is disposable; delete `~/.lore/cache/` any time.
-
-`refresh` pulls what the host already has. On a self-hosted setup,
-`--trigger` runs the host's sync unit over SSH and waits (about a minute);
-`--fold` runs the timer's sync + LLM fold unit instead, so derived artifacts
-update too. Both are rate-limited to once per 5 minutes (`--force`), and a
-run already in flight is waited out rather than restarted.
-
-### Roadmap — goals and direction
-
-The roadmap describes overarching short- and long-term outcomes, why they
-matter, what success means, and how they influence work priorities. It can
-span several epics or tickets. `lore recall roadmap` and the MCP roadmap
-category return plain English, with descriptions of supporting work followed
-by ticket keys in brackets. `--json` retains structured access.
-
-The **Goals** tab lets the account team set outcomes during planning meetings.
-The first save preserves the existing roadmap in `context/goals.yaml` and puts
-the team in charge of future goal changes. Until then the project uses
-`context/derived/roadmap.yaml`. Concrete delivery work lives in the tracker. The fold can propose evidence-backed priority changes in support
-of a goal, with a reason explaining the tradeoff. It never automatically copies
-a goal's priority to every ticket. Older task-shaped roadmap entries are kept
-for history and classified separately as the fold reviews them. See
-[Roadmap goals](docs/ROADMAP_GOALS.md) for the fields and migration behavior.
-
-For an incoming client ask, `lore_request_triage` shows relevant goals,
-work already underway, and the front of the queue. Jev can suggest goal
-matches during the conversation. The fold records request-to-goal links
-for the board and roadmap. New tickets join the end of the ranked backlog.
-The Enso dispatcher starts one at a time per runner and project by default.
-
-### Work — the tracker of record
-
-Every project has a lore tracker, `context/work/lore/<PREFIX>.yaml`
-(`work.prefix` in `lore.json`, derived from the client name: CareMobi →
-`CAR-1`). It is the answer to "what is open, in progress, blocked, done" —
-for clients with Jira or GitHub Issues and for clients with nothing.
-
-- **Mirrored on sync.** Each open actionable Jira/GitHub issue becomes a ticket with
-  `external` pointing at it; when the tracker moves an issue, sync records
-  the move in the ticket's history and lore's status follows. Closed issues
-  lore never tracked are not imported. Jira epics stay planning evidence;
-  their child tasks import normally. PRs stay delivery evidence.
-- **Reviewed by the fold.** `lore extract` sees the tracker next to the new
-  material and may move, reprioritise, or re-rank a ticket when the
-  evidence is unambiguous — a merged PR, "shipped", "blocked on X" — and
-  may **open a ticket** for work that is committed but not yet tracked: the
-  team agreed to it, someone is doing it, it is scheduled, or it is
-  a signed-off concrete action supporting a goal. New tickets keep the request they came from
-  (`request: req-0007`). Only with high confidence and a cited source; never
-  to `archived` and never born `done`; never over a person's more recent
-  call on the same field; never a second ticket for a request already
-  tracked or a title that reads like an existing one (Jira and GitHub
-  issues are mirrored in, so the fold sees them). Skipped proposals are
-  logged. `lore extract --review` runs one fold with no new material, to
-  apply the current rules to what memory already holds. Where lore and the
-  external tracker disagree, recall marks the ticket `drift: true` — what
-  `lore work push` writes back.
-- **Moved by people and agents** with `lore work` or the `lore_work_*` MCP
-  tools. A reason is required on every move; it is the paper trail.
-- **On the web board** — list and kanban views at `/board` on the lore host,
-  for your team and the client's people. Email one-time-code sign-in, per
-  project, members edit and viewers look (below).
-
-**Related PRs and delivery reconciliation.** Sync attaches PRs that explicitly
-reference a Lore key, a linked tracker issue, or a PR URL on the ticket, and
-refreshes their draft/open/merged/closed state. Related PRs live separately
-from the editable description in `related_prs`; they appear on the board,
-in `lore work show`, MCP recall, and the status page. An issue number such as
-`#42` is matched only within its repository; cross-repository references
-must include the repository or URL.
-
-With `TYPESAFE_API_KEY` set, each extract also uses Jev to match open tickets
-against open PRs and PRs updated within the past 90 days in the configured
-repositories. Relevance and whole-task coverage are evaluated separately;
-relationships scoring at least 0.85 relevance are retained. Explicit and
-already-linked PRs remain eligible regardless of age. Results, including
-negative matches, are cached by the ticket requirements, PR evidence and
-model in `context/delivery/matches.json`. Each extract evaluates at most 240
-uncached pairs; later runs automatically continue the catch-up. API failures
-keep known links and retry on a later extract. `LORE_PR_MATCHING=off` disables
-new Jev evaluations.
-
-Changed relationships create delivery stream events for extraction. The fold
-reads ticket descriptions, related PR states, coverage
-judgments and PR descriptions, then applies its existing cited,
-high-confidence status-change rules. A related or merged PR alone never
-automatically completes a ticket; partial implementation and outstanding
-acceptance requirements remain for the fold to assess. This runs even when
-there are no other new streams, so previously missed PRs can be recovered
-without a manual review queue. On upgrade, GitHub sync refreshes the past
-90 days and all open issues/PRs once to populate descriptions in old tables.
-
-```sh
-lore work add "Caregiver onboarding email sequence" --priority P1 --source https://slack.com/archives/…
-lore work promote req-0007                      # a derived request becomes a ticket, keeping its evidence
-lore work move CAR-2 in_progress --reason "Cory started the draft" --source https://slack.com/…
-lore work set CAR-2 --assignee cory --external jira:INPT-9 --reason "same work as the Jira story"
-lore work rank CAR-3 --top --reason "report is due Friday"
-lore work list --all
-lore status                                     # what's outstanding: the fold's summary + the live open work (what lore_status returns)
-lore work label CAR-2 CAR-5 --add "stripe integration" --reason "group the Stripe work"
-lore work archive --origin linear --reason "starting fresh" --dry-run   # every open ticket mirrored from Linear; drop --dry-run to do it
-lore work unarchive CAR-2 --reason "still wanted"                    # back to the status it had before
-lore work claim CAR-2 --holder enso:athena --ref WEB-12 --stage build --status in_progress --json   # take a ticket for a run; exit 3 if someone holds it
-lore work claim CAR-2 --holder enso:athena --ref WEB-12 --stage review --status review             # same holder + ref: hand it to the next stage
-lore work renew --holder enso:athena            # heartbeat: confirm every claim this holder has
-lore work release CAR-2 --holder enso:athena --ref WEB-12 --status done --reason "deployed"
-lore work list --label "stripe integration"     # one theme's open tickets (recall --label: open and closed)
-lore work show CAR-2                            # the ticket with its full history
-```
-
-Statuses: `todo`, `in_progress`, `blocked`, `done`, `archived`. Priorities
-`P1`–`P3`; file order is rank. A ticket may carry a markdown `description`
-(`--description`), shown on the board. Tickets deliberately carry no estimates or
-SOW weeks — they are delivery tracking, not capacity burn.
-
-**The board.** An optional web view over the tracker, served by `lore www`
-on the host when `LORE_BOARD=1`: a kanban (drag between columns and within
-one — a move and a rank, as if from `lore work`) and a sortable, filterable
-list, with a ticket drawer for editing fields and the description and
-reading the full history. It is off per project until turned on:
-
-```sh
-lore board enable --context lore-acme
-lore board add jane@acme.com --context lore-acme            # member: create, edit, move
-lore board add @acme.com --viewer --context lore-acme       # everyone at the domain, read-only
-lore board remove jane@acme.com --context lore-acme         # their session stops working at once
-lore board show --context lore-acme
-```
-
-People sign in with an emailed 6-digit code and stay signed in for 90 days.
-The server caches parsed board configs and tickets in memory, checking each
-file's Git blob ID on every read. Ticket edits and access changes take effect
-immediately; unchanged files stay cached across sync commits. The cache holds
-at most 128 files and 16 MiB of source data (parsed heap usage may be larger),
-evicting the least recently used entries. No Redis or extra service is needed.
-Host admins (`LORE_BOARD_ADMINS`) are members of every enabled board. Every
-board change is a history entry `via: web` signed with the person's email,
-committed and pushed like any other write — the fold treats it as a human
-decision. Setup on the host: docs/DEPLOY_EXE.md §8.
-
-**Attachments and comments.** A ticket's drawer on the board shows its
-files — screenshots, recordings, PDFs, dropped, pasted or picked on the
-board, or imported by `lore sync` from the linked Jira, GitHub or Linear
-issue or a Slack message cited in the ticket's sources — and one comment thread: comments made on the board (or with
-`lore work comment CAR-3 "…"`, or an agent's `lore_work_comment`) together
-with the linked issue's own comments. Board comments are stream docs
-(`context/streams/board/<KEY>/`), so they are searchable and the fold reads
-them; nothing is posted back to the tracker. Files are content-addressed:
-git holds only `context/attachments.yaml` (name, type, size, sha256, where
-it came from); the bytes live in the asset store — Cloudflare R2 behind a
-small Worker, with a cache on the host (docs/DEPLOY_EXE.md §9). Sync imports
-files on **open** linked tickets only, up to 100 MB each; a larger one is
-recorded as a link to where it lives.
-
-Slack sync retains file names and types in the message stream, including
-file-only messages and replies, and keeps download metadata in
-`context/source-files/slack.yaml`. Files from each **exact cited message**
-are imported onto open tickets; unrelated messages in its thread are not
-automatically attached. Newly extracted tickets import those files in the
-same extraction run. This attaches the images for people to view on the
-board; it does not add image understanding to the extraction model.
-The Slack app needs `files:read` (reinstall existing apps after adding the
-scope). Proxy-only setups also need `sources.slack.files_base` targeting
-`https://files.slack.com` with the workspace token injected; see
-docs/DEPLOY_EXE.md §9. Older messages need to be re-read by sync to collect
-their file metadata: increase `overlap_days` within the configured backfill
-window, or reset the channel cursor for a backfill, including old replies.
-Existing cited tickets then pick up their attachments on sync without
-recreating the tickets.
-
-**Pushing to Jira.** Lore's state flows back out only when someone asks:
-
-```sh
-lore work push --all --dry-run          # what would change in Jira, changing nothing
-lore work push JNT-3 JNT-7              # these tickets
-lore work push --all                    # every ticket that differs from Jira
-```
-
-A ticket linked to a Jira issue whose status disagrees with lore's gets the
-matching workflow transition (chosen by status category, so "In Review"
-still counts as in progress and a "Blocked" transition is used when the
-workflow has one). An open ticket with no Jira issue gets one created in the
-client's project and scoped onto their board — the board filter's clauses
-(`"Client Project" = Jointly`) are resolved to the create screen's field and
-option ids — then linked back as `external`. `sources.jira.push` in
-`lore.json` overrides the project, issue type, and scoping fields when
-inference cannot. Archived tickets and done tickets without an issue are
-never pushed. Every push is a history entry on the ticket and an audit line.
-
-**Sprints stay in Jira.** Lore's tickets carry no sprint — Jira owns sprint
-planning — but a push respects it. A ticket that is in flight in lore
-(`in_progress` or `blocked`) and sits in no open sprint goes into the
-board's active sprint; one the client already planned into a sprint is left
-there, and with no active sprint (between sprints) it stays in the backlog
-and the push says so. When the client asks for specific work in a sprint:
-
-```sh
-lore work push JNT-3 JNT-7 --sprint active       # the board's current sprint
-lore work push JNT-9 --sprint "Sprint 15"        # a named sprint, active or future
-```
-
-The board is `sources.jira.push.board`, else the first of `boards`, else
-the project's only scrum board; kanban boards have no sprints, and
-`push.sprints: false` turns this off for a client. Sync mirrors each Jira
-issue's current sprint onto Jira's own table (`sprint`, `sprint_state`) and
-into its stream docs, so recall and the fold can say "JNT-12 is in Sprint 14".
-Jira is reachable only from the lore host, so from a laptop or agent the
-command runs itself there over SSH (like `lore refresh --trigger`) and pulls
-the result back. The timer never pushes.
-
-### Load — observed project activity
-
-Load counts retained PR openings, emails, meetings, board changes, and assignment
-transitions, with evidence and project-specific actor roles. It separates human,
-agent, service, and unknown accounts. These are activity counts, not hours or
-capacity. Coverage gaps and ambiguous historical board changes remain visible.
-An optional semantic stage also tracks decisions, customer requests, and human
-commitments with quoted evidence and separate accepted/candidate counts.
-
-```sh
-lore load rebuild --preview --json
-lore load rebuild
-lore load --from 2026-09-01 --to 2026-10-01 --type pr.created --group-by role
-lore load events --type meeting.held --role technical_lead --participation attendee
-lore load extract --max-batches 1
-lore load events --type decision.made --method inferred --json
-lore load --type ticket.completed
-```
-
-Configure `load.actors` and `load.timezone` in `lore.json`; `load.enabled: true`
-enables rebuilding after self-hosted sync, independently of LLM extraction.
-`load.semantic.enabled: true` enables bounded semantic batches during scheduled
-extraction; set `load.semantic.from` to choose a historical starting date.
-With `TYPESAFE_API_KEY`, `load.semantic.gate: {"mode":"shadow","threshold":0.3}`
-measures Jev's event screening without skipping evidence. After validating a
-threshold, `mode: "filter"` lets clearly low-signal passages bypass Claude;
-uncertain passages, long documents and provider failures still reach extraction.
-Scores are cached by content/model/classifier version, and disabling or changing
-the gate reopens its skipped checkpoints. Ordinary artifact extraction does
-not use this filter. Load also records separate Jev and
-Claude usage metrics; see the evaluation and configuration details below.
-Commit inputs/config before rebuilding in a Git context. CLI and the read-only
-`lore_load` MCP tool query the same cached projection. See
-[Load configuration, counting rules, and roadmap](docs/LOAD.md).
-
-### Commitments — statements of work
-
-An SOW in lore is a *capacity commitment*: how many human-weeks were sold,
-over what period, sometimes with a few named scope items. It is the one
-document that is authoritative about what was agreed, so it gets its own
-layer, `context/sow/<slug>.md`, written only by a human (or an agent on
-explicit instruction), never by sync or the fold.
-
-```sh
-lore sow add "https://docs.google.com/document/d/…" --name "Jointly SOW 4" --weeks 12 \
-  --start 2026-09-01 --signed 2026-08-28 \
-  --source "https://docs.google.com/document/d/…" --scope "Agreement builder v2; Onboarding"
-lore sow list
-```
-
-The document can be a **Google Doc link** — lore exports it as Markdown
-through the Workspace service account (the Gmail one, with
-`drive.readonly` added to its domain-wide delegation and the Drive API
-enabled in its Cloud project), reading as `client.owner` or `--as
-<teammate>`, so contracts never need to be link-shareable — or a Markdown,
-text, or PDF file. A machine without the key hands the link to the lore host
-over SSH. The body is scrubbed like every stream doc and, by
-default, stripped of lines carrying currency amounts — the commitment lore
-needs is in weeks, and the repo is readable by every agent pointed at it
-(`--keep-commercials` to keep them). Re-adding the same name updates it;
-`--status exhausted|superseded|closed` retires it. Every add commits, pushes,
-and lands in the audit log.
-
-`lore recall` (and `lore_recall`) then return a `sow` layer: each SOW's
-weeks sold, effective date, status, and scope. Nothing is derived from the
-calendar — the team measures a commitment by the weeks *allocated* against
-it, and that will come from the scheduling source as a work table next to
-this layer. The fold sees the active SOWs and notes when a request falls
-outside named scope; the weekly report gets a Budget line restating the
-figures. Agents
-attach one with `lore_sow_add`, passing the Google Doc link (or the text
-they read) plus the numbers the user or the document states.
-
-### Documents — the client's specs, briefs, and decks
-
-```sh
-lore doc add "https://docs.google.com/document/d/…"                 # title, author, link from Drive
-lore doc add ~/Downloads/alpha-gtm-brief.pdf --from "Matthew" --date 2026-09-09
-lore doc add "https://docs.google.com/presentation/d/…" --title "Vision deck"
-lore doc add "https://drive.google.com/drive/folders/…"             # every readable file in the folder, subfolders too
-lore doc list
-```
-
-A document is raw material, not a layer: it lands in the `docs` stream (see
-[Sources](#sources)) and from there behaves like anything else lore synced —
-`lore grep` finds it immediately, the next `lore extract` folds it into
-requests, decisions, and roadmap citing the document's link, and the weekly
-report mentions that it arrived. Agents add one with `lore_doc_add`, passing
-the Google link (or the text they read plus a title). When a document *is*
-the commitment — weeks sold over a period — use `lore sow add` instead.
-
-### Onboarding the next client
-
-[docs/PLAYBOOK.md](docs/PLAYBOOK.md) is the step-by-step: the facts to
-gather, the human steps per source, one `lore setup` command, first sync,
-verify, point an agent at it. A self-hosted lore host serves the same
-playbook plus a live status table of every client at its HTTPS URL
-(`lore www`, installed by `deploy/exe/setup.sh`). The `lore-onboard` skill
-in the plugin walks an agent through it: say "set up lore for Acme".
-
-### When an engagement ends
-
-```sh
-lore archive --context inputlogic/lore-acme     # or -p acme, or from inside the repo
-lore archive --restore --context inputlogic/lore-acme
-```
-
-`archive` marks the context repo `lifecycle: archived` in `lore.json`,
-commits and pushes, archives the GitHub repo when there is one (read-only,
-history kept, daily cron stops), and drops the local cache clone and
-registry entry. From then on `sync` and `extract` are no-ops, `remember` is
-refused, and every read — CLI and MCP — is labelled ARCHIVED with the date,
-so an agent never presents old history as current state. The repo is never
-deleted: it is the only copy of the synced history and the pins.
-`--restore` reopens it. What stays manual: unlinking any project repos, and
-removing @lore from the Slack channels.
-
-### GitHub Projects
-
-GitHub Projects v2 can project Lore tickets onto a board, with two-way status,
-title, and description sync. Add an explicit mapping to the context's `lore.json`:
-
-```json
-{
-  "sources": {
-    "github_projects": [{
-      "owner": "inputlogic",
-      "number": 8,
-      "status_field": "Status",
-      "status_map": {
-        "Todo": "todo",
-        "In Progress": "in_progress",
-        "In Review": "review",
-        "Done": "done"
-      }
-    }]
+  "mcpServers": {
+    "lore-acme": {
+      "command": "lore",
+      "args": ["mcp", "--context", "lore-acme"]
+    }
   }
 }
 ```
 
-The host uses `LORE_GITHUB_TOKEN` directly. It needs Projects read/write and
-permission to edit linked repository issues (or PRs). Each project may override
-`token` with an `env:VARIABLE` reference. Organization and personal projects are
-supported; the repository-scoped aggregate GitHub proxy cannot serve this source.
-Run `lore check`, then `lore sync`, or `lore project sync inputlogic/8`.
-
-Items linked to an already-tracked GitHub issue auto-link to that Lore ticket.
-Existing issue references and ticket IDs stay intact; an additive `project_items`
-list holds each board link and its last successful sync values. On first link,
-Lore supplies the title and status, and a missing description is filled from
-GitHub. Later project-only edits flow into Lore. Lore-only edits flow back
-immediately from MCP, CLI, board, or fold changes. If both sides change a field,
-Lore wins and `state.json.conflicts` records the drift.
+**Hosted HTTP.** A client can instead connect to `https://YOUR-LORE-HOST/mcp/lore-acme`. For a person signing in from a laptop, enable the web board and grant that person project access as described below. In Claude Code, register the URL with this command.
 
 ```sh
-lore project item add inputlogic/8 "Investigate retry" --body "Steps to reproduce" --status todo
-lore project item add inputlogic/8 "Existing ticket" --link-work COI-14
-lore project item move COI-14 review --reason "Ready for review"
+claude mcp add --transport http lore-acme https://YOUR-LORE-HOST/mcp/lore-acme
 ```
 
-Agents use `lore_project_item_add` and `lore_project_item_move`. `lore_work_add`
-also accepts `project: {owner, number, column?}`. An add creates a draft unless
-the linked Lore row already references a GitHub issue. Assignees stay read-only
-metadata. Removing an item from a board unlinks it and keeps the Lore ticket.
-Unknown columns remain `status_raw` metadata; a Lore status without a configured
-column fails visibly on write-back.
-
-GitHub and git cannot commit atomically. On a partial failure, Lore keeps the
-pending change and successful ledger fields for the next sync to retry. An
-interrupted add reports its work key: retry with `link_work` to reuse the item.
-Changes are stored per day in `context/streams/github-projects/`; current
-snapshots live in `context/projects/github/`. See
-[the implementation notes](docs/GITHUB_PROJECTS_SOURCE.md) for schema details and
-release validation. Configure mappings in `lore.json`; `lore source add` does not
-infer a mapping.
-
-### For agents (MCP)
-
-**From your own machine (Claude Code, no SSH).** With the board on, the
-host's MCP endpoint also takes OAuth: run the command the board's *Connect
-Claude Code* page shows (`claude mcp add --transport http lore-acme
-https://<host>/mcp/lore-acme`), then `/mcp` in Claude Code to sign in — a
-browser opens, you sign in with the board's email code and approve. Access
-follows your board role on that project: members get every tool (writes are
-attributed to your email), viewers the read tools only; being removed from
-a board ends it. Connected apps are listed, and revocable, on the same page.
-Agent VMs keep using the peer integration (§6 of docs/DEPLOY_EXE.md).
-
-
-`lore mcp` serves the query surface over stdio: `lore_grep`, `lore_read`,
-`lore_recall`, `lore_sync_now`, `lore_source_list`, `lore_remember`,
-`lore_sow_add`, `lore_doc_add`, `lore_source_add` (widen what is synced — a
-repo, channel, folder, page, design file, board, Linear team, or mailbox — on explicit
-instruction; identifiers only, credentials stay on the host), and the tracker
-verbs `lore_work_add`, `lore_work_promote`, `lore_work_move`, `lore_work_set`
-(each requires a reason), and `lore_work_push` (write ticket state to Jira,
-on request only). `lore_recall`
-returns exactly what the CLI does — pins, every derived artifact, the lore
-tracker and the external work tables, recent reports, and sync/extract
-timestamps so an agent can say how fresh its answer is. `lore_sync_now` is `lore refresh`: it pulls, optionally
-triggers the host's sync (and fold) and waits, and reports before/after
-freshness — agents never run `lore sync` themselves.
-`lore_source_add` is the scope half of onboarding a source: it points one of
-the built-in connectors at more of the client — another Slack channel, a repo
-on a client that had only Figma, a Notion page — and the new scope backfills
-on the next sync. Connector *kinds* stay in code; an agent chooses what of a
-vendor belongs to the client, never invents a new kind of source. The
-credential and consent half stays human, and the result says what is still
-owed (`/invite @lore`, a host integration, sharing the Notion page). Because
-`sync` fails a whole client on an unusable source, a newly configured source
-whose credentials don't resolve is written `"disabled": true` rather than
-live — it can never take a client's sync down. In a linked repo with
-Claude Code:
+Open `/mcp`, select the server and authenticate in the browser. For an agent on another exe.dev VM, create a peer integration and grant its VM access to one project. These commands assume an agent VM named `acme-agent`.
 
 ```sh
-claude mcp add lore -- lore mcp
+ssh exe.dev integrations add http-proxy --name lore-mcp --target https://acme-lore.exe.xyz/ --peer --attach vm:acme-agent
+ssh "$host" lore agents allow acme-agent lore-acme
 ```
 
-Any MCP client, pinned to a project:
+Configure that agent’s HTTP MCP client with `https://lore-mcp.int.exe.xyz/mcp/lore-acme`. Peer access works with the web board switched off. [Peer-agent setup](docs/DEPLOY_EXE.md#6-giving-another-vms-agent-access--the-hosted-mcp-endpoint) · [Laptop OAuth](docs/DEPLOY_EXE.md#10-mcp-from-laptops--oauth)
+
+To check the connection, ask your agent **“Use Lore to list the sources for Acme and tell me when they last synced.”** Then try **“Which requests are already covered by open tickets? Show me the evidence.”** Run `lore mcp --list-tools` to see the full tool list and which tools write to project memory.
+
+## Link more sources
+
+From a linked code repo, `lore source add` adds a source or widens its scope. From elsewhere, append `--context lore-acme`. The next sync imports the new scope using the runner’s credentials.
+
+```sh
+lore source add github your-org/acme-mobile
+lore source add granola "Acme planning"
+lore source list
+```
+
+| Source | Project scope | Access needed by the sync runner |
+| --- | --- | --- |
+| Slack | `--channels "#acme"` at setup, or `lore source add slack "#acme"` | Create a Slack app from the manifest printed by `lore manifest slack`, install it, invite its bot to each channel, and configure `SLACK_TOKEN` or a Slack proxy. |
+| GitHub | `--github owner/repo`, or `lore source add github owner/repo` | Repo access via `LORE_GITHUB_TOKEN` or an integration for the selected repos. Imports issues, pull requests, reviews, comments, commits and releases. |
+| GitHub Projects v2 | Project owner, number, and a mapping from project columns to Lore statuses | Configure `sources.github_projects` in the **context repo’s** `lore.json` and push the change. Grant Projects access, including write access for two-way updates. [Configuration example](docs/GITHUB_PROJECTS_SOURCE.md) |
+| Jira Cloud | `lore source add jira ACM --site https://acme.atlassian.net` or use `board:123` | `JIRA_EMAIL` and `JIRA_TOKEN`, or an authenticated proxy with access to the project. |
+| Linear | `lore source add linear ENG` after setup | A workspace key with access to that team. Hosted setups using proxies pass the client’s GraphQL `--api-base` and attachment `--uploads-base`. Direct-token configs use `LINEAR_API_KEY`. |
+| Granola | `lore source add granola "Acme planning"` | Run `lore auth granola` as the sync user on the syncing machine, or configure an authenticated endpoint. |
+| Notion | `lore source add notion <page-or-database-url>` | Share each root with the integration and configure `NOTION_TOKEN` or a proxy. |
+| Figma | `lore source add figma <file-url-or-key>` | Give the token’s account access to the design file, FigJam board or Slides deck. Configure `FIGMA_TOKEN` or a proxy. |
+| Gmail | `lore source add gmail pm@example.com` | Configure client domains or contacts and a Workspace service account with admin-approved domain-wide delegation for Gmail read access. Start with named team mailboxes. [Gmail setup](docs/PLAYBOOK.md#3d-gmail--for-the-client-who-doesnt-use-slack) |
+
+With a configured `remote`, adding a **new** Slack, GitHub, Notion, Jira or Figma source through `source add` requires the corresponding `proxy` entry in `~/.lore/config.json`. With direct tokens, include the source in `lore setup` or edit the context repo’s `lore.json` and commit and push it. For example, a new Slack block under `sources` can be `"slack": { "channels": ["#acme"], "token": "env:SLACK_TOKEN" }`. The token value belongs on the runner. [Proxy configuration](docs/DEPLOY_EXE.md#3-laptop-config)
+
+For GitHub Projects, merge the following example into the context repo’s `sources` object. Use the owner, project number and column names from your own board, then commit and push.
 
 ```json
-{ "mcpServers": { "lore": { "command": "lore", "args": ["mcp", "-p", "acme"] } } }
+{
+  "github_projects": [{
+    "owner": "your-org",
+    "number": 7,
+    "status_field": "Status",
+    "status_map": { "Todo": "todo", "In Progress": "in_progress", "Done": "done" }
+  }]
+}
 ```
 
-`LORE_CONTEXT=<owner/repo or path>` in the server's environment does the same
-as `--context`.
+**Documents are a separate import.** Use `lore doc add ./brief.pdf` for a client file, or pass a Google Drive file or folder URL with Drive access configured. Lore also reads local Markdown, text, CSV, Word, Excel and PowerPoint files. Use `lore sow add` for a statement of work that should inform planning. [Onboarding playbook](docs/PLAYBOOK.md)
 
-### The Claude Code plugin — skills + server in one install
+## Enable the optional web board
 
-This repo is a Claude Code plugin marketplace. One install gives an agent the
-`lore` MCP server and the two skills that teach it to use lore well:
+The shared host can serve a board for project members and read-only viewers at `/board/`. It includes kanban and list views, request intake, and a Goals page for the account team.
 
-```
-/plugin marketplace add nerdburn/lore
-/plugin install lore@lore
-```
+1. On the host, set `LORE_BOARD=1` and `LORE_BOARD_ADMINS` in `/etc/lore/env`. Configure `LORE_BOARD_EMAIL_FROM` with a verified sender and either `RESEND_API_KEY` or `LORE_BOARD_EMAIL_API` for emailed sign-in codes. Restart with `sudo systemctl restart lore-www`.
+2. From the linked code repo, enable this project and grant access.
 
-(`claude plugin install lore@lore --scope project` pins it for a whole team
-via `.claude/settings.json`.) The plugin lives in
-[`plugins/lore/`](plugins/lore/) and needs the `lore` CLI on the PATH.
+   ```sh
+   lore board enable
+   lore board add pm@example.com
+   lore board add reviewer@acme.example --viewer
+   ```
 
-[`plugins/lore/skills/lore-mcp/SKILL.md`](plugins/lore/skills/lore-mcp/SKILL.md)
-teaches an agent to *use* the memory: the trust order (pins → work tables →
-derived → reports → raw streams), when to recall versus grep, that the
-GitHub and Jira work tables are authoritative for delivery state and
-meetings are evidence rather than decisions, when to refresh (and to fold
-before answering status questions), to cite sources and report freshness,
-and to pin facts only on explicit user instruction — plus how to connect
-the server when it isn't already.
+3. Open `https://YOUR-LORE-HOST/board/p/lore-acme` and sign in with an allowed email. For access outside your private network, configure the host’s HTTPS ingress before sharing the link. [Web board deployment](docs/DEPLOY_EXE.md#8-the-web-board)
 
-[`plugins/lore/skills/lore-onboard/SKILL.md`](plugins/lore/skills/lore-onboard/SKILL.md)
-teaches the whole onboarding: check the hosting mode, run `lore setup --yes`
-with flags, relay the human steps, verify with a real query before declaring
-success — plus the rules an agent must not relax.
+## Other ways to run Lore
 
-[`plugins/lore/evals/`](plugins/lore/evals/) holds behavioural evals for
-the skill against a synthetic fixture client (answers from the work table,
-cites sources, never pins uninvited); run them with
-`claude plugin eval ./plugins/lore` — see its README.
-
-## Command reference
-
-| Command | What it does |
-|---|---|
-| `lore setup [owner/repo] [--channels s] [--github repos] [--granola folders] [--notion roots] [--jira keys\|board:id --jira-site url] [--gmail [mailboxes]] [--figma files] [--client n] [--domains d] [--backfill n] [--org o] [-y]` | wizard: create + scaffold + push a context repo, secrets (GitHub mode), first sync, link cwd |
-| `lore link <owner/repo>` | point a project repo at its context repo (or a bare name when `remote` is configured) |
-| `lore refresh [--trigger] [--fold] [--force]` | pull the latest memory; `--trigger` asks the self-hosted host to sync now and waits (~1 min); `--fold` also runs the LLM fold so derived artifacts update (1–2 min more); `--force` overrides the 5-minute rate limit |
-| `lore auth granola [--file p]` | OAuth device-code flow; saves a self-refreshing grant for the Granola connector |
-| `lore archive [--restore] [--keep-local]` | end (or reopen) an engagement: lifecycle flag, GitHub archive, local cleanup |
-| `lore grep <pattern> [-i] [--channel s] [--limit n] [--json]` | search streams + facts + derived |
-| `lore recall [category] [--json]` | pinned facts + derived artifacts + the lore tracker + external work tables |
-| `lore work add <title> [--status s] [--priority p] [--assignee who] [--labels l] [--source urls] [--external ref] [--reason why] [--by who]` | add a ticket (`--external jira:KEY` / `github:owner/repo#n` links an existing issue) |
-| `lore work promote <req-id> [--title t] [--priority p] [--reason why]` | a derived request becomes a ticket, keeping its evidence |
-| `lore work move <key> <status> --reason why [--source urls]` | change status (`todo`, `in_progress`, `blocked`, `done`, `archived`) |
-| `lore work set <key> [--title] [--priority] [--assignee] [--labels] [--source] [--external] --reason why` | change fields or link a tracker issue |
-| `lore work rank <key> (--above key \| --top \| --bottom) --reason why` | move in the priority order |
-| `lore work list [--all] [--json]` / `lore work show <key> [--json]` | open tickets in rank order / one ticket with its history |
-| `lore work push [keys...] [--all] [--dry-run] [--json] [--by who]` | write lore's ticket state to Jira: transition linked issues, create issues for open unlinked tickets; runs on the host |
-| `lore remember <fact> [-c cat] [--by who] [--source url]` | pin a fact; pushes immediately in pointer mode |
-| `lore sow add <file-or-gdoc-link> --name n --weeks n --start d [--end d] [--signed d] [--source url] [--scope items] [--status s] [--as email] [--by who] [--keep-commercials]` | attach a statement of work (Google Doc link, .md/.txt/.pdf): weeks sold over a period; commits + pushes |
-| `lore sow list [--json]` | attached SOWs |
-| `lore doc add <file-or-google-link> [--title t] [--from who] [--date d] [--source url] [--as email] [--by who]` | add a document (Google Doc/Slides/Sheet, Drive PDF/text, or local .md/.txt/.pdf) to the `docs` stream — raw material, folded like email; commits + pushes |
-| `lore doc list [--json]` | documents in the `docs` stream |
-| `lore source add <kind> [scope...] [--site url] [--api-base url --uploads-base url] [--by who]` | add a source or widen its scope on an existing client — `github owner/repo`, `slack "#chan"`, `granola "Folder"`, `notion <url>`, `figma <url>`, `jira KEY\|board:id`, `linear TEAM`, `gmail [emails\|all]`; identifiers only (proxy `api_base` from `~/.lore/config.json` or `env:` refs; a new self-hosted `linear` block takes the client's own proxies via `--api-base`/`--uploads-base`, since each Linear key is one workspace), validated, audited, commits + pushes; the host backfills the new scope; prints the human steps left |
-| `lore source list [--json]` | configured sources with scope, auth mode, and freshness (`ok` / `stale <age>` / `never` / `disabled`) with last success and last error |
-| `lore gdoc export <url> --as <email> [--json]` | export a Google Doc (Slides, Sheet, Drive-hosted PDF/text) as text via the service account (used by `sow add` / `doc add` on the host) |
-| `lore mcp` | MCP server over stdio |
-| `lore sync` | pull new docs into `context/streams/` (run in the context repo; new channels backfill automatically; a failed source doesn't stop the others, but exits non-zero if any enabled source failed) |
-| `lore extract [--report] [--review]` | LLM fold: streams → derived artifacts + weekly report (API key, or a Claude subscription via the `claude` CLI) |
-| `lore run-all --repos d --work d [--extract] [--report] [--concurrency n]` | self-hosted scheduler: sync every bare repo under a dir (n at a time, default 3), commit, push, then fold if `--extract` (from a timer on the host; a sync-only run may overlap a fold — see docs/DEPLOY_EXE.md) |
-| `lore www --repos d [--port 8000] [--board]` | serve the onboarding playbook + live client status (self-hosted host page), the hosted MCP endpoint, and with `--board`/`LORE_BOARD=1` the web board |
-| `lore board enable\|disable\|add\|remove\|show` | per project: turn the web board on, and say who may sign in (`--viewer` for read-only) |
-| `lore init` | scaffold a context repo by hand |
-| `lore check` | validate config, connectors, env refs; print per-source sync health |
-| `lore manifest slack` | print the bundled Slack app manifest |
-
-`grep`, `recall`, `remember`, `sow`, `doc`, `source`, `refresh`, `archive`, and `mcp` all take
-`--context <owner/repo>`, `-p/--project <name>`, and `--no-pull`.
-
-## Troubleshooting
-
-- **`✗ slack: channel #x not found or bot not a member`** — the sync fails (non-zero exit, nothing committed) until fixed: `/invite @lore`, or check the exact channel name in Slack (hyphens!). Other channels still synced and their cursors were kept.
-- **`✗ <source>: no such connector`** — a source is configured that lore doesn't know; fix the key or set `"disabled": true`.
-- **`✗ github: repo acme/x not found or token lacks access`** — the token's repository access doesn't include it, or the name is wrong. Other repos still synced.
-- **`✗ granola: folder "Acme" not found`** — folder titles are matched case-insensitively against `list_meeting_folders`; pass the folder id instead if the title is ambiguous.
-- **Notion syncs nothing for a root** — the page isn't shared with the integration yet (page ··· → Connections), the id/URL is wrong, or it was edited in the last 30 minutes and is still settling. A `notion 404` on the root means the first.
-- **`✗ jira: no credentials …`** / **`jira 401`** — `email` + `token` (or the proxy's Basic header) don't resolve or don't match `site`; a board id must belong to a project the account can see.
-- **`✗ gmail: mailbox x@…: token for x@…: unauthorized_client`** — domain-wide delegation isn't granted for the service account's client id (Workspace Admin → Security → API controls → Domain-wide delegation, scope `https://www.googleapis.com/auth/gmail.readonly`), or that address isn't a user in the domain. Other mailboxes still synced.
-- **`gmail: no service account key`** — put the key JSON at `~/.lore/gmail-sa.json` on the syncing host, or set `key_file` / `key: env:GMAIL_SA_KEY`.
-- **`gmail: listing Workspace users as x@… failed`** — `users: "all"` needs the `https://www.googleapis.com/auth/admin.directory.user.readonly` scope in the same domain-wide delegation entry, and `admin` (default `client.owner`) must be a Workspace admin.
-- **`"<user>" is not in lore.json write.allow`** — pins are restricted; run `lore remember --by <allowed-name>` or edit `write.allow`.
-- **`refresh: host … skipped-recent`** — the host synced (or folded) within the last 5 minutes; `--force` to run anyway.
-- **Re-backfill one channel** — delete that channel's cursor from `state.json` and `lore sync`; it refetches its backfill window and dedupes. (Channels newly added to `lore.json` backfill automatically.)
-- **No "lore sync" workflow in the Actions tab** (GitHub-hosted) — GitHub sometimes misses workflows pushed in the repo-creating commit; `setup` nudges automatically, otherwise push any commit touching the file.
-- **Scheduled syncs stopped after ~2 months of quiet** (GitHub-hosted) — GitHub disables cron on inactive repos; re-enable from the Actions tab.
-- **`could not pull … using cached copy`** — offline or no read access; queries serve the cache. Delete `~/.lore/cache/<owner>__<repo>` to force a fresh clone.
-- **`remember` failed to push** — the pin is committed in the cache clone; fix access and `git -C ~/.lore/cache/<owner>__<repo> push`.
-
-## Development
-
-```sh
-npm install
-npm test          # node:test via tsx — fixtures only, no credentials needed
-npm run typecheck
-npm run build
-npm run build:web # the board SPA (web/, Vite + React + HeroUI) → web/dist
-```
-
-The board UI lives in `web/` with its own dependencies, so the CLI install
-never pulls in React. For UI work, run `lore www --repos <dir> --board` on
-:8000 and `npm --prefix web run dev` — Vite proxies `/api` to it. Without
-`LORE_BOARD_EMAIL_FROM`/`LORE_BOARD_EMAIL_API`, sign-in codes are printed
-to the server log instead of emailed.
-
-CI (`.github/workflows/ci.yml`) runs the same three on every push and PR.
-Tests cover config validation (typed per-source schemas), the secrets
-scrubber, stream writing and dedup, every connector against a fake API
-(Slack, GitHub, Granola via captured MCP responses, Notion, Jira, Gmail),
-Granola OAuth, sync/check failure handling, context resolution, archive,
-recall, every MCP tool over an in-memory transport, `remember` + audit,
-extract output parsing and merging, the self-hosted runner and refresh,
-statements of work (add, recall layer, MCP tool, PDF extraction), the
-`lore www` host page, and the board (sign-in, roles, writes over HTTP).
-
-## Status
-
-Connectors: Slack, GitHub, Jira, Granola, Notion, Gmail, Figma — GitHub and Jira
-each with a source-owned work table, mirrored into the lore work tracker
-(the tracker of record, with per-ticket history; moved by people, agents,
-sync, and the fold). `extract` (delta fold into
-requests/decisions/roadmap + tracker review + weekly report + pin-contradiction audit), the
-query surface — `grep`, `recall`, `remember`, `refresh`, `mcp` — with
-pointer resolution + `~/.lore/cache`, two hosting modes (self-hosted timer
-or GitHub Actions), a `lore setup` wizard covering every source, a Claude
-Code plugin with skills and evals, client lifecycle (`archive`), statements of work as a human-owned
-commitments layer, fail-safe sync with per-source health, secret scrubbing,
-and an audit log. Next (see
-[docs/IMPLEMENTATION_BACKLOG.md](docs/IMPLEMENTATION_BACKLOG.md)): contact
-identity resolution, GitHub issue creation outside Projects,
-client-scoped MCP tools, remote MCP.
-
-## Principles
-
-1. Text in git is the source of truth — no binary databases in the repo; any search index is a derived, gitignored cache
-2. Everything is derived unless explicitly pinned — derived data is a regenerable cache; only pins are irreplaceable
-3. Sync and extraction never mix — connectors don't call LLMs; extraction doesn't call external APIs
-4. Provenance is mandatory — every item links back to where it came from
-5. Pointers, never credentials — the context stores "see 1Password vault X", not secrets
+- **GitHub Actions storage.** With no `remote` configured, authenticate the GitHub CLI and use `lore setup your-org/lore-acme --github your-org/acme-web --client Acme`. Setup creates a private context repo and scaffolds a daily workflow. In that repo’s `.github/workflows/lore-sync.yml`, replace the Extract step’s direct secret check with `if: vars.LORE_EXTRACT == '1'`. Set the Actions variable `LORE_EXTRACT` to `1` and supply a model credential if you want extraction. Expose each connector’s required secrets to the Sync step, then run **Actions → lore sync → Run workflow** to verify. Connect a local MCP client with `--context your-org/lore-acme`. [Bundled workflow](manifests/lore-sync.yml) · [GitHub Actions secret handling](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#using-secrets-in-a-workflow)
+- **Claude Code plugin.** With the Lore CLI on your path, run `/plugin marketplace add nerdburn/lore` and then `/plugin install lore@lore` in Claude Code to install its MCP configuration and project-memory skills. [Plugin](plugins/lore/)
+- **Development.** From this checkout run `npm test`, `npm run typecheck` and `npm run build:web`. The CLI and server live in `src/`. The React board lives in `web/`. [Roadmap and goals](docs/ROADMAP_GOALS.md) · [Project activity reports](docs/LOAD.md)
