@@ -25,6 +25,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
   const filters = route.filters
   const setFilters = (fn: (f: Filters) => Filters) => navigate({ ...route, filters: fn(route.filters) }, true)
   const [creating, setCreating] = useState(false)
+  const [goalActionSlot, setGoalActionSlot] = useState<HTMLDivElement | null>(null)
   const [menu, setMenu] = useState<TicketMenuPosition>()
   const [actionBusy, setActionBusy] = useState(false)
   // While a write is in flight, a poll must not snap the card back.
@@ -195,7 +196,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
               </Tabs.List>
             </Tabs.ListContainer>
           </Tabs>
-          {canEdit && route.view !== 'goals' && (
+          {route.view === 'goals' ? <div className="contents" ref={setGoalActionSlot} /> : canEdit && (
             <Button onPress={() => setCreating(true)}>
               <Plus />
               New ticket
@@ -232,7 +233,7 @@ export function BoardPage({ route, onUnauthorized }: { route: BoardRoute; onUnau
       </div>}
 
       {route.view === 'goals' ? (
-        <GoalsView context={route.context} items={board.items} onOpen={open} onError={fail} />
+        <GoalsView key={route.context} context={route.context} items={board.items} actionSlot={goalActionSlot} onOpen={open} onError={fail} />
       ) : route.view === 'requests' ? (
         <RequestsView key={route.context} context={route.context} canEdit={canEdit} q={filters.q} onOpen={open} onPromoted={() => void load()} onError={fail} />
       ) : route.view === 'kanban' ? (
